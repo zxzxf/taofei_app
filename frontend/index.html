@@ -1,0 +1,1431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CrewAI Workbench - AI 智能体工作台</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --sidebar: #ffffff;
+    --card: #ffffff;
+    --border: #e6e8eb;
+    --text: #1f2329;
+    --text-light: #6b7280;
+    --primary: #2563eb;
+    --primary-light: #e8f0fe;
+    --accent: #059669;
+    --danger: #dc2626;
+    --warn: #d97706;
+    --radius: 10px;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 12px rgba(0,0,0,.04);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; overflow: hidden;
+  }
+
+  /* ===== 左侧导航 ===== */
+  .sidebar {
+    width: 220px; background: var(--sidebar); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px; padding: 18px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand-logo {
+    width: 32px; height: 32px; border-radius: 8px; background: var(--primary);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 16px;
+  }
+  .brand-name { font-weight: 700; font-size: 15px; }
+  .brand-sub { font-size: 11px; color: var(--text-light); }
+  /* ===== 工作空间下拉选择器 ===== */
+  .workspace-section {
+    padding: 12px 10px; border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .workspace-selector {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: #fafbfc; cursor: pointer; transition: border-color .12s, background .12s;
+  }
+  .workspace-selector:hover { border-color: var(--primary); background: #f0f7ff; }
+  .workspace-selector.open { border-color: var(--primary); background: var(--primary-light); }
+  .workspace-selector-main {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+  }
+  .workspace-icon {
+    width: 28px; height: 28px; border-radius: 7px; background: #e2e8f0;
+    display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0;
+  }
+  .workspace-selector.open .workspace-icon { background: var(--primary); color: #fff; }
+  .workspace-info { min-width: 0; }
+  .workspace-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .workspace-path { font-size: 11px; color: var(--text-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .workspace-arrow {
+    font-size: 11px; color: var(--text-light); transition: transform .15s; margin-left: 6px;
+  }
+  .workspace-selector.open .workspace-arrow { transform: rotate(180deg); }
+
+  .workspace-dropdown {
+    position: absolute; top: calc(100% - 4px); left: 10px; right: 10px;
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.12); z-index: 100;
+    display: flex; flex-direction: column; overflow: hidden;
+    opacity: 0; transform: translateY(-6px); pointer-events: none;
+    transition: opacity .15s, transform .15s;
+  }
+  .workspace-dropdown.open {
+    opacity: 1; transform: translateY(0); pointer-events: auto;
+  }
+  .ws-search {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-bottom: 1px solid var(--border);
+  }
+  .ws-search-icon { font-size: 13px; color: var(--text-light); }
+  .ws-search input {
+    flex: 1; border: none; outline: none; font-size: 13px; font-family: inherit;
+    background: transparent; color: var(--text);
+  }
+  .ws-search input::placeholder { color: #9ca3af; }
+  .ws-dropdown-list {
+    max-height: 220px; overflow-y: auto; padding: 6px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .ws-dropdown-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    transition: background .12s; min-height: 40px;
+  }
+  .ws-dropdown-item:hover { background: #f3f4f6; }
+  .ws-dropdown-item.selected { background: var(--primary-light); }
+  .ws-dropdown-item .ws-item-info { flex: 1; min-width: 0; }
+  .ws-dropdown-item .ws-item-name { font-size: 13px; font-weight: 600; }
+  .ws-dropdown-item .ws-item-path { font-size: 11px; margin-top: 1px; }
+  .ws-dropdown-item .ws-item-actions { display: flex; gap: 4px; opacity: 0; transition: opacity .12s; }
+  .ws-dropdown-item:hover .ws-item-actions { opacity: 1; }
+  .ws-dropdown-item .ws-item-actions button {
+    border: 1px solid var(--border); background: #fff; border-radius: 5px;
+    padding: 2px 8px; font-size: 11px; cursor: pointer; color: var(--text);
+  }
+  .ws-dropdown-item .ws-item-actions button:hover { border-color: var(--primary); color: var(--primary); }
+  .ws-dropdown-item .ws-item-actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
+  .ws-empty {
+    padding: 20px; text-align: center; font-size: 12.5px; color: var(--text-light);
+  }
+
+  .ws-dropdown-actions {
+    padding: 6px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .ws-dropdown-action {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    font-size: 13px; color: var(--text); transition: background .12s;
+  }
+  .ws-dropdown-action:hover { background: #f3f4f6; }
+
+  .ws-dropdown-add {
+    padding: 10px 12px; border-top: 1px solid var(--border); background: #fafbfc;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .ws-dropdown-add.hidden { display: none; }
+  .ws-dropdown-add input[type="text"] {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px;
+    font-size: 13px; font-family: inherit; outline: none;
+  }
+  .ws-dropdown-add input[type="text"]:focus { border-color: var(--primary); }
+  .ws-add-path-row { display: flex; gap: 6px; }
+  .ws-add-path-row input { flex: 1; }
+  .ws-add-path-row button { padding: 0 10px; border-radius: 7px; }
+  .ws-add-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .ws-add-actions button { font-size: 12.5px; padding: 6px 14px; border-radius: 7px; }
+
+  .ws-dropdown-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px; border-top: 1px solid var(--border); background: #fafbfc;
+    font-size: 12px;
+  }
+  .ws-footer-selected {
+    display: flex; align-items: center; gap: 6px;
+    color: var(--text); font-weight: 600; max-width: 60%; overflow: hidden;
+  }
+  .ws-footer-selected span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ws-footer-perm { color: var(--text-light); }
+
+  /* 当前工作空间徽章 */
+  .ws-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--primary-light); color: var(--primary);
+    padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 12px;
+  }
+
+  .nav { padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+    border-radius: 8px; cursor: pointer; font-size: 13.5px; color: var(--text-light);
+    transition: background .12s, color .12s; user-select: none;
+  }
+  .nav-item:hover { background: #f0f1f3; color: var(--text); }
+  .nav-item.active { background: var(--primary-light); color: var(--primary); font-weight: 600; }
+  .nav-item .icon { font-size: 15px; width: 18px; text-align: center; }
+  .nav-bottom { border-top: 1px solid var(--border); padding: 10px; }
+  .api-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-light); padding: 8px 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; }
+  .dot.ok { background: var(--accent); }
+  .dot.bad { background: var(--danger); }
+
+  /* ===== 主区域 ===== */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .main-header {
+    padding: 14px 24px; border-bottom: 1px solid var(--border);
+    background: var(--card); font-size: 14px; font-weight: 600;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .main-header .hint { font-size: 12px; font-weight: 400; color: var(--text-light); }
+  .content { flex: 1; overflow-y: auto; padding: 24px; max-width: 1100px; width: 100%; margin: 0 auto; }
+
+  /* ===== 欢迎/输入区 ===== */
+  .welcome { text-align: center; padding: 30px 0 10px; }
+  .welcome h1 { font-size: 24px; font-weight: 700; }
+  .welcome p { color: var(--text-light); margin-top: 8px; font-size: 14px; }
+  .input-area { margin: 24px 0 8px; }
+  .input-box {
+    display: flex; gap: 10px; background: var(--card); border: 1.5px solid var(--border);
+    border-radius: var(--radius); padding: 8px; box-shadow: var(--shadow);
+    transition: border-color .15s;
+  }
+  .input-box:focus-within { border-color: var(--primary); }
+  .input-box input {
+    flex: 1; border: none; outline: none; font-size: 14.5px; padding: 8px 10px;
+    font-family: inherit; color: var(--text); background: transparent;
+  }
+  .input-box input::placeholder { color: #9ca3af; }
+  .btn-run {
+    border: none; background: var(--primary); color: #fff; font-size: 14px; font-weight: 600;
+    padding: 0 22px; border-radius: 8px; cursor: pointer; font-family: inherit;
+    display: flex; align-items: center; gap: 6px; transition: background .15s;
+  }
+  .btn-run:hover { background: #1d4ed8; }
+  .btn-run:disabled { background: #93c5fd; cursor: not-allowed; }
+
+  /* ===== 模板卡片 ===== */
+  .templates-title { font-size: 13px; color: var(--text-light); margin: 20px 0 10px; font-weight: 600; }
+  .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .template-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s;
+  }
+  .template-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--shadow); }
+  .template-card .t-icon { font-size: 20px; }
+  .template-card .t-title { font-weight: 600; font-size: 14px; margin-top: 8px; }
+  .template-card .t-desc { font-size: 12.5px; color: var(--text-light); margin-top: 4px; line-height: 1.5; }
+
+  /* ===== 执行状态 ===== */
+  .status-bar {
+    display: flex; align-items: center; gap: 10px; background: var(--card);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 16px; margin-top: 16px; font-size: 13.5px; box-shadow: var(--shadow);
+  }
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid var(--primary-light);
+    border-top-color: var(--primary); border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status-bar.hidden { display: none; }
+
+  /* ===== 结果区 ===== */
+  .result-wrap { margin-top: 16px; }
+  .result-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px 24px; box-shadow: var(--shadow); font-size: 14px; line-height: 1.75;
+  }
+  .result-card.hidden { display: none; }
+  .result-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+  .result-head .r-title { font-weight: 700; font-size: 15px; }
+  .btn-copy { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; color: var(--text-light); font-family: inherit; }
+  .btn-copy:hover { border-color: var(--primary); color: var(--primary); }
+
+  /* markdown 渲染 */
+  .md h1 { font-size: 20px; margin: 16px 0 10px; }
+  .md h2 { font-size: 17px; margin: 18px 0 8px; padding-bottom: 5px; border-bottom: 2px solid var(--primary-light); }
+  .md h3 { font-size: 15px; margin: 14px 0 6px; }
+  .md p { margin: 8px 0; }
+  .md ul, .md ol { margin: 8px 0 8px 22px; }
+  .md li { margin: 4px 0; }
+  .md strong { font-weight: 600; }
+  .md table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  .md th { background: var(--primary-light); font-weight: 600; text-align: left; }
+  .md th, .md td { border: 1px solid var(--border); padding: 7px 10px; }
+  .md tr:nth-child(even) td { background: #fafbfc; }
+  .md pre {
+    background: #f1f5f9; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; overflow-x: auto; font-size: 13px; margin: 10px 0;
+    font-family: "Cascadia Code", Consolas, monospace;
+  }
+  .md code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  .md pre code { background: transparent; padding: 0; }
+  .md blockquote {
+    border-left: 4px solid var(--accent); background: #ecfdf5;
+    padding: 8px 14px; border-radius: 0 8px 8px 0; margin: 10px 0; color: #065f46;
+  }
+  .md hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+  .error-box {
+    background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
+    border-radius: var(--radius); padding: 12px 16px; margin-top: 16px; font-size: 13.5px;
+  }
+  .error-box.hidden { display: none; }
+  .history-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+  .history-item {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 16px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+    transition: border-color .15s;
+  }
+  .history-item:hover { border-color: var(--primary); }
+  .history-item .h-topic { font-size: 14px; font-weight: 600; }
+  .history-item .h-status { font-size: 12px; padding: 2px 10px; border-radius: 20px; }
+  .h-status.done { background: #ecfdf5; color: var(--accent); }
+  .h-status.fail { background: #fef2f2; color: var(--danger); }
+  .h-status.run { background: var(--primary-light); color: var(--primary); }
+  .hidden { display: none; }
+
+  /* ===== 日志视图 ===== */
+  .logs-toolbar {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  .logs-toolbar select, .logs-toolbar input[type="text"], .logs-toolbar input[type="datetime-local"] {
+    padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; font-family: inherit; outline: none;
+  }
+  .logs-toolbar select:focus, .logs-toolbar input:focus { border-color: var(--primary); }
+  .logs-toolbar label { font-size: 12.5px; color: var(--text-light); }
+  .logs-toolbar .btn {
+    padding: 6px 14px; border: 1px solid var(--border); background: #fff; border-radius: 6px;
+    font-size: 13px; cursor: pointer; font-family: inherit; color: var(--text);
+  }
+  .logs-toolbar .btn:hover { border-color: var(--primary); color: var(--primary); }
+  .logs-toolbar .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .logs-toolbar .btn.primary:hover { background: #1d4ed8; }
+  .logs-toolbar .auto-refresh { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-light); }
+  .logs-table-wrap {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .logs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .logs-table th { background: #f8fafc; padding: 10px 12px; text-align: left; font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .logs-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .logs-table tr:hover td { background: #f8fafc; }
+  .logs-table tr:last-child td { border-bottom: none; }
+  .logs-table .msg-cell { font-family: "Cascadia Code", Consolas, "Microsoft YaHei", monospace; line-height: 1.5; word-break: break-word; }
+  .logs-table .time-cell { white-space: nowrap; color: var(--text-light); width: 160px; }
+  .log-tag {
+    display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;
+  }
+  .log-tag.DEBUG { background: #eef2ff; color: #4f46e5; }
+  .log-tag.INFO { background: #ecfdf5; color: var(--accent); }
+  .log-tag.WARNING { background: #fffbeb; color: var(--warn); }
+  .log-tag.ERROR { background: #fef2f2; color: var(--danger); }
+  .log-tag.CRITICAL { background: #fee2e2; color: #991b1b; }
+  .log-source { color: var(--text-light); font-size: 12px; }
+  .logs-empty { padding: 40px; text-align: center; color: var(--text-light); font-size: 14px; }
+  .logs-count { font-size: 12px; color: var(--text-light); margin-bottom: 10px; }
+  .log-detail-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 100;
+  }
+  .log-detail-mask.open { display: flex; }
+  .log-detail {
+    background: #fff; border-radius: var(--radius); width: 760px; max-width: 92vw; max-height: 80vh;
+    display: flex; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,.2);
+  }
+  .log-detail-head { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+  .log-detail-body { padding: 16px 20px; overflow-y: auto; font-family: "Cascadia Code", Consolas, "Microsoft YaHei", monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .log-detail-close { cursor: pointer; font-size: 18px; color: var(--text-light); }
+  .log-detail-close:hover { color: var(--text); }
+
+  /* ===== 用户头像 + 模型配置 ===== */
+  .model-chip {
+    display: flex; align-items: center; gap: 9px; cursor: pointer;
+    padding: 4px 12px 4px 5px; border-radius: 22px;
+    transition: background .15s; user-select: none;
+  }
+  .model-chip:hover { background: #f0f1f3; }
+  .avatar {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: linear-gradient(135deg, #2563eb, #7c3aed);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 15px; letter-spacing: .5px;
+    box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(37, 99, 235, .35);
+    flex-shrink: 0;
+  }
+  .avatar-meta { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
+  .avatar-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .avatar-sub { font-size: 11px; color: var(--text-light); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 模型配置弹窗 */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none;
+    align-items: center; justify-content: center; z-index: 200;
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    background: #fff; border-radius: 14px; width: 480px; max-width: 92vw;
+    box-shadow: 0 20px 50px rgba(0,0,0,.2); overflow: hidden;
+  }
+  .modal-head {
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 15px;
+  }
+  .modal-close { cursor: pointer; font-size: 18px; color: var(--text-light); }
+  .modal-close:hover { color: var(--text); }
+  .modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .field label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+  .field .field-tip { font-weight: 400; color: var(--text-light); font-size: 11px; }
+  .field select, .field input[type="text"], .field input[type="password"] {
+    width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 13.5px; font-family: inherit; outline: none; color: var(--text); background: #fff;
+    transition: border-color .15s;
+  }
+  .field select:focus, .field input:focus { border-color: var(--primary); }
+  .key-row { display: flex; gap: 8px; }
+  .key-row input { flex: 1; }
+  .btn-ghost {
+    padding: 8px 14px; border: 1px solid var(--border); background: #fff; border-radius: 8px;
+    font-size: 13px; cursor: pointer; font-family: inherit; color: var(--text); white-space: nowrap;
+    transition: border-color .15s, color .15s;
+  }
+  .btn-ghost:hover { border-color: var(--primary); color: var(--primary); }
+  .key-status { font-size: 11.5px; margin-top: 5px; }
+  .key-status.ok { color: var(--accent); }
+  .key-status.no { color: var(--warn); }
+  .modal-foot {
+    padding: 14px 20px; border-top: 1px solid var(--border);
+    display: flex; justify-content: flex-end; gap: 10px; background: #fafbfc;
+  }
+  .btn-primary {
+    border: none; background: var(--primary); color: #fff; font-size: 13.5px; font-weight: 600;
+    padding: 8px 20px; border-radius: 8px; cursor: pointer; font-family: inherit;
+    transition: background .15s;
+  }
+  .btn-primary:hover { background: #1d4ed8; }
+
+  /* Toast 提示 */
+  .toast {
+    position: fixed; top: 70px; left: 50%; transform: translateX(-50%) translateY(-12px);
+    background: #1f2329; color: #fff; font-size: 13px; padding: 10px 22px; border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25); z-index: 300; opacity: 0; pointer-events: none;
+    transition: opacity .25s, transform .25s; max-width: 80vw; text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- 左侧导航 -->
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-logo">C</div>
+    <div>
+      <div class="brand-name">CrewAI 工作台</div>
+      <div class="brand-sub">多智能体协作平台</div>
+    </div>
+  </div>
+  <!-- 工作空间 -->
+  <div class="workspace-section" id="workspaceSection">
+    <div class="workspace-selector" id="workspaceSelector">
+      <div class="workspace-selector-main">
+        <div class="workspace-icon" id="workspaceIcon">📁</div>
+        <div class="workspace-info">
+          <div class="workspace-name" id="workspaceName">选择工作空间</div>
+          <div class="workspace-path" id="workspacePath">点击选择或创建</div>
+        </div>
+      </div>
+      <span class="workspace-arrow" id="workspaceArrow">▾</span>
+    </div>
+
+    <!-- 下拉面板 -->
+    <div class="workspace-dropdown" id="workspaceDropdown">
+      <div class="ws-search">
+        <span class="ws-search-icon">🔍</span>
+        <input type="text" id="wsSearchInput" placeholder="搜索工作空间" autocomplete="off">
+      </div>
+      <div class="ws-dropdown-list" id="wsDropdownList">
+        <div class="ws-empty">加载中…</div>
+      </div>
+      <div class="ws-dropdown-actions">
+        <div class="ws-dropdown-action" id="wsActionNew">
+          <span>➕</span>
+          <span>新建工作空间</span>
+        </div>
+        <div class="ws-dropdown-action" id="wsActionOpen">
+          <span>📂</span>
+          <span>打开本地文件夹</span>
+        </div>
+      </div>
+      <div class="ws-dropdown-add hidden" id="wsAddForm">
+        <input type="text" id="wsNewName" placeholder="名称，例如：态势感知项目" autocomplete="off">
+        <div class="ws-add-path-row">
+          <input type="text" id="wsNewPath" placeholder="本地目录路径" autocomplete="off" spellcheck="false">
+          <button class="btn-ghost" id="wsBrowsePath" type="button" title="浏览选择本地目录">📂</button>
+        </div>
+        <div class="ws-add-actions">
+          <button class="btn-ghost" id="wsAddCancel" type="button">取消</button>
+          <button class="btn-primary" id="wsAddSave" type="button">添加</button>
+        </div>
+      </div>
+      <div class="ws-dropdown-footer">
+        <div class="ws-footer-selected" id="wsFooterSelected">
+          <span>📁</span>
+          <span id="wsFooterName">未选择</span>
+        </div>
+        <div class="ws-footer-perm">默认权限</div>
+      </div>
+    </div>
+  </div>
+
+  <nav class="nav">
+    <div class="nav-item active" data-view="home"><span class="icon">✦</span> 新建任务</div>
+    <div class="nav-item" data-view="history"><span class="icon">☰</span> 任务历史</div>
+    <div class="nav-item" data-view="templates"><span class="icon">▦</span> 模板库</div>
+    <div class="nav-item" data-view="logs"><span class="icon">📝</span> 运行日志</div>
+  </nav>
+  <div class="nav-bottom">
+    <div class="api-status">
+      <span class="dot" id="apiDot"></span>
+      <span id="apiText">检测服务状态…</span>
+    </div>
+  </div>
+</aside>
+
+<!-- 主区域 -->
+<main class="main">
+  <div class="main-header">
+    <span id="pageTitle">✦ 新建任务</span>
+    <div class="model-chip" id="modelChip" title="点击配置模型">
+      <div class="avatar" id="avatarCircle">D</div>
+      <div class="avatar-meta">
+        <span class="avatar-name" id="avatarName">DeepSeek</span>
+        <span class="avatar-sub" id="avatarSub">deepseek-chat</span>
+      </div>
+    </div>
+  </div>
+  <div class="content">
+
+    <!-- 首页视图 -->
+    <div id="view-home">
+      <div class="ws-badge" id="homeWsBadge">📁 未选择工作空间</div>
+      <div class="welcome">
+        <h1>今天想研究点什么？</h1>
+        <p>输入一个主题，研究员 Agent 负责调研，分析师 Agent 负责成稿</p>
+        <p style="font-size:12px;color:var(--text-light);margin-top:6px;">若已选择工作空间，Agent 会自动参考项目文件内容</p>
+      </div>
+      <div class="input-area">
+        <div class="input-box">
+          <input id="topicInput" type="text" placeholder="例如：网络安全态势感知技术，或 AI 智能体框架…" autocomplete="off">
+          <button class="btn-run" id="runBtn">▶ 开始运行</button>
+        </div>
+      </div>
+      <div class="templates-title">📌 推荐模板</div>
+      <div class="template-grid" id="templateGrid"></div>
+
+      <div class="status-bar hidden" id="statusBar">
+        <div class="spinner"></div>
+        <span id="statusText">任务执行中：研究员 Agent 正在调研…</span>
+      </div>
+
+      <div class="error-box hidden" id="errorBox"></div>
+
+      <div class="result-wrap">
+        <div class="result-card hidden" id="resultCard">
+          <div class="result-head">
+            <span class="r-title">📄 生成报告</span>
+            <button class="btn-copy" id="copyBtn">复制全文</button>
+          </div>
+          <div class="md" id="resultMd"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 历史视图 -->
+    <div id="view-history" class="hidden">
+      <h2 style="font-size:18px;margin-bottom:8px;">☰ 任务历史</h2>
+      <p style="color:var(--text-light);font-size:13px;">最近运行的任务（点击可查看结果）</p>
+      <div style="margin:14px 0 10px; display:flex; align-items:center; gap:10px;">
+        <label style="font-size:12.5px;color:var(--text-light);">工作空间：</label>
+        <select id="historyWsFilter" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:180px;">
+          <option value="">全部</option>
+        </select>
+      </div>
+      <div class="history-list" id="historyList"></div>
+    </div>
+
+    <!-- 模板视图 -->
+    <div id="view-templates" class="hidden">
+      <h2 style="font-size:18px;margin-bottom:8px;">▦ 模板库</h2>
+      <p style="color:var(--text-light);font-size:13px;">选择一个模板快速开始</p>
+      <div class="template-grid" id="templateGrid2" style="margin-top:16px;"></div>
+    </div>
+
+    <!-- 日志视图 -->
+    <div id="view-logs" class="hidden">
+      <h2 style="font-size:18px;margin-bottom:8px;">📝 运行日志</h2>
+      <p style="color:var(--text-light);font-size:13px;margin-bottom:14px;">查询 Agent 运行过程中的实时日志与历史日志</p>
+
+      <div class="logs-toolbar">
+        <label>任务：</label>
+        <select id="logTaskFilter" style="min-width:180px;">
+          <option value="">全部任务</option>
+        </select>
+        <label>级别：</label>
+        <select id="logLevelFilter" style="min-width:110px;">
+          <option value="">全部</option>
+          <option value="DEBUG,INFO,WARNING,ERROR,CRITICAL">非调试</option>
+          <option value="INFO,WARNING,ERROR,CRITICAL">INFO+</option>
+          <option value="WARNING,ERROR,CRITICAL">WARN+</option>
+          <option value="ERROR,CRITICAL">ERROR+</option>
+        </select>
+        <label>来源：</label>
+        <select id="logSourceFilter" style="min-width:110px;">
+          <option value="">全部</option>
+          <option value="system">system</option>
+          <option value="stdout">stdout</option>
+          <option value="stderr">stderr</option>
+          <option value="crewai">crewai</option>
+          <option value="资深研究员">资深研究员</option>
+          <option value="写作分析师">写作分析师</option>
+        </select>
+        <input type="text" id="logKeyword" placeholder="关键词过滤…" style="min-width:160px;">
+        <label>开始：</label>
+        <input type="datetime-local" id="logStart">
+        <label>结束：</label>
+        <input type="datetime-local" id="logEnd">
+        <button class="btn primary" id="logQueryBtn">查询</button>
+        <button class="btn" id="logResetBtn">重置</button>
+        <label class="auto-refresh"><input type="checkbox" id="logAutoRefresh" checked> 自动刷新</label>
+      </div>
+
+      <div class="logs-count" id="logsCount"></div>
+      <div class="logs-table-wrap">
+        <table class="logs-table">
+          <thead>
+            <tr>
+              <th style="width:160px;">时间</th>
+              <th style="width:70px;">级别</th>
+              <th style="width:130px;">来源</th>
+              <th>消息</th>
+            </tr>
+          </thead>
+          <tbody id="logsBody">
+            <tr><td colspan="4" class="logs-empty">点击「查询」加载日志</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<!-- 日志详情弹窗 -->
+<div class="log-detail-mask" id="logDetailMask">
+  <div class="log-detail">
+    <div class="log-detail-head">
+      <span>日志详情</span>
+      <span class="log-detail-close" id="logDetailClose">✕</span>
+    </div>
+    <div class="log-detail-body" id="logDetailBody"></div>
+  </div>
+</div>
+
+<!-- 模型配置弹窗 -->
+<div class="modal-mask" id="configMask">
+  <div class="modal">
+    <div class="modal-head">
+      <span>⚙️ 模型配置</span>
+      <span class="modal-close" id="configClose">✕</span>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>模型服务商</label>
+        <select id="cfgProvider">
+          <option value="deepseek">DeepSeek</option>
+          <option value="openai">OpenAI</option>
+          <option value="qwen">通义千问 Qwen</option>
+          <option value="glm">智谱 GLM</option>
+          <option value="moonshot">Moonshot Kimi</option>
+          <option value="ollama">Ollama 本地</option>
+          <option value="custom">自定义</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>模型名称 <span class="field-tip">（provider/model，如 deepseek/deepseek-chat）</span></label>
+        <input type="text" id="cfgModel" placeholder="deepseek/deepseek-chat" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>API Key <span class="field-tip">（留空则保留原 Key；Ollama 本地可留空）</span></label>
+        <div class="key-row">
+          <input type="password" id="cfgApiKey" placeholder="sk-..." autocomplete="off" spellcheck="false">
+          <button class="btn-ghost" id="cfgKeyToggle" type="button">显示</button>
+        </div>
+        <div class="key-status no" id="cfgKeyStatus">未配置</div>
+      </div>
+      <div class="field">
+        <label>Base URL <span class="field-tip">（留空使用服务商默认地址）</span></label>
+        <input type="text" id="cfgBaseUrl" placeholder="https://api.deepseek.com" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" id="configCancel" type="button">取消</button>
+      <button class="btn-primary" id="configSave" type="button">💾 保存配置</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============ 模板数据 ============ */
+const TEMPLATES = [
+  { icon: "🔍", title: "行业调研报告", desc: "调研一个行业的最新动态、关键玩家与发展趋势，生成结构化报告", topic: "2026 年网络安全行业发展趋势" },
+  { icon: "🚀", title: "技术选型分析", desc: "对比多个技术方案的优劣，给出选型建议", topic: "LangChain 与 CrewAI 框架对比分析" },
+  { icon: "🛡️", title: "安全态势感知", desc: "梳理当前网络安全威胁态势与防护技术", topic: "网络安全态势感知技术综述" },
+  { icon: "🤖", title: "AI 智能体框架", desc: "调研主流 Agent 框架的核心范式与演进趋势", topic: "AI 智能体（Agent）框架" },
+  { icon: "📊", title: "竞品分析", desc: "分析竞品的功能、定位与差异化优势", topic: "主流 AI 编程助手竞品分析" },
+  { icon: "🌐", title: "技术前瞻", desc: "研究前沿技术方向与落地路径", topic: "大模型 Agent 在企业落地的前沿实践" },
+];
+
+/* ============ 视图切换 ============ */
+const PAGE_TITLES = {
+  home: '✦ 新建任务',
+  history: '☰ 任务历史',
+  templates: '▦ 模板库',
+  logs: '📝 运行日志'
+};
+
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+    ['home', 'history', 'templates', 'logs'].forEach(v => document.getElementById('view-' + v).classList.add('hidden'));
+    const view = item.dataset.view;
+    document.getElementById('view-' + view).classList.remove('hidden');
+    document.getElementById('pageTitle').textContent = PAGE_TITLES[view] || '';
+    if (view === 'history') loadHistory();
+    if (view === 'templates') renderTemplates();
+    if (view === 'logs') { loadLogTasks(); queryLogs(); }
+  });
+});
+
+/* ============ 模板渲染 ============ */
+function renderTemplates() {
+  [document.getElementById('templateGrid'), document.getElementById('templateGrid2')].forEach(grid => {
+    grid.innerHTML = TEMPLATES.map((t, i) => `
+      <div class="template-card" data-idx="${i}">
+        <div class="t-icon">${t.icon}</div>
+        <div class="t-title">${t.title}</div>
+        <div class="t-desc">${t.desc}</div>
+      </div>`).join('');
+  });
+  document.querySelectorAll('.template-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const t = TEMPLATES[Number(card.dataset.idx)];
+      document.getElementById('topicInput').value = t.topic;
+      document.querySelector('.nav-item[data-view="home"]').click();
+      document.getElementById('topicInput').focus();
+    });
+  });
+}
+renderTemplates();
+
+/* ============ 简单的 Markdown 渲染器（安全子集） ============ */
+function mdRender(src) {
+  let s = src.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  s = s.replace(/^#{3}\s+(.+)$/gm, '<h3>$1</h3>');
+  s = s.replace(/^#{2}\s+(.+)$/gm, '<h2>$1</h2>');
+  s = s.replace(/^#{1}\s+(.+)$/gm, '<h1>$1</h1>');
+  s = s.replace(/^\|(.+)\|$/gm, (m, row) => {
+    const cells = row.split('|').slice(1, -1).map(c => c.trim());
+    const isSep = cells.every(c => /^:?-{2,}:?$/.test(c));
+    if (isSep) return '';
+    return '<tr>' + cells.map(c => '<td>' + c + '</td>').join('') + '</tr>';
+  });
+  s = s.replace(/(<tr>[\s\S]*?<\/tr>)(?:\n)?/g, (m) => m);
+  s = s.split('\n').map(line => {
+    if (line.startsWith('<h1>') || line.startsWith('<h2>') || line.startsWith('<h3>') || line.startsWith('<tr>')) return line;
+    if (/^```/.test(line)) return '<pre><code>';
+    if (/^```/.test(line) && line.trim() === '') return '</code></pre>';
+    if (line.startsWith('<pre>')) return line;
+    if (line === '</code></pre>') return line;
+    return '<p>' + line + '</p>';
+  }).join('\n');
+  return s;
+}
+
+/* ============ 工作空间 ============ */
+let workspacesData = { current_id: null, workspaces: [] };
+let currentWorkspace = null;
+let wsDropdownOpen = false;
+let wsSearchTerm = '';
+
+async function loadWorkspaces() {
+  try {
+    const res = await fetch('/api/workspaces');
+    workspacesData = await res.json();
+    currentWorkspace = (workspacesData.workspaces || []).find(w => w.id === workspacesData.current_id) || null;
+    renderWorkspaceSection();
+    renderWorkspaceDropdownList();
+    renderHistoryWsFilter();
+  } catch (e) { /* ignore */ }
+}
+
+function renderWorkspaceSection() {
+  const nameEl = document.getElementById('workspaceName');
+  const pathEl = document.getElementById('workspacePath');
+  const badgeEl = document.getElementById('homeWsBadge');
+  const footerName = document.getElementById('wsFooterName');
+  const selector = document.getElementById('workspaceSelector');
+  if (currentWorkspace) {
+    nameEl.textContent = currentWorkspace.name;
+    pathEl.textContent = currentWorkspace.path;
+    footerName.textContent = currentWorkspace.name;
+    badgeEl.textContent = '📁 ' + currentWorkspace.name;
+    selector.classList.add('has-workspace');
+  } else {
+    nameEl.textContent = '选择工作空间';
+    pathEl.textContent = '点击选择或创建';
+    footerName.textContent = '未选择';
+    badgeEl.textContent = '📁 未选择工作空间';
+    selector.classList.remove('has-workspace');
+  }
+}
+
+function renderHistoryWsFilter() {
+  const sel = document.getElementById('historyWsFilter');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">全部工作空间</option>' +
+    (workspacesData.workspaces || []).map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+  if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+}
+
+function toggleWorkspaceDropdown(force) {
+  wsDropdownOpen = force !== undefined ? force : !wsDropdownOpen;
+  const dropdown = document.getElementById('workspaceDropdown');
+  const selector = document.getElementById('workspaceSelector');
+  if (wsDropdownOpen) {
+    dropdown.classList.add('open');
+    selector.classList.add('open');
+    renderWorkspaceDropdownList();
+    // 打开时重置添加表单
+    hideWorkspaceAddForm();
+  } else {
+    dropdown.classList.remove('open');
+    selector.classList.remove('open');
+  }
+}
+
+function renderWorkspaceDropdownList() {
+  const list = document.getElementById('wsDropdownList');
+  const term = wsSearchTerm.trim().toLowerCase();
+  const wsList = (workspacesData.workspaces || []).filter(w =>
+    !term || w.name.toLowerCase().includes(term) || w.path.toLowerCase().includes(term)
+  );
+
+  if (!wsList.length) {
+    list.innerHTML = term
+      ? '<div class="ws-empty">没有匹配的工作空间</div>'
+      : '<div class="ws-empty">暂无工作空间，点击下方「新建」或「打开本地文件夹」</div>';
+    return;
+  }
+
+  list.innerHTML = wsList.map(ws => {
+    const selected = ws.id === workspacesData.current_id ? 'selected' : '';
+    return `<div class="ws-dropdown-item ${selected}" data-id="${ws.id}">
+      <div class="workspace-icon">📁</div>
+      <div class="ws-item-info" onclick="switchWorkspace('${ws.id}')">
+        <div class="ws-item-name">${ws.name}</div>
+        <div class="ws-item-path">${ws.path}</div>
+      </div>
+      <div class="ws-item-actions">
+        <button class="danger" onclick="deleteWorkspace('${ws.id}', event)">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function showWorkspaceAddForm() {
+  document.getElementById('wsAddForm').classList.remove('hidden');
+  document.getElementById('wsActionNew').style.display = 'none';
+  document.getElementById('wsNewName').focus();
+}
+
+function hideWorkspaceAddForm() {
+  document.getElementById('wsAddForm').classList.add('hidden');
+  document.getElementById('wsActionNew').style.display = 'flex';
+  document.getElementById('wsNewName').value = '';
+  document.getElementById('wsNewPath').value = '';
+}
+
+async function browseWorkspacePath() {
+  const pathInput = document.getElementById('wsNewPath');
+  const nameInput = document.getElementById('wsNewName');
+  const btn = document.getElementById('wsBrowsePath');
+  const originalBtnText = btn.textContent;
+  btn.disabled = true;
+
+  const textExts = ['.py', '.md', '.txt', '.json', '.yaml', '.yml', '.js', '.jsx', '.ts', '.tsx', '.html', '.css', '.toml', '.ini', '.cfg', '.log', '.sh', '.bat', '.sql', '.env', '.xml', '.csv', '.go', '.rs', '.java', '.c', '.cpp', '.h'];
+
+  try {
+    /* ---- 方式一：File System Access API（Chrome / Edge 113+）---- */
+    if (window.showDirectoryPicker) {
+      btn.textContent = '⏳';
+      const dirHandle = await window.showDirectoryPicker();
+      const dirName = dirHandle.name;
+      btn.textContent = '📥';
+
+      const items = [];
+      let totalSize = 0;
+      const maxTotal = 5 * 1024 * 1024;
+
+      async function walk(handle, basePath) {
+        for await (const entry of handle.values()) {
+          if (totalSize >= maxTotal) return;
+          const ep = basePath ? basePath + '/' + entry.name : entry.name;
+          if (entry.kind === 'directory') {
+            if (basePath.split('/').length < 3) await walk(entry, ep);
+          } else {
+            if (!textExts.some(ext => entry.name.toLowerCase().endsWith(ext))) continue;
+            const file = await entry.getFile();
+            if (file.size > 1024 * 1024) continue;
+            totalSize += file.size;
+            if (totalSize > maxTotal) break;
+            items.push({ path: ep, content: await file.text() });
+          }
+        }
+      }
+      await walk(dirHandle, '');
+
+      if (!nameInput.value.trim()) nameInput.value = dirName;
+      if (!items.length) { toast('⚠️ 该目录没有可识别的文本文件，请手动输入路径'); return; }
+
+      btn.textContent = '📤';
+      const res = await fetch('/api/workspaces/upload', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: items, directory_name: dirName })
+      });
+      const data = await res.json();
+      if (data.error) { toast('❌ ' + data.error); return; }
+      pathInput.value = data.path;
+      toast('✅ 已选择「' + dirName + '」，上传 ' + data.file_count + ' 个文件');
+      return;
+    }
+
+    /* ---- 方式二：回退 webkitdirectory（Safari / Firefox）---- */
+    btn.textContent = '⏳';
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.webkitdirectory = true;
+    picker.multiple = true;
+    picker.style.display = 'none';
+    document.body.appendChild(picker);
+
+    const files = await new Promise(resolve => {
+      picker.onchange = () => { resolve([...picker.files]); document.body.removeChild(picker); };
+      picker.click();
+    });
+    if (!files.length) return;
+
+    const firstRel = files[0].webkitRelativePath || files[0].name;
+    const dirName = firstRel.split('/')[0];
+    const selected = files.filter(f => textExts.some(ext => f.name.toLowerCase().endsWith(ext)) && f.size <= 1024 * 1024);
+    if (!nameInput.value.trim()) nameInput.value = dirName;
+    if (!selected.length) { toast('⚠️ 该目录没有可识别的文本文件，请手动输入路径'); return; }
+
+    btn.textContent = '📤';
+    const items = [];
+    for (const f of selected) {
+      items.push({ path: f.webkitRelativePath || f.name, content: await f.text() });
+    }
+    const res = await fetch('/api/workspaces/upload', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: items, directory_name: dirName })
+    });
+    const data = await res.json();
+    if (data.error) { toast('❌ ' + data.error); return; }
+    pathInput.value = data.path;
+    toast('✅ 已选择「' + dirName + '」，上传 ' + data.file_count + ' 个文件');
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    toast('❌ 选择目录失败：' + e.message);
+  } finally {
+    btn.textContent = originalBtnText;
+    btn.disabled = false;
+  }
+}
+
+async function addWorkspace() {
+  const name = document.getElementById('wsNewName').value.trim();
+  const path = document.getElementById('wsNewPath').value.trim();
+  if (!name || !path) { toast('请填写工作空间名称和路径'); return; }
+  try {
+    const res = await fetch('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, path })
+    });
+    const data = await res.json();
+    if (data.error) { toast('❌ ' + data.error); return; }
+    workspacesData = { current_id: data.current_id, workspaces: [...workspacesData.workspaces, data.workspace] };
+    currentWorkspace = data.workspace;
+    hideWorkspaceAddForm();
+    renderWorkspaceSection();
+    renderWorkspaceDropdownList();
+    renderHistoryWsFilter();
+    toggleWorkspaceDropdown(false);
+    toast('✅ 工作空间已添加并切换');
+  } catch (e) {
+    toast('❌ 添加失败：' + e.message);
+  }
+}
+
+async function switchWorkspace(id) {
+  try {
+    const res = await fetch('/api/workspaces/' + id + '/switch', { method: 'POST' });
+    const data = await res.json();
+    if (data.error) { toast('❌ ' + data.error); return; }
+    workspacesData.current_id = data.current_id;
+    currentWorkspace = data.workspace;
+    renderWorkspaceSection();
+    renderWorkspaceDropdownList();
+    renderHistoryWsFilter();
+    toggleWorkspaceDropdown(false);
+    toast('✅ 已切换到：' + data.workspace.name);
+  } catch (e) {
+    toast('❌ 切换失败：' + e.message);
+  }
+}
+
+async function deleteWorkspace(id, event) {
+  if (event) event.stopPropagation();
+  if (!confirm('确定删除该工作空间？仅移除配置，不会删除本地目录。')) return;
+  try {
+    const res = await fetch('/api/workspaces/' + id, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.error) { toast('❌ ' + data.error); return; }
+    workspacesData.workspaces = workspacesData.workspaces.filter(w => w.id !== id);
+    workspacesData.current_id = data.current_id;
+    currentWorkspace = (workspacesData.workspaces || []).find(w => w.id === data.current_id) || null;
+    renderWorkspaceSection();
+    renderWorkspaceDropdownList();
+    renderHistoryWsFilter();
+  } catch (e) {
+    toast('❌ 删除失败：' + e.message);
+  }
+}
+
+// 工作空间事件绑定
+document.getElementById('workspaceSelector').addEventListener('click', () => toggleWorkspaceDropdown());
+document.getElementById('wsActionNew').addEventListener('click', showWorkspaceAddForm);
+document.getElementById('wsActionOpen').addEventListener('click', () => { showWorkspaceAddForm(); browseWorkspacePath(); });
+document.getElementById('wsAddCancel').addEventListener('click', hideWorkspaceAddForm);
+document.getElementById('wsAddSave').addEventListener('click', addWorkspace);
+document.getElementById('wsBrowsePath').addEventListener('click', browseWorkspacePath);
+document.getElementById('wsSearchInput').addEventListener('input', e => {
+  wsSearchTerm = e.target.value;
+  renderWorkspaceDropdownList();
+});
+
+// 点击外部关闭下拉
+document.addEventListener('click', e => {
+  const section = document.getElementById('workspaceSection');
+  if (wsDropdownOpen && section && !section.contains(e.target)) {
+    toggleWorkspaceDropdown(false);
+  }
+});
+
+/* ============ 任务运行 ============ */
+let currentTaskId = null;
+
+document.getElementById('runBtn').addEventListener('click', startTask);
+document.getElementById('topicInput').addEventListener('keydown', e => { if (e.key === 'Enter') startTask(); });
+
+async function startTask() {
+  const topic = document.getElementById('topicInput').value.trim();
+  if (!topic) { showError('请输入一个研究主题'); return; }
+  hideError();
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('resultCard').classList.add('hidden');
+  document.getElementById('statusBar').classList.remove('hidden');
+  document.getElementById('statusText').textContent = '任务已提交，等待执行…';
+
+  try {
+    const payload = { topic, workspace_id: currentWorkspace ? currentWorkspace.id : '' };
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.error) { showError(data.error); return; }
+    currentTaskId = data.task_id;
+    pollStatus(currentTaskId);
+  } catch (e) {
+    showError('无法连接后端服务：' + e.message);
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('statusBar').classList.add('hidden');
+  }
+}
+
+async function pollStatus(taskId) {
+  try {
+    const res = await fetch('/api/status/' + taskId);
+    const data = await res.json();
+    if (data.status === 'running' || data.status === 'queued') {
+      document.getElementById('statusText').textContent =
+        data.status === 'queued' ? '任务排队中…' : '任务执行中：研究员 Agent 调研 → 分析师 Agent 成稿…';
+      setTimeout(() => pollStatus(taskId), 2500);
+    } else if (data.status === 'completed') {
+      document.getElementById('statusBar').classList.add('hidden');
+      document.getElementById('resultMd').innerHTML = mdRender(data.result);
+      document.getElementById('resultCard').classList.remove('hidden');
+      document.getElementById('runBtn').disabled = false;
+    } else {
+      document.getElementById('statusBar').classList.add('hidden');
+      showError('任务执行失败：' + (data.error || '未知错误'));
+      document.getElementById('runBtn').disabled = false;
+    }
+  } catch (e) {
+    document.getElementById('statusBar').classList.add('hidden');
+    showError('查询任务状态失败：' + e.message);
+    document.getElementById('runBtn').disabled = false;
+  }
+}
+
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  box.textContent = '⚠️ ' + msg;
+  box.classList.remove('hidden');
+}
+function hideError() { document.getElementById('errorBox').classList.add('hidden'); }
+
+/* ============ 复制 ============ */
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const text = document.getElementById('resultMd').innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = '已复制 ✓';
+    setTimeout(() => { btn.textContent = '复制全文'; }, 1500);
+  });
+});
+
+/* ============ 历史记录 ============ */
+async function loadHistory() {
+  const list = document.getElementById('historyList');
+  const wsFilter = document.getElementById('historyWsFilter').value;
+  list.innerHTML = '<p style="color:var(--text-light);font-size:13px;">加载中…</p>';
+  try {
+    const url = wsFilter ? '/api/tasks?workspace_id=' + encodeURIComponent(wsFilter) : '/api/tasks';
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.tasks || data.tasks.length === 0) {
+      list.innerHTML = '<p style="color:var(--text-light);font-size:13px;">暂无任务记录</p>';
+      return;
+    }
+    list.innerHTML = data.tasks.map(t => {
+      const statusCls = t.status === 'completed' ? 'done' : t.status === 'failed' ? 'fail' : 'run';
+      const statusTxt = t.status === 'completed' ? '已完成' : t.status === 'failed' ? '失败' : '执行中';
+      return `<div class="history-item" onclick="showHistoryResult('${t.id}')">
+        <span class="h-topic">${t.topic}</span>
+        <span class="h-status ${statusCls}">${statusTxt}</span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<p style="color:var(--text-light);font-size:13px;">加载失败</p>';
+  }
+}
+
+async function showHistoryResult(taskId) {
+  try {
+    const res = await fetch('/api/status/' + taskId);
+    const data = await res.json();
+    if (data.status === 'completed') {
+      document.querySelector('.nav-item[data-view="home"]').click();
+      document.getElementById('resultMd').innerHTML = mdRender(data.result);
+      document.getElementById('resultCard').classList.remove('hidden');
+      document.getElementById('resultCard').scrollIntoView({ behavior: 'smooth' });
+    } else if (data.status === 'failed') {
+      showError('该任务执行失败：' + (data.error || '未知错误'));
+      document.querySelector('.nav-item[data-view="home"]').click();
+    } else {
+      showError('该任务仍在执行中');
+      document.querySelector('.nav-item[data-view="home"]').click();
+    }
+  } catch (e) {
+    showError('获取历史结果失败');
+  }
+}
+
+document.getElementById('historyWsFilter').addEventListener('change', loadHistory);
+
+/* ============ 日志查询 ============ */
+let _logAutoTimer = null;
+let _logLastRows = new Map();
+
+async function loadLogTasks() {
+  try {
+    const res = await fetch('/api/log-tasks');
+    const data = await res.json();
+    const sel = document.getElementById('logTaskFilter');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">全部任务</option>' +
+      (data.tasks || []).map(t => `<option value="${t.id}">${t.id}${t.topic ? ' · ' + t.topic.slice(0, 30) : ''}</option>`).join('');
+    if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+  } catch (e) { /* ignore */ }
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+async function queryLogs(silent = false) {
+  const params = new URLSearchParams();
+  const taskId = document.getElementById('logTaskFilter').value;
+  const level = document.getElementById('logLevelFilter').value;
+  const source = document.getElementById('logSourceFilter').value;
+  const keyword = document.getElementById('logKeyword').value.trim();
+  const start = document.getElementById('logStart').value;
+  const end = document.getElementById('logEnd').value;
+  if (taskId) params.append('task_id', taskId);
+  if (level) params.append('level', level);
+  if (source) params.append('source', source);
+  if (keyword) params.append('keyword', keyword);
+  if (start) params.append('start', new Date(start).toISOString());
+  if (end) params.append('end', new Date(end).toISOString());
+  params.append('limit', '200');
+
+  try {
+    const res = await fetch('/api/logs?' + params.toString());
+    const data = await res.json();
+    renderLogs(data.logs || [], data.total);
+  } catch (e) {
+    if (!silent) renderLogs([], 0, '加载失败：' + e.message);
+  }
+}
+
+function renderLogs(logs, total, errMsg) {
+  const tbody = document.getElementById('logsBody');
+  const countEl = document.getElementById('logsCount');
+  if (errMsg) {
+    tbody.innerHTML = `<tr><td colspan="4" class="logs-empty">${errMsg}</td></tr>`;
+    countEl.textContent = '';
+    return;
+  }
+  if (!logs.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="logs-empty">暂无日志</td></tr>';
+    countEl.textContent = '';
+    return;
+  }
+  countEl.textContent = `共 ${total} 条日志（显示前 ${logs.length} 条）`;
+  tbody.innerHTML = logs.map(log => {
+    const short = log.message.length > 120 ? escapeHtml(log.message.slice(0, 120)) + '…' : escapeHtml(log.message);
+    const taskTag = log.task_id ? `<span style="color:var(--primary);font-size:11px;margin-right:8px;">#${log.task_id}</span>` : '';
+    return `<tr data-id="${log.id}" data-full="${escapeHtml(log.message)}" data-time="${formatTime(log.time)}" data-level="${log.level}" data-source="${escapeHtml(log.source)}">
+      <td class="time-cell">${formatTime(log.time)}</td>
+      <td><span class="log-tag ${log.level}">${log.level}</span></td>
+      <td class="log-source">${escapeHtml(log.source || '-')}</td>
+      <td class="msg-cell">${taskTag}${short}</td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('tr').forEach(row => {
+    row.addEventListener('click', () => {
+      document.getElementById('logDetailBody').textContent =
+        `时间：${row.dataset.time}\n级别：${row.dataset.level}\n来源：${row.dataset.source}\n\n${row.dataset.full}`;
+      document.getElementById('logDetailMask').classList.add('open');
+    });
+  });
+}
+
+/* 自动刷新 */
+function startLogAutoRefresh() {
+  if (_logAutoTimer) clearInterval(_logAutoTimer);
+  _logAutoTimer = setInterval(() => {
+    const auto = document.getElementById('logAutoRefresh');
+    if (auto && auto.checked && !document.getElementById('view-logs').classList.contains('hidden')) {
+      queryLogs(true);
+    }
+  }, 2000);
+}
+startLogAutoRefresh();
+
+document.getElementById('logQueryBtn').addEventListener('click', () => queryLogs(false));
+document.getElementById('logResetBtn').addEventListener('click', () => {
+  document.getElementById('logTaskFilter').value = '';
+  document.getElementById('logLevelFilter').value = '';
+  document.getElementById('logSourceFilter').value = '';
+  document.getElementById('logKeyword').value = '';
+  document.getElementById('logStart').value = '';
+  document.getElementById('logEnd').value = '';
+  queryLogs();
+});
+document.getElementById('logDetailClose').addEventListener('click', () => {
+  document.getElementById('logDetailMask').classList.remove('open');
+});
+document.getElementById('logDetailMask').addEventListener('click', e => {
+  if (e.target.id === 'logDetailMask') document.getElementById('logDetailMask').classList.remove('open');
+});
+
+/* ============ 模型配置（头像入口） ============ */
+const PROVIDER_META = {
+  deepseek: { label: 'DeepSeek', model: 'deepseek/deepseek-chat', base_url: 'https://api.deepseek.com', key: 'D' },
+  openai:   { label: 'OpenAI',   model: 'gpt-4o-mini',            base_url: '',                                  key: 'O' },
+  qwen:     { label: '通义千问',   model: 'qwen/qwen-plus',         base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', key: 'Q' },
+  glm:      { label: '智谱 GLM',  model: 'zhipu/glm-4-flash',      base_url: 'https://open.bigmodel.cn/api/paas/v4', key: 'G' },
+  moonshot: { label: 'Moonshot', model: 'moonshot/moonshot-v1-8k', base_url: 'https://api.moonshot.cn/v1',       key: 'M' },
+  ollama:   { label: 'Ollama',   model: 'ollama/llama3.1',         base_url: 'http://localhost:11434',           key: 'L' },
+  custom:   { label: '自定义',    model: '',                        base_url: '',                                  key: 'C' },
+};
+
+let currentConfig = null;
+
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    currentConfig = await res.json();
+    updateAvatar();
+  } catch (e) { /* 后端未就绪时保持默认 */ }
+}
+
+function updateAvatar() {
+  const cfg = currentConfig || {};
+  const meta = PROVIDER_META[cfg.provider] || PROVIDER_META.custom;
+  const model = (cfg.model || meta.model || '未配置模型');
+  document.getElementById('avatarCircle').textContent = meta.key;
+  document.getElementById('avatarName').textContent = meta.label;
+  document.getElementById('avatarSub').textContent = model || '未配置模型';
+  document.getElementById('modelChip').title = '当前：' + meta.label + ' · ' + (model || '未配置') + '\n点击配置模型';
+}
+
+function openConfig() {
+  const cfg = currentConfig || {};
+  const provider = PROVIDER_META[cfg.provider] ? cfg.provider : 'deepseek';
+  document.getElementById('cfgProvider').value = provider;
+  document.getElementById('cfgModel').value = cfg.model || PROVIDER_META[provider].model || '';
+  document.getElementById('cfgApiKey').value = '';
+  document.getElementById('cfgBaseUrl').value = cfg.base_url || '';
+  const keyStatus = document.getElementById('cfgKeyStatus');
+  keyStatus.textContent = cfg.has_api_key ? '✓ 已配置（如需更换请输入新 Key）' : '未配置';
+  keyStatus.className = 'key-status ' + (cfg.has_api_key ? 'ok' : 'no');
+  document.getElementById('configMask').classList.add('open');
+}
+
+function closeConfig() {
+  document.getElementById('configMask').classList.remove('open');
+}
+
+function applyProviderPreset() {
+  const provider = document.getElementById('cfgProvider').value;
+  const meta = PROVIDER_META[provider] || PROVIDER_META.custom;
+  const modelInput = document.getElementById('cfgModel');
+  const urlInput = document.getElementById('cfgBaseUrl');
+  // 仅当当前值匹配旧预设或为空时自动填充
+  if (!modelInput.value || (currentConfig && PROVIDER_META[currentConfig.provider] && modelInput.value === (PROVIDER_META[currentConfig.provider].model || ''))) {
+    modelInput.value = meta.model || '';
+  }
+  if (!urlInput.value || (currentConfig && currentConfig.base_url === '')) {
+    urlInput.value = meta.base_url || '';
+  }
+}
+
+async function saveConfig() {
+  const body = {
+    provider: document.getElementById('cfgProvider').value,
+    model: document.getElementById('cfgModel').value.trim(),
+    api_key: document.getElementById('cfgApiKey').value.trim(),
+    base_url: document.getElementById('cfgBaseUrl').value.trim(),
+  };
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      closeConfig();
+      currentConfig = { ...currentConfig, ...body, has_api_key: data.has_api_key };
+      updateAvatar();
+      toast('✅ 模型配置已保存');
+      checkHealth();
+    } else {
+      toast('❌ 保存失败：' + (data.error || '未知错误'));
+    }
+  } catch (e) {
+    toast('❌ 保存失败：无法连接后端服务');
+  }
+}
+
+let _toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+document.getElementById('modelChip').addEventListener('click', openConfig);
+document.getElementById('configClose').addEventListener('click', closeConfig);
+document.getElementById('configCancel').addEventListener('click', closeConfig);
+document.getElementById('configMask').addEventListener('click', e => {
+  if (e.target.id === 'configMask') closeConfig();
+});
+document.getElementById('configSave').addEventListener('click', saveConfig);
+document.getElementById('cfgProvider').addEventListener('change', applyProviderPreset);
+document.getElementById('cfgKeyToggle').addEventListener('click', () => {
+  const input = document.getElementById('cfgApiKey');
+  const btn = document.getElementById('cfgKeyToggle');
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  btn.textContent = show ? '隐藏' : '显示';
+});
+
+/* ============ 服务状态检测 ============ */
+async function checkHealth() {
+  const dot = document.getElementById('apiDot');
+  const text = document.getElementById('apiText');
+  try {
+    const res = await fetch('/api/health');
+    const data = await res.json();
+    if (data.status === 'ok' && data.api_key_configured) {
+      dot.className = 'dot ok'; text.textContent = '服务正常 · API Key 已配置';
+    } else if (data.status === 'ok') {
+      dot.className = 'dot bad'; text.textContent = 'API Key 未配置';
+    }
+  } catch (e) {
+    dot.className = 'dot bad'; text.textContent = '服务连接失败';
+  }
+}
+checkHealth();
+loadConfig();
+loadWorkspaces();
+setInterval(checkHealth, 15000);
+</script>
+</body>
+</html>
