@@ -727,7 +727,7 @@
   }
   .task-tab:hover { color: var(--text); border-color: var(--border-strong); }
   .task-tab.active { background: rgba(59,130,246,.14); color: var(--primary); border-color: rgba(59,130,246,.4); }
-  .flow-wrap { display: flex; gap: 14px; align-items: stretch; }
+  .flow-wrap { display: flex; gap: 14px; align-items: stretch; height: calc(100vh - 260px); min-height: 420px; }
   .flow-palette { width: 148px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
   .flow-palette-title { font-size: 12px; color: var(--text-muted); font-weight: 600; padding: 4px 2px; }
   .flow-palette-item {
@@ -737,11 +737,11 @@
   }
   .flow-palette-item:hover { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59,130,246,.1); transform: translateY(-1px); }
   .flow-canvas-box {
-    flex: 1; min-width: 0; height: 560px; border-radius: var(--radius); border: 1px solid var(--border);
+    flex: 1; min-width: 0; height: 100%; border-radius: var(--radius); border: 1px solid var(--border);
     background: var(--panel); position: relative; overflow: hidden;
   }
   #flowCanvas { width: 100%; height: 100%; }
-  .flow-config { width: 300px; flex-shrink: 0; align-self: flex-start; }
+  .flow-config { width: 300px; flex-shrink: 0; align-self: stretch; overflow-y: auto; }
   .flow-config .field { margin-bottom: 10px; }
   .flow-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
   .flow-toolbar input[type="text"], .flow-toolbar select {
@@ -994,6 +994,7 @@
           <button class="btn-mini run" onclick="runFlow()">▶ 运行</button>
           <button class="btn-mini" onclick="document.getElementById('dslFileInput').click()">⬇ 导入 Dify DSL</button>
           <button class="btn-mini" onclick="deleteFlow()">🗑 删除</button>
+          <button class="btn-mini" onclick="fitFlowView()" title="缩放画布以显示全部节点">🔍 适应画布</button>
           <input type="file" id="dslFileInput" accept=".yml,.yaml" class="hidden" onchange="importDslFile(event)">
           <span style="font-size:12px;color:var(--text-muted);margin-left:auto">拖拽连线；条件分支节点的连线可选「是/否」分支</span>
         </div>
@@ -2860,6 +2861,7 @@ function loadFlowToCanvas(wf) {
   document.getElementById('flowName').value = wf.name;
   lf.render(graphToLfData(wf.graph || {}));
   selectedEl = null; renderFlowConfig();
+  setTimeout(() => { try { lf.fitView(); } catch (e) {} }, 50);
 }
 
 function newFlow() {
@@ -2878,6 +2880,7 @@ function newFlow() {
     ],
   }));
   renderFlowConfig();
+  setTimeout(() => { try { lf.fitView(); } catch (e) {} }, 50);
   toast('✨ 已创建默认流程：开始 → LLM → 结束');
 }
 
@@ -2909,6 +2912,12 @@ async function deleteFlow() {
   document.getElementById('flowName').value = '';
   loadFlows();
   toast('🗑 已删除');
+}
+
+function fitFlowView() {
+  if (!lf) return;
+  try { lf.fitView(); toast('🔍 已自适应画布'); }
+  catch (e) { console.error(e); toast('⚠️ 自适应失败'); }
 }
 
 function deleteSelectedElement() {
@@ -3245,7 +3254,12 @@ function markNodesRunState(runs, skippedIds) {
 
 loadStats(); drawTrendChart(); renderAgents(); renderActivities(); renderTemplates();
 
-window.addEventListener('resize', () => { if (document.getElementById('view-dashboard').classList.contains('active')) drawTrendChart(); });
+window.addEventListener('resize', () => {
+  if (document.getElementById('view-dashboard').classList.contains('active')) drawTrendChart();
+  if (lf && document.getElementById('taskPaneFlow') && !document.getElementById('taskPaneFlow').classList.contains('hidden')) {
+    try { lf.resize(); lf.fitView(); } catch (e) {}
+  }
+});
 window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
   if (getThemePreference() === 'system') applyTheme();
 });
