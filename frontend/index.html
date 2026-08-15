@@ -2647,11 +2647,6 @@ document.addEventListener('click', e => {
 const chatInput = document.getElementById('chatInput');
 chatInput.addEventListener('input', () => { chatInput.style.height = 'auto'; chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px'; });
 
-// 初始化
-applyTheme(); applyGlow(); applyCompact();
-loadChatSessions(); currentChatId = chatSessions[0]?.id || null;
-checkHealth(); loadConfig(); loadWorkspaces();
-setInterval(checkHealth, 15000);
 /* ============ 可视化工作流编排（LogicFlow 画布 + 自研引擎 API） ============ */
 let lf = null;                 // LogicFlow 实例
 let flowInited = false;
@@ -3165,6 +3160,12 @@ if (dataRetentionEl) {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   });
 }
+
+/* ============ 初始化（必须在所有 let/const 声明之后执行，避免 TDZ 报错） ============ */
+applyTheme(); applyGlow(); applyCompact();
+loadChatSessions(); currentChatId = chatSessions[0]?.id || null;
+checkHealth(); loadConfig(); loadWorkspaces();
+setInterval(checkHealth, 15000);
 </script>
 </body>
 </html>
