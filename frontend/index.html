@@ -769,8 +769,14 @@
   }
   .lf-canvas-wrap { background: transparent; }
   .chart-wrap canvas { width: 100%; height: 100%; display: block; }
-  /* LogicFlow 节点文字颜色跟随主题 */
-  .lf-node-text { fill: var(--text); }
+  /* LogicFlow 节点文字：强制 emoji 字体 + 主题色，防止真实浏览器中文字/图标不可见 */
+  .lf-element-text {
+    fill: var(--text) !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", "Apple Color Emoji", "Microsoft YaHei", sans-serif !important;
+    font-size: 14px !important;
+    text-anchor: middle;
+    dominant-baseline: middle;
+  }
   .flow-context-menu {
     position: fixed; z-index: 9999; background: var(--panel-2); border: 1px solid var(--border);
     border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 6px 0; min-width: 120px;
@@ -2503,10 +2509,12 @@ function applyTheme() {
 }
 
 function applyFlowTheme() {
+  if (!lf) return;
   const light = document.body.classList.contains('light-theme');
+  const textColor = light ? '#1e293b' : '#f1f5f9';
   lf.setTheme({
     rect: { fill: light ? '#ffffff' : '#131b2b', stroke: '#3b82f6', strokeWidth: 1.2, rx: 10, ry: 10 },
-    nodeText: { fill: light ? '#1e293b' : '#f1f5f9', fontSize: 13 },
+    nodeText: { color: textColor, fill: textColor, fontSize: 14 },
     polyline: { stroke: light ? '#94a3b8' : '#64748b', strokeWidth: 1.4 },
     bezier: { stroke: light ? '#94a3b8' : '#64748b', strokeWidth: 1.4 },
     edgeText: { fill: light ? '#475569' : '#94a3b8', fontSize: 11, background: { fill: light ? '#ffffff' : '#0f1623' } },
@@ -2514,6 +2522,8 @@ function applyFlowTheme() {
     anchorLine: { stroke: '#3b82f6' },
     arrow: { offset: 8, verticalLength: 5 },
   });
+  // 自定义 HTML 节点通过 setHtml 读取当前主题，切换主题后需要触发重绘
+  try { lf.render(lf.getGraphData()); } catch(_) {}
 }
 
 function changeTheme(value) {
@@ -2686,14 +2696,14 @@ let flowPollTimer = null;
 let flowSkillsCache = [];      // 技能管理中已配置的技能（供技能节点下拉选择）
 
 const NODE_TYPES = {
-  start:    { label: '开始', icon: '🟢', defaults: { title: '开始', variables: [{ variable: 'query', required: true }] } },
-  llm:      { label: 'LLM', icon: '🤖', defaults: { title: 'LLM 节点', prompt: '{{#sys.query#}}', system_prompt: '' } },
-  skill:    { label: '技能', icon: '⚡', defaults: { title: '技能节点', skill_id: '', input: '{{#sys.query#}}' } },
-  http:     { label: 'HTTP', icon: '🌐', defaults: { title: 'HTTP 请求', method: 'GET', url: '', headers: {}, body: '' } },
-  ifelse:   { label: '条件', icon: '🔀', defaults: { title: '条件分支', conditions: [{ variable: 'sys.query', operator: 'contains', value: '' }], logical_operator: 'and' } },
-  code:     { label: '代码', icon: '📝', defaults: { title: '代码节点', code: 'import json, sys\ndata = json.load(sys.stdin)\nprint(json.dumps({"text": str(data["variables"])}, ensure_ascii=False))', variables: {}, timeout: 15 } },
-  template: { label: '模板', icon: '📄', defaults: { title: '模板节点', template: '{{#sys.query#}}' } },
-  end:      { label: '结束', icon: '🏁', defaults: { title: '结束', outputs: [{ name: 'answer', value: '{{#start_1.query#}}' }] } },
+  start:    { label: '开始', icon: '🟢', color: '#22c55e', defaults: { title: '开始', variables: [{ variable: 'query', required: true }] } },
+  llm:      { label: 'LLM', icon: '🤖', color: '#3b82f6', defaults: { title: 'LLM 节点', prompt: '{{#sys.query#}}', system_prompt: '' } },
+  skill:    { label: '技能', icon: '⚡', color: '#f59e0b', defaults: { title: '技能节点', skill_id: '', input: '{{#sys.query#}}' } },
+  http:     { label: 'HTTP', icon: '🌐', color: '#06b6d4', defaults: { title: 'HTTP 请求', method: 'GET', url: '', headers: {}, body: '' } },
+  ifelse:   { label: '条件', icon: '🔀', color: '#a855f7', defaults: { title: '条件分支', conditions: [{ variable: 'sys.query', operator: 'contains', value: '' }], logical_operator: 'and' } },
+  code:     { label: '代码', icon: '📝', color: '#64748b', defaults: { title: '代码节点', code: 'import json, sys\ndata = json.load(sys.stdin)\nprint(json.dumps({"text": str(data["variables"])}, ensure_ascii=False))', variables: {}, timeout: 15 } },
+  template: { label: '模板', icon: '📄', color: '#8b5cf6', defaults: { title: '模板节点', template: '{{#sys.query#}}' } },
+  end:      { label: '结束', icon: '🏁', color: '#ef4444', defaults: { title: '结束', outputs: [{ name: 'answer', value: '{{#start_1.query#}}' }] } },
 };
 
 function switchTaskTab(tab) {
@@ -2723,6 +2733,35 @@ function initFlowCanvas() {
   });
 
   lf = new LogicFlow({ container: document.getElementById('flowCanvas'), grid: { size: 14, visible: true }, keyboard: { enabled: false } });
+  // 注册自定义 HTML 节点：图标 + 文字在 HTML div 中渲染，避免 SVG text emoji 显示异常
+  lf.register('flowNode', ({ HtmlNode, HtmlNodeModel }) => {
+    class FlowNode extends HtmlNode {
+      setHtml(rootEl) {
+        const properties = (this.props && this.props.model && this.props.model.getProperties()) || {};
+        const wftype = properties.wftype || 'template';
+        const data = properties.data || {};
+        const cfg = NODE_TYPES[wftype] || { icon: '📄', color: '#3b82f6', label: wftype };
+        const light = document.body.classList.contains('light-theme');
+        rootEl.innerHTML = `<div class="flow-node-inner" style="
+          width:120px;height:88px;background:${light ? '#ffffff' : '#131b2b'};
+          border:1.5px solid ${cfg.color};border-radius:10px;display:flex;
+          align-items:center;justify-content:center;gap:6px;padding:8px;
+          box-sizing:border-box;box-shadow:0 2px 6px rgba(0,0,0,.06);
+          font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Segoe UI Emoji','Segoe UI Symbol','Noto Color Emoji','Microsoft YaHei',sans-serif;
+        ">
+          <span style="font-size:18px;line-height:1;">${cfg.icon}</span>
+          <span style="font-size:13px;color:${light ? '#1e293b' : '#f1f5f9'};font-weight:500;line-height:1.2;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(data.title || cfg.label)}</span>
+        </div>`;
+      }
+    }
+    class FlowNodeModel extends HtmlNodeModel {
+      setAttributes() {
+        this.width = 120;
+        this.height = 88;
+      }
+    }
+    return { view: FlowNode, model: FlowNodeModel };
+  });
   applyFlowTheme();
   lf.on('node:click', ({ data }) => { selectedEl = { kind: 'node', id: data.id }; renderFlowConfig(); hideFlowContextMenu(); });
   lf.on('edge:click', ({ data }) => { selectedEl = { kind: 'edge', id: data.id }; renderFlowConfig(); hideFlowContextMenu(); });
@@ -2780,7 +2819,7 @@ function addFlowNode(type) {
   const cfg = NODE_TYPES[type];
   const id = type + '_' + Math.random().toString(36).slice(2, 8);
   const { x, y } = lf.getPointByClient(400, 280);
-  lf.addNode({ id, type: 'rect', x, y, text: `${cfg.icon} ${cfg.defaults.title}`, properties: { wftype: type, data: JSON.parse(JSON.stringify(cfg.defaults)) } });
+  lf.addNode({ id, type: 'flowNode', x, y, properties: { wftype: type, data: JSON.parse(JSON.stringify(cfg.defaults)) } });
   lf.clearSelectElements();
   selectedEl = { kind: 'node', id };
   renderFlowConfig();
@@ -2807,11 +2846,9 @@ function lfDataToGraph() {
 function graphToLfData(graph) {
   return {
     nodes: (graph.nodes || []).map(n => {
-      const cfg = NODE_TYPES[n.type] || { icon: '📄' };
       return {
-        id: n.id, type: 'rect',
+        id: n.id, type: 'flowNode',
         x: (n.position && n.position.x) || 100, y: (n.position && n.position.y) || 100,
-        text: `${cfg.icon} ${(n.data && n.data.title) || n.type}`,
         properties: { wftype: n.type, data: n.data || {} },
       };
     }),
