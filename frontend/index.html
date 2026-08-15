@@ -754,6 +754,9 @@
   }
   .btn-mini:hover { color: var(--text); border-color: var(--border-strong); }
   .btn-mini.run { background: rgba(16,185,129,.15); color: var(--success); border-color: rgba(16,185,129,.4); }
+  .btn-mini.danger { color: var(--danger); border-color: rgba(239,68,68,.45); }
+  .btn-mini.danger:hover { background: rgba(239,68,68,.1); border-color: var(--danger); }
+  .btn-mini:disabled { opacity: .5; cursor: not-allowed; }
   .flow-run-panel { margin-top: 16px; }
   .flow-node-run {
     display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border-radius: 8px;
@@ -765,6 +768,14 @@
     font-size: 11.5px; max-height: 120px; overflow: auto; flex: 1;
   }
   .lf-canvas-wrap { background: transparent; }
+  .flow-context-menu {
+    position: fixed; z-index: 9999; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 6px 0; min-width: 120px;
+  }
+  .flow-context-item {
+    padding: 8px 14px; font-size: 13px; color: var(--danger); cursor: pointer; white-space: nowrap;
+  }
+  .flow-context-item:hover { background: rgba(239,68,68,.08); }
 </style>
 <link rel="stylesheet" href="/static/vendor/logic-flow.css">
 <script src="/static/vendor/logic-flow.min.js"></script>
@@ -2704,10 +2715,43 @@ function initFlowCanvas() {
     anchorLine: { stroke: '#3b82f6' },
     arrow: { offset: 8, verticalLength: 5 },
   });
-  lf.on('node:click', ({ data }) => { selectedEl = { kind: 'node', id: data.id }; renderFlowConfig(); });
-  lf.on('edge:click', ({ data }) => { selectedEl = { kind: 'edge', id: data.id }; renderFlowConfig(); });
-  lf.on('blank:click', () => { selectedEl = null; renderFlowConfig(); });
+  lf.on('node:click', ({ data }) => { selectedEl = { kind: 'node', id: data.id }; renderFlowConfig(); hideFlowContextMenu(); });
+  lf.on('edge:click', ({ data }) => { selectedEl = { kind: 'edge', id: data.id }; renderFlowConfig(); hideFlowContextMenu(); });
+  lf.on('blank:click', () => { selectedEl = null; renderFlowConfig(); hideFlowContextMenu(); });
+  lf.on('node:contextmenu', (args) => {
+    const data = args && args.data;
+    const e = (args && args.e) || args;
+    if (e && e.preventDefault) e.preventDefault();
+    if (!data) return;
+    selectedEl = { kind: 'node', id: data.id };
+    try { lf.selectElementById && lf.selectElementById(data.id, true); } catch(_) {}
+    renderFlowConfig(); showFlowContextMenu(e);
+  });
+  lf.on('edge:contextmenu', (args) => {
+    const data = args && args.data;
+    const e = (args && args.e) || args;
+    if (e && e.preventDefault) e.preventDefault();
+    if (!data) return;
+    selectedEl = { kind: 'edge', id: data.id };
+    try { lf.selectElementById && lf.selectElementById(data.id, false); } catch(_) {}
+    renderFlowConfig(); showFlowContextMenu(e);
+  });
+  lf.on('blank:contextmenu', (e) => { if (e && e.preventDefault) e.preventDefault(); hideFlowContextMenu(); });
   lf.render({ nodes: [], edges: [] });
+
+  // 全局 Delete 键删除选中元素（避免在输入框内误触发）
+  if (!window._flowKeydownBound) {
+    window._flowKeydownBound = true;
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const tag = (e.target && e.target.tagName) || '';
+      const editable = (e.target && (e.target.isContentEditable || e.target.classList.contains('lf-text-input')));
+      if (['INPUT','TEXTAREA','SELECT'].includes(tag) || editable) return;
+      if (!selectedEl) return;
+      e.preventDefault();
+      deleteSelectedElement();
+    });
+  }
   flowInited = true;
   loadFlowSkills();
   loadFlows();
@@ -2853,6 +2897,40 @@ async function deleteFlow() {
   toast('🗑 已删除');
 }
 
+function deleteSelectedElement() {
+  if (!lf || !selectedEl) return;
+  try {
+    if (selectedEl.kind === 'node') {
+      const data = lf.getGraphData();
+      const node = (data.nodes || []).find(n => n.id === selectedEl.id);
+      if (node && node.properties && node.properties.wftype === 'start') {
+        toast('⚠️ 开始节点不能删除'); return;
+      }
+      lf.deleteNode(selectedEl.id);
+    } else {
+      lf.deleteEdge(selectedEl.id);
+    }
+    selectedEl = null;
+    renderFlowConfig();
+  } catch (e) { toast('❌ 删除失败：' + e.message); }
+}
+
+function showFlowContextMenu(e) {
+  if (!e) return;
+  e.preventDefault && e.preventDefault();
+  const menu = document.getElementById('flowContextMenu');
+  const x = (e.clientX || e.x || 0) + 2;
+  const y = (e.clientY || e.y || 0) + 2;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.classList.remove('hidden');
+}
+
+function hideFlowContextMenu() {
+  const menu = document.getElementById('flowContextMenu');
+  if (menu) menu.classList.add('hidden');
+}
+
 async function importDslFile(ev) {
   const file = ev.target.files[0];
   ev.target.value = '';
@@ -2898,7 +2976,10 @@ function renderFlowConfig() {
           <option value="false" ${(e.properties||{}).branch === 'false' ? 'selected' : ''}>否（条件不成立）</option>
         </select>
       </div>
-      <div style="font-size:12px;color:var(--text-muted)">选中连线按 Delete 键可删除</div>`;
+      <div style="margin-top:14px;display:flex;gap:8px">
+        <button class="btn-mini danger" onclick="deleteSelectedElement()">🗑 删除连线</button>
+      </div>
+      <div style="margin-top:10px;font-size:12px;color:var(--text-muted)">选中连线按 Delete 键或右键删除</div>`;
   }
 }
 
@@ -2972,7 +3053,10 @@ function renderNodeConfig(n) {
   }
   const icon = (NODE_TYPES[type] || {}).icon || '📄';
   return `<div class="card-title" style="margin-bottom:10px">${icon} 节点配置 · ${type}</div>${body}
-    <div style="margin-top:12px;font-size:12px;color:var(--text-muted)">选中节点按 Delete 键删除</div>`;
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="btn-mini danger" onclick="deleteSelectedElement()" ${type === 'start' ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''}>🗑 删除节点</button>
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--text-muted)">选中节点按 Delete 键或右键删除</div>`;
 }
 
 function addCond() {
@@ -3167,5 +3251,9 @@ loadChatSessions(); currentChatId = chatSessions[0]?.id || null;
 checkHealth(); loadConfig(); loadWorkspaces();
 setInterval(checkHealth, 15000);
 </script>
+
+<div id="flowContextMenu" class="flow-context-menu hidden">
+  <div class="flow-context-item" onclick="deleteSelectedElement(); hideFlowContextMenu();">🗑 删除</div>
+</div>
 </body>
 </html>
