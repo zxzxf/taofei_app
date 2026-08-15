@@ -2920,7 +2920,7 @@ async function saveFlow() {
   if (!name) { toast('⚠️ 请填写工作流名称'); return; }
   const graph = lfDataToGraph();
   if (!graph.nodes.length) { toast('⚠️ 画布为空'); return; }
-  if (!graph.nodes.some(n => n.type === 'start')) { toast('⚠️ 缺少开始节点，无法保存（开始节点不可删除）'); return; }
+  if (!graph.nodes.some(n => n.type === 'start')) { toast('⚠️ 缺少开始节点，请从左侧拖入「开始」节点后再保存'); return; }
   if (!graph.nodes.some(n => n.type === 'end')) { toast('⚠️ 缺少结束节点，请添加「结束」节点后再保存'); return; }
   try {
     const res = await fetch('/api/workflows', {
@@ -2957,11 +2957,6 @@ function deleteSelectedElement() {
   if (!lf || !selectedEl) return;
   try {
     if (selectedEl.kind === 'node') {
-      const data = lf.getGraphData();
-      const node = (data.nodes || []).find(n => n.id === selectedEl.id);
-      if (node && node.properties && node.properties.wftype === 'start') {
-        toast('⚠️ 开始节点不能删除'); return;
-      }
       lf.deleteNode(selectedEl.id);
     } else {
       lf.deleteEdge(selectedEl.id);
@@ -3110,7 +3105,7 @@ function renderNodeConfig(n) {
   const icon = (NODE_TYPES[type] || {}).icon || '📄';
   return `<div class="card-title" style="margin-bottom:10px">${icon} 节点配置 · ${type}</div>${body}
     <div style="margin-top:14px;display:flex;gap:8px">
-      <button class="btn-mini danger" onclick="deleteSelectedElement()" ${type === 'start' ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''}>🗑 删除节点</button>
+      <button class="btn-mini danger" onclick="deleteSelectedElement()">🗑 删除节点</button>
     </div>
     <div style="margin-top:10px;font-size:12px;color:var(--text-muted)">选中节点按 Delete 键或右键删除</div>`;
 }
