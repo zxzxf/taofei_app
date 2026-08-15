@@ -71,6 +71,21 @@
   ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.25); border-radius: 4px; }
   ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.4); }
 
+  /* 防止 select/option 随系统主题导致文字不可见 */
+  select, option {
+    background: var(--panel-2);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+  }
+  select {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  option { background: var(--panel); padding: 6px 8px; }
+
   /* ===== 左侧导航 ===== */
   .sidebar {
     width: 230px;
