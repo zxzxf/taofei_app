@@ -2722,7 +2722,7 @@ function initFlowCanvas() {
     pal.appendChild(div);
   });
 
-  lf = new LogicFlow({ container: document.getElementById('flowCanvas'), grid: { size: 14, visible: true }, keyboard: { enabled: true } });
+  lf = new LogicFlow({ container: document.getElementById('flowCanvas'), grid: { size: 14, visible: true }, keyboard: { enabled: false } });
   applyFlowTheme();
   lf.on('node:click', ({ data }) => { selectedEl = { kind: 'node', id: data.id }; renderFlowConfig(); hideFlowContextMenu(); });
   lf.on('edge:click', ({ data }) => { selectedEl = { kind: 'edge', id: data.id }; renderFlowConfig(); hideFlowContextMenu(); });
@@ -2883,6 +2883,8 @@ async function saveFlow() {
   if (!name) { toast('⚠️ 请填写工作流名称'); return; }
   const graph = lfDataToGraph();
   if (!graph.nodes.length) { toast('⚠️ 画布为空'); return; }
+  if (!graph.nodes.some(n => n.type === 'start')) { toast('⚠️ 缺少开始节点，无法保存（开始节点不可删除）'); return; }
+  if (!graph.nodes.some(n => n.type === 'end')) { toast('⚠️ 缺少结束节点，请添加「结束」节点后再保存'); return; }
   try {
     const res = await fetch('/api/workflows', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
