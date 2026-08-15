@@ -751,8 +751,8 @@
   }
   .lf-canvas-wrap { background: transparent; }
 </style>
-<link rel="stylesheet" href="https://unpkg.com/@logicflow/core@1.2.28/dist/style/index.css">
-<script src="https://unpkg.com/@logicflow/core@1.2.28/dist/LogicFlow.js"></script>
+<link rel="stylesheet" href="/static/vendor/logic-flow.css">
+<script src="/static/vendor/logic-flow.min.js"></script>
 </head>
 <body>
 
@@ -2669,7 +2669,7 @@ function initFlowCanvas() {
   if (flowInited) return;
   if (typeof LogicFlow === 'undefined') {
     document.getElementById('flowCanvas').innerHTML =
-      '<div style="padding:40px;color:var(--text-muted);font-size:13px">画布组件（LogicFlow CDN）加载失败，请检查网络后刷新页面</div>';
+      '<div style="padding:40px;color:var(--text-muted);font-size:13px">画布组件加载失败，请刷新页面重试</div>';
     return;
   }
   // 左侧节点面板
