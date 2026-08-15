@@ -2506,7 +2506,7 @@ function applyFlowTheme() {
   const light = document.body.classList.contains('light-theme');
   lf.setTheme({
     rect: { fill: light ? '#ffffff' : '#131b2b', stroke: '#3b82f6', strokeWidth: 1.2, rx: 10, ry: 10 },
-    nodeText: { color: light ? '#1e293b' : '#f1f5f9', fontSize: 13 },
+    nodeText: { fill: light ? '#1e293b' : '#f1f5f9', fontSize: 13 },
     polyline: { stroke: light ? '#94a3b8' : '#64748b', strokeWidth: 1.4 },
     bezier: { stroke: light ? '#94a3b8' : '#64748b', strokeWidth: 1.4 },
     edgeText: { fill: light ? '#475569' : '#94a3b8', fontSize: 11, background: { fill: light ? '#ffffff' : '#0f1623' } },
