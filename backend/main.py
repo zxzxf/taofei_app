@@ -529,6 +529,16 @@ class RunRequest(BaseModel):
     workspace_id: str = ""
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+    stream: bool = False
+
+
 @app.get("/api/health")
 def health():
     cfg = _load_model_config()
@@ -611,6 +621,584 @@ def run_task(req: RunRequest):
     return {"task_id": task_id}
 
 
+def _build_skill_system_prompt(messages: list[dict]) -> str | None:
+    """根据已启用的 Claude 技能构建 system prompt；@技能名 命中时注入完整指令。"""
+    skills = [s for s in _load_skills() if s.get("type") == "claude" and s.get("enabled", True)]
+    if not skills:
+        return None
+    user_text = " ".join(m.get("content", "") for m in messages if m.get("role") == "user")
+    triggered = [
+        s for s in skills
+        if f"@{s['name']}" in user_text
+        or (s.get("source", "").split("/")[-1] and f"@{s['source'].split('/')[-1]}" in user_text)
+    ]
+    lines = [
+        "你是「淘飞AI」企业级智能体平台的助手。平台已接入以下 Claude 官方技能（来自 anthropics/skills）：",
+    ]
+    for s in skills:
+        lines.append(f"- {s['name']}：{s.get('desc') or '（无描述）'}")
+    if triggered:
+        lines.append("\n用户通过 @技能名 指定了以下技能，请严格遵循技能指令执行任务：")
+        for s in triggered:
+            lines.append(f"\n========== 技能【{s['name']}】指令开始 ==========\n{s.get('instructions','')}\n========== 技能【{s['name']}】指令结束 ==========")
+    else:
+        lines.append(
+            "\n当用户的请求与上述某个技能相关时，告知用户可在消息中使用「@技能名」显式调用该技能获得专业处理。"
+        )
+    return "\n".join(lines)
+
+
+@app.post("/api/chat")
+def chat(req: ChatRequest):
+    """直接调用大模型接口，进行多轮对话；自动注入已启用的 Claude 技能。"""
+    if not req.messages:
+        return JSONResponse({"error": "消息不能为空"}, status_code=400)
+    try:
+        llm = _build_llm()
+        # 构造适合 LLM.call 的消息列表
+        messages = [{"role": m.role, "content": m.content} for m in req.messages]
+        skill_prompt = _build_skill_system_prompt(messages)
+        if skill_prompt:
+            messages = [{"role": "system", "content": skill_prompt}] + messages
+        reply = llm.call(messages)
+        log_buffer.emit(
+            "INFO", "system",
+            f"对话中心调用 LLM：{len(messages)} 条消息"
+            f"{'（含 Claude 技能上下文）' if skill_prompt else ''} -> 回复 {len(str(reply))} 字符",
+        )
+        return {"reply": reply, "skills_injected": bool(skill_prompt)}
+    except Exception as e:
+        err_msg = str(e)
+        log_buffer.emit("ERROR", "system", f"对话中心 LLM 调用失败：{err_msg}")
+        return JSONResponse({"error": err_msg}, status_code=500)
+
+
+# ---------------------------------------------------------------
+# 集成管理 - 天气查询（Open-Meteo，免费无需 API Key）
+# ---------------------------------------------------------------
+WEATHER_CODE_MAP = {
+    0: "晴", 1: "基本晴", 2: "局部多云", 3: "阴", 45: "雾", 48: "雾凇",
+    51: "小毛毛雨", 53: "毛毛雨", 55: "大毛毛雨", 56: "冻毛毛雨", 57: "强冻毛毛雨",
+    61: "小雨", 63: "中雨", 65: "大雨", 66: "冻雨", 67: "强冻雨",
+    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
+    80: "小阵雨", 81: "阵雨", 82: "强阵雨", 85: "小阵雪", 86: "阵雪",
+    95: "雷阵雨", 96: "雷阵雨伴冰雹", 99: "强雷阵雨伴冰雹",
+}
+
+
+def _http_get_json(url: str, timeout: int = 10) -> dict:
+    """GET 请求并解析 JSON（urllib 标准库实现，避免额外依赖）。"""
+    import urllib.parse
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (taofei-app)"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+@app.get("/api/integrations/weather")
+def integration_weather(city: str = Query(..., min_length=1)):
+    """天气查询集成：城市名 -> 当前天气 + 3 天预报（Open-Meteo）。"""
+    import urllib.parse
+
+    city = city.strip()
+    if not city:
+        return JSONResponse({"error": "城市名不能为空"}, status_code=400)
+    try:
+        # 1. 城市名 -> 经纬度
+        geo = _http_get_json(
+            "https://geocoding-api.open-meteo.com/v1/search"
+            f"?name={urllib.parse.quote(city)}&count=1&language=zh&format=json"
+        )
+        results = geo.get("results") or []
+        if not results:
+            return JSONResponse({"error": f"未找到城市「{city}」，请检查名称（如：北京、上海、Shanghai）"}, status_code=404)
+        loc = results[0]
+        lat, lon = loc["latitude"], loc["longitude"]
+        # 2. 经纬度 -> 天气
+        wx = _http_get_json(
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m"
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto"
+        )
+        cur = wx.get("current", {})
+        daily = wx.get("daily", {})
+        code = cur.get("weather_code", 0)
+        result = {
+            "city": loc.get("name", city),
+            "admin1": loc.get("admin1", ""),
+            "country": loc.get("country", ""),
+            "current": {
+                "temperature": cur.get("temperature_2m"),
+                "feels_like": cur.get("apparent_temperature"),
+                "humidity": cur.get("relative_humidity_2m"),
+                "wind_speed": cur.get("wind_speed_10m"),
+                "condition": WEATHER_CODE_MAP.get(code, f"未知({code})"),
+            },
+            "daily": [],
+        }
+        dates = daily.get("time", [])
+        for i, d in enumerate(dates):
+            dcode = daily.get("weather_code", [])[i] if i < len(daily.get("weather_code", [])) else 0
+            result["daily"].append({
+                "date": d,
+                "condition": WEATHER_CODE_MAP.get(dcode, "未知"),
+                "max": daily.get("temperature_2m_max", [])[i] if i < len(daily.get("temperature_2m_max", [])) else None,
+                "min": daily.get("temperature_2m_min", [])[i] if i < len(daily.get("temperature_2m_min", [])) else None,
+            })
+        log_buffer.emit("INFO", "system", f"天气集成查询：{city} -> {result['current']['condition']} {result['current']['temperature']}°C")
+        return result
+    except Exception as exc:  # noqa: BLE001
+        err = str(exc)
+        log_buffer.emit("ERROR", "system", f"天气集成查询失败：{err}")
+        return JSONResponse({"error": f"查询失败：{err}"}, status_code=500)
+
+
+@app.get("/api/integrations")
+def list_integrations():
+    """集成管理列表：天气查询已接入，其余为规划中。"""
+    return {
+        "integrations": [
+            {"id": "weather", "name": "天气查询", "icon": "🌤️", "status": "connected",
+             "desc": "Open-Meteo 天气 API，支持全球城市实时天气与 4 日预报，无需 API Key", "category": "数据服务"},
+            {"id": "wecom", "name": "企业微信", "icon": "💬", "status": "planned", "desc": "消息推送、群机器人通知", "category": "协同办公"},
+            {"id": "dingtalk", "name": "钉钉", "icon": "📎", "status": "planned", "desc": "待办同步、工作通知", "category": "协同办公"},
+            {"id": "feishu", "name": "飞书", "icon": "🐦", "status": "planned", "desc": "文档读写、消息卡片", "category": "协同办公"},
+            {"id": "crm", "name": "CRM 系统", "icon": "👥", "status": "planned", "desc": "客户数据查询、商机跟进", "category": "业务系统"},
+            {"id": "database", "name": "数据库", "icon": "🗄️", "status": "planned", "desc": "SQL 查询、数据同步", "category": "数据服务"},
+        ]
+    }
+
+
+# ---------------------------------------------------------------
+# 集成管理 - 技能管理（HTTP API 技能 + Claude 技能 SKILL.md，持久化到 skills.json）
+# ---------------------------------------------------------------
+SKILLS_FILE = EXE_DIR / "skills.json"
+CLAUDE_SKILLS_REPO = "anthropics/skills"
+
+
+def _load_skills() -> list[dict]:
+    try:
+        if SKILLS_FILE.exists():
+            with open(SKILLS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [s for s in data if isinstance(s, dict)]
+    except Exception:
+        pass
+    return []
+
+
+def _save_skills(skills: list[dict]) -> None:
+    try:
+        with open(SKILLS_FILE, "w", encoding="utf-8") as f:
+            json.dump(skills, f, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        log_buffer.emit("ERROR", "system", f"保存技能配置失败：{exc}")
+
+
+class SkillRequest(BaseModel):
+    id: str = ""
+    type: str = "http"          # http: HTTP API 技能；claude: Claude 技能（SKILL.md）
+    name: str
+    icon: str = "⚡"
+    desc: str = ""
+    method: str = "GET"
+    url: str = ""
+    headers: str = ""
+    body: str = ""
+    instructions: str = ""      # claude 类型：SKILL.md 指令内容
+    enabled: bool = True
+
+
+def _parse_skill_md(text: str) -> tuple[str, str, str]:
+    """解析 SKILL.md：返回 (name, description, 指令正文)。无 frontmatter 时降级处理。"""
+    name, desc = "", ""
+    body = text
+    if text.lstrip().startswith("---"):
+        parts = text.lstrip().split("---", 2)
+        if len(parts) >= 3:
+            meta, body = parts[1], parts[2]
+            for line in meta.splitlines():
+                line = line.strip()
+                low = line.lower()
+                if low.startswith("name:"):
+                    name = line[5:].strip().strip('"').strip("'")
+                elif low.startswith("description:"):
+                    desc = line[12:].strip().strip('"').strip("'")
+    return name, desc, body.strip()
+
+
+@app.get("/api/skills")
+def list_skills():
+    """技能列表。"""
+    return {"skills": _load_skills()}
+
+
+@app.post("/api/skills")
+def save_skill(req: SkillRequest):
+    """新建或更新技能（id 为空则新建）。支持 HTTP API 技能与 Claude 技能两种类型。"""
+    name = req.name.strip()
+    if not name:
+        return JSONResponse({"error": "技能名称不能为空"}, status_code=400)
+    skill_type = req.type if req.type in ("http", "claude") else "http"
+    if skill_type == "claude":
+        instructions = req.instructions.strip()
+        if not instructions:
+            return JSONResponse({"error": "SKILL.md 指令内容不能为空"}, status_code=400)
+        # 若粘贴了完整 SKILL.md（带 frontmatter），自动解析 name/description
+        md_name, md_desc, md_body = _parse_skill_md(instructions)
+        skill = {
+            "id": req.id.strip() or ("skill_" + uuid.uuid4().hex[:10]),
+            "type": "claude",
+            "name": name,
+            "icon": req.icon.strip() or "🧩",
+            "desc": req.desc.strip() or md_desc,
+            "method": "",
+            "url": "",
+            "headers": "",
+            "body": "",
+            "instructions": md_body or instructions,
+            "enabled": req.enabled,
+            "updated_at": datetime.now(timezone.utc).astimezone().isoformat(),
+        }
+    else:
+        url = req.url.strip()
+        if not url:
+            return JSONResponse({"error": "请求 URL 不能为空"}, status_code=400)
+        if req.method.upper() not in ("GET", "POST", "PUT", "DELETE"):
+            return JSONResponse({"error": "请求方式仅支持 GET/POST/PUT/DELETE"}, status_code=400)
+        # 校验 headers / body JSON 格式
+        for field_name, raw in (("headers", req.headers), ("body", req.body)):
+            if raw and raw.strip():
+                try:
+                    json.loads(raw)
+                except Exception:
+                    return JSONResponse({"error": f"{field_name} 不是合法的 JSON"}, status_code=400)
+        skill = {
+            "id": req.id.strip() or ("skill_" + uuid.uuid4().hex[:10]),
+            "type": "http",
+            "name": name,
+            "icon": req.icon.strip() or "⚡",
+            "desc": req.desc.strip(),
+            "method": req.method.upper(),
+            "url": url,
+            "headers": req.headers.strip(),
+            "body": req.body.strip(),
+            "instructions": "",
+            "enabled": req.enabled,
+            "updated_at": datetime.now(timezone.utc).astimezone().isoformat(),
+        }
+    skills = _load_skills()
+    for i, s in enumerate(skills):
+        if s.get("id") == skill["id"]:
+            skills[i] = skill
+            break
+    else:
+        skills.insert(0, skill)
+    _save_skills(skills)
+    log_buffer.emit("INFO", "system", f"技能已保存：{name}（{'Claude 技能' if skill_type == 'claude' else req.method.upper() + ' ' + url}）")
+    return {"ok": True, "skill": skill}
+
+
+@app.delete("/api/skills/{skill_id}")
+def delete_skill(skill_id: str):
+    skills = _load_skills()
+    remaining = [s for s in skills if s.get("id") != skill_id]
+    if len(remaining) == len(skills):
+        return JSONResponse({"error": "技能不存在"}, status_code=404)
+    _save_skills(remaining)
+    log_buffer.emit("INFO", "system", f"技能已删除：{skill_id}")
+    return {"ok": True}
+
+
+@app.post("/api/skills/{skill_id}/run")
+def run_skill(skill_id: str):
+    """执行（测试）一个技能：HTTP 技能发起真实请求；Claude 技能返回 SKILL.md 指令预览。"""
+    import urllib.error
+    import urllib.request
+
+    skill = next((s for s in _load_skills() if s.get("id") == skill_id), None)
+    if not skill:
+        return JSONResponse({"error": "技能不存在"}, status_code=404)
+    if skill.get("type") == "claude":
+        return {"ok": True, "type": "claude",
+                "response": f"# {skill.get('name','')}\n\n{skill.get('desc','')}\n\n---\n\n{skill.get('instructions','')}"}
+    url = skill.get("url", "")
+    method = skill.get("method", "GET").upper()
+    headers = {}
+    if skill.get("headers"):
+        try:
+            headers = json.loads(skill["headers"])
+        except Exception:
+            return JSONResponse({"error": "headers 配置不是合法 JSON"}, status_code=400)
+    body = skill.get("body") or ""
+    data = None
+    if method in ("POST", "PUT") and body:
+        data = body.encode("utf-8")
+        headers.setdefault("Content-Type", "application/json")
+    try:
+        r = urllib.request.Request(url, data=data, headers={"User-Agent": "Mozilla/5.0 (taofei-app)", **headers}, method=method)
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+            return {"ok": True, "status": resp.status, "response": text[:8000]}
+    except urllib.error.HTTPError as e:
+        return JSONResponse({"error": f"HTTP {e.code}：{e.reason}", "response": e.read().decode('utf-8', errors='replace')[:2000]}, status_code=400)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"请求失败：{exc}"}, status_code=500)
+
+
+# ---------------------------------------------------------------
+# Claude Code 官方技能市场（anthropics/skills）
+# ---------------------------------------------------------------
+def _fetch_skill_md(skill_dir: str) -> str:
+    """从官方仓库下载 skills/<dir>/SKILL.md 原文。"""
+    import urllib.request
+
+    url = f"https://raw.githubusercontent.com/{CLAUDE_SKILLS_REPO}/main/skills/{skill_dir}/SKILL.md"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (taofei-app)"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+@app.get("/api/skills/claude-official")
+def claude_official_skills():
+    """列出 anthropics/skills 官方仓库中的可用技能目录。"""
+    try:
+        tree = _http_get_json(
+            f"https://api.github.com/repos/{CLAUDE_SKILLS_REPO}/git/trees/main?recursive=1",
+            timeout=15,
+        )
+        dirs = []
+        for item in tree.get("tree", []):
+            p = item.get("path", "")
+            if p.startswith("skills/") and p.endswith("/SKILL.md") and p.count("/") == 2:
+                dirs.append(p.split("/")[1])
+        existing = {s.get("name") for s in _load_skills()}
+        return {"repo": CLAUDE_SKILLS_REPO, "skills": sorted(dirs), "imported": sorted(existing)}
+    except Exception as exc:  # noqa: BLE001
+        log_buffer.emit("ERROR", "system", f"拉取官方技能列表失败：{exc}")
+        return JSONResponse({"error": f"拉取官方技能列表失败：{exc}"}, status_code=502)
+
+
+class ImportClaudeRequest(BaseModel):
+    names: list[str]
+
+
+@app.post("/api/skills/import-claude")
+def import_claude_skills(req: ImportClaudeRequest):
+    """批量导入官方技能：下载 SKILL.md、解析 frontmatter、写入 skills.json。"""
+    if not req.names:
+        return JSONResponse({"error": "请至少选择一个技能"}, status_code=400)
+    skills = _load_skills()
+    imported, failed = [], []
+    for name in req.names[:30]:
+        try:
+            md = _fetch_skill_md(name)
+            md_name, md_desc, md_body = _parse_skill_md(md)
+            display_name = md_name or name
+            # 已存在同名技能则更新
+            skill = {
+                "id": "skill_" + uuid.uuid4().hex[:10],
+                "type": "claude",
+                "name": display_name,
+                "icon": "🧩",
+                "desc": md_desc,
+                "method": "", "url": "", "headers": "", "body": "",
+                "instructions": md_body or md,
+                "enabled": True,
+                "source": f"{CLAUDE_SKILLS_REPO}/skills/{name}",
+                "updated_at": datetime.now(timezone.utc).astimezone().isoformat(),
+            }
+            for i, s in enumerate(skills):
+                if s.get("name") == display_name and s.get("type") == "claude":
+                    skill["id"] = s["id"]
+                    skills[i] = skill
+                    break
+            else:
+                skills.insert(0, skill)
+            imported.append(display_name)
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"name": name, "error": str(exc)})
+    _save_skills(skills)
+    log_buffer.emit("INFO", "system", f"导入 Claude 官方技能 {len(imported)} 个：{'、'.join(imported)}")
+    return {"ok": True, "imported": imported, "failed": failed}
+
+
+# ---------------------------------------------------------------
+# 任务编排 - 可视化工作流（自研引擎，架构对齐 Dify workflow）
+#   图 DAG + 变量池 + 节点执行器，支持导入 Dify DSL
+# ---------------------------------------------------------------
+WORKFLOWS_FILE = EXE_DIR / "workflows.json"
+
+from workflow import WorkflowEngine  # noqa: E402  自研工作流引擎包
+from workflow.dsl import convert_dify_dsl  # noqa: E402
+
+
+def _load_workflows() -> list[dict]:
+    try:
+        if WORKFLOWS_FILE.exists():
+            with open(WORKFLOWS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
+
+
+def _save_workflows(items: list[dict]) -> None:
+    with open(WORKFLOWS_FILE, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+
+
+class WorkflowRequest(BaseModel):
+    id: str = ""
+    name: str
+    desc: str = ""
+    graph: dict
+
+
+class WorkflowRunRequest(BaseModel):
+    inputs: dict[str, Any] = {}
+
+
+class WorkflowDslRequest(BaseModel):
+    name: str = ""
+    dsl: str
+
+
+@app.get("/api/workflows")
+def list_workflows():
+    return {"workflows": _load_workflows()}
+
+
+@app.get("/api/workflows/{wf_id}")
+def get_workflow(wf_id: str):
+    wf = next((w for w in _load_workflows() if w.get("id") == wf_id), None)
+    if not wf:
+        return JSONResponse({"error": "工作流不存在"}, status_code=404)
+    return wf
+
+
+@app.post("/api/workflows")
+def save_workflow(req: WorkflowRequest):
+    name = req.name.strip()
+    if not name:
+        return JSONResponse({"error": "名称不能为空"}, status_code=400)
+    if not isinstance(req.graph, dict) or not req.graph.get("nodes"):
+        return JSONResponse({"error": "graph 必须包含 nodes"}, status_code=400)
+    items = _load_workflows()
+    wf_id = req.id.strip() or ("wf_" + uuid.uuid4().hex[:10])
+    wf = {
+        "id": wf_id,
+        "name": name,
+        "desc": req.desc.strip(),
+        "graph": req.graph,
+        "updated_at": datetime.now(timezone.utc).astimezone().isoformat(),
+    }
+    for i, item in enumerate(items):
+        if item.get("id") == wf_id:
+            items[i] = wf
+            break
+    else:
+        items.insert(0, wf)
+    _save_workflows(items)
+    log_buffer.emit("INFO", "system", f"工作流已保存：{name}（{len(req.graph.get('nodes', []))} 个节点）")
+    return wf
+
+
+@app.delete("/api/workflows/{wf_id}")
+def delete_workflow(wf_id: str):
+    items = _load_workflows()
+    rest = [w for w in items if w.get("id") != wf_id]
+    if len(rest) == len(items):
+        return JSONResponse({"error": "工作流不存在"}, status_code=404)
+    _save_workflows(rest)
+    return {"ok": True}
+
+
+def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
+    """后台线程执行工作流引擎，日志写入 log_buffer（带 task_id），节点进度实时写入任务状态。"""
+    try:
+        with _tasks_lock:
+            _tasks[task_id]["status"] = "running"
+        log_buffer.emit("INFO", "system", f"工作流「{wf['name']}」开始执行", task_id)
+
+        llm = _build_llm()
+
+        def llm_call(messages: list[dict]) -> str:
+            return str(llm.call(messages))
+
+        def wlog(level: str, message: str) -> None:
+            log_buffer.emit(level, "workflow", message, task_id)
+
+        # 节点进度回调：node_runs 实时可查（前端轮询 /api/status/{task_id} 高亮画布）
+        progress_map: dict[str, dict] = {}
+
+        def on_progress(record: dict) -> None:
+            progress_map[record["id"]] = record
+            with _tasks_lock:
+                _tasks[task_id]["node_runs"] = list(progress_map.values())
+
+        def get_skill(skill_id: str):
+            return next((s for s in _load_skills() if s.get("id") == skill_id), None)
+
+        engine = WorkflowEngine(
+            wf.get("graph", {}),
+            llm_call=llm_call, log=wlog, python_bin=sys.executable,
+            progress=on_progress, extra_ctx={"get_skill": get_skill},
+        )
+        result = engine.run(inputs)
+        with _tasks_lock:
+            _tasks[task_id].update(
+                status="completed",
+                result=result.get("outputs", {}),
+                node_runs=result.get("node_runs", []),
+                skipped=result.get("skipped", []),
+            )
+        log_buffer.emit("INFO", "system", f"工作流「{wf['name']}」执行完成", task_id)
+    except Exception as exc:  # noqa: BLE001
+        err_msg = str(exc)
+        log_buffer.emit("ERROR", "system", f"工作流执行失败：{err_msg}", task_id)
+        with _tasks_lock:
+            _tasks[task_id].update(status="failed", error=err_msg)
+
+
+@app.post("/api/workflows/{wf_id}/run")
+def run_workflow(wf_id: str, req: WorkflowRunRequest):
+    wf = next((w for w in _load_workflows() if w.get("id") == wf_id), None)
+    if not wf:
+        return JSONResponse({"error": "工作流不存在"}, status_code=404)
+    task_id = uuid.uuid4().hex[:12]
+    with _tasks_lock:
+        _tasks[task_id] = {
+            "id": task_id,
+            "topic": f"[工作流] {wf['name']}",
+            "status": "queued",
+            "workspace_id": "",
+            "result": None,
+            "error": None,
+            "node_runs": [],
+        }
+    log_buffer.emit("INFO", "system", f"收到工作流任务：{wf['name']}", task_id)
+    threading.Thread(target=_run_workflow_async, args=(task_id, wf, req.inputs), daemon=True).start()
+    return {"task_id": task_id}
+
+
+@app.post("/api/workflows/import-dsl")
+def import_workflow_dsl(req: WorkflowDslRequest):
+    try:
+        graph, warnings = convert_dify_dsl(req.dsl)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    name = (req.name or "").strip() or "导入的 Dify 工作流"
+    wf = save_workflow(WorkflowRequest(name=name, desc="从 Dify DSL 导入", graph=graph))
+    log_buffer.emit("INFO", "system", f"Dify DSL 导入完成：{name}，警告 {len(warnings)} 条")
+    return {"workflow": wf, "warnings": warnings}
+
+
 @app.get("/api/status/{task_id}")
 def task_status(task_id: str):
     task = _tasks.get(task_id)
@@ -626,6 +1214,101 @@ def list_tasks(workspace_id: str | None = Query(None)):
     if workspace_id:
         tasks = [t for t in tasks if t.get("workspace_id") == workspace_id]
     return {"tasks": tasks[:50]}
+
+
+@app.post("/api/tasks/clear")
+def clear_tasks():
+    """清空当前会话的任务历史（内存中）。"""
+    with _tasks_lock:
+        _tasks.clear()
+    log_buffer.emit("INFO", "system", "已清空所有任务历史")
+    return {"ok": True}
+
+
+@app.get("/api/dashboard/stats")
+def dashboard_stats():
+    """企业级仪表盘：核心统计指标。"""
+    total = len(_tasks)
+    completed = sum(1 for t in _tasks.values() if t["status"] == "completed")
+    running = sum(1 for t in _tasks.values() if t["status"] in ("running", "queued"))
+    failed = sum(1 for t in _tasks.values() if t["status"] == "failed")
+    # 模拟节省工时：每个已完成任务按 0.5h 估算
+    saved_hours = completed * 0.5 + round(len(_tasks) * 0.1, 1)
+    return {
+        "agents": 2,  # 研究员 + 分析师双 Agent
+        "today_tasks": total,  # 会话周期内任务数
+        "success_rate": round((completed / max(total, 1)) * 100, 1),
+        "saved_hours": int(saved_hours),
+        "running": running,
+        "completed": completed,
+        "failed": failed,
+        "total": total,
+    }
+
+
+@app.get("/api/dashboard/agents")
+def dashboard_agents():
+    """热门智能体卡片列表。"""
+    return {
+        "agents": [
+            {"id": "cs", "name": "客服智能体", "icon": "🎧", "desc": "7×24h 客户咨询、投诉处理与工单生成", "color": "#3b82f6", "runs": 128},
+            {"id": "sales", "name": "销售助手", "icon": "💼", "desc": "商机挖掘、客户画像分析与跟进建议", "color": "#8b5cf6", "runs": 96},
+            {"id": "analyst", "name": "经营分析师", "icon": "📊", "desc": "经营数据解读、趋势预测与决策建议", "color": "#10b981", "runs": 84},
+            {"id": "doc", "name": "文档助手", "icon": "📄", "desc": "合同/报告/标书起草、审阅与知识提炼", "color": "#f59e0b", "runs": 72},
+            {"id": "flow", "name": "流程自动化", "icon": "⚙️", "desc": "跨系统流程编排、数据同步与审批自动化", "color": "#ef4444", "runs": 56},
+        ]
+    }
+
+
+@app.get("/api/dashboard/trend")
+def dashboard_trend():
+    """近 7 天任务趋势（mock，基于真实任务分布生成）。"""
+    from collections import Counter
+    from datetime import datetime, timedelta
+
+    today = datetime.now(timezone.utc).date()
+    counts = Counter()
+    for t in _tasks.values():
+        # task id 前 8 位是十六进制时间戳近似，fallback 到今天
+        try:
+            ts = int(t["id"][:8], 16)
+            d = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+        except Exception:
+            d = today
+        counts[d.isoformat()] += 1
+    labels = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+    data = [counts.get(d, 0) for d in labels]
+    # 若没有真实数据，补一点 mock 趋势让图表不空
+    if sum(data) == 0:
+        data = [12, 18, 15, 22, 28, 24, 32]
+    return {"labels": labels, "data": data}
+
+
+@app.get("/api/dashboard/activities")
+def dashboard_activities(limit: int = Query(10, ge=1, le=50)):
+    """最近动态流。"""
+    recent = sorted(_tasks.values(), key=lambda t: t["id"], reverse=True)[:limit]
+    items = []
+    for t in recent:
+        if t["status"] == "completed":
+            text = f"任务「{t['topic'][:30]}...」已完成"
+            tag = "完成"
+            color = "#10b981"
+        elif t["status"] == "failed":
+            text = f"任务「{t['topic'][:30]}...」执行失败"
+            tag = "失败"
+            color = "#ef4444"
+        else:
+            text = f"任务「{t['topic'][:30]}...」执行中"
+            tag = "运行"
+            color = "#3b82f6"
+        items.append({"id": t["id"], "text": text, "tag": tag, "color": color, "status": t["status"]})
+    if not items:
+        items = [
+            {"id": "1", "text": "企业级AI智能体平台已就绪", "tag": "系统", "color": "#3b82f6", "status": "ok"},
+            {"id": "2", "text": "可输入主题让研究员 + 分析师双 Agent 协作", "tag": "提示", "color": "#8b5cf6", "status": "ok"},
+        ]
+    return {"activities": items}
 
 
 @app.get("/api/logs")
