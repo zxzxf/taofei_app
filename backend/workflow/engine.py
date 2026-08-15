@@ -1,11 +1,14 @@
 """工作流图引擎：DAG 解析、拓扑调度、条件分支裁剪、节点事件记录。
 
 借鉴 Dify workflow 引擎架构（graph + variable pool + node executors + 事件流），
-针对本平台自研实现：无 Flask/Celery/Redis 依赖，单线程逐节点调度。
+针对本平台自研实现：无 Flask/Celery/Redis 依赖。
+同一批次就绪的节点用线程池并行执行（max_workers 可配）。
 """
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from .nodes import get_executor
@@ -26,6 +29,7 @@ class WorkflowEngine:
         python_bin: str | None = None,
         progress: Callable[[dict], None] | None = None,
         extra_ctx: dict | None = None,
+        max_workers: int = 4,
     ) -> None:
         self.nodes: dict[str, dict] = {}
         for n in graph.get("nodes", []):
@@ -39,6 +43,8 @@ class WorkflowEngine:
         self.node_runs: list[dict] = []
         self._progress = progress           # 节点开始/结束时回调（用于实时进度）
         self._selection: dict[str, str] = {}  # ifelse 节点 id -> 选中分支 "true"/"false"
+        self._lock = threading.RLock()      # 并行执行时保护共享状态
+        self.max_workers = max(1, int(max_workers))
 
     # ---------- 内部 ----------
     def _node_log(self, level: str, message: str) -> None:
@@ -86,8 +92,10 @@ class WorkflowEngine:
             ready = [n for nid, n in self.nodes.items() if nid not in self._executed and _ready(nid)]
             if not ready:
                 break
-            for node in ready:
-                self._execute_node(node, pool)
+            if len(ready) == 1:
+                self._execute_node(ready[0], pool)
+            else:
+                self._run_batch(ready, pool)
 
         executed_ids = set(self._executed)
         skipped = [
@@ -110,6 +118,26 @@ class WorkflowEngine:
         self.log("INFO", f"工作流结束，输出字段：{list(outputs.keys())}")
         return {"outputs": outputs, "node_runs": self.node_runs, "skipped": skipped}
 
+    # ---------- 并行批次 ----------
+    def _run_batch(self, nodes: list[dict], pool: VariablePool) -> None:
+        """同批次就绪节点并行执行：全部提交、等全部结束，再统一检查失败。
+
+        失败语义：批次内任一节点失败，等其余节点跑完（避免半途丢失进度记录），
+        然后抛出第一个错误终止工作流。
+        """
+        titles = "、".join(_title(n) for n in nodes)
+        self.log("INFO", f"∥ 并行执行 {len(nodes)} 个节点：{titles}")
+        workers = min(self.max_workers, len(nodes))
+        errors: list[BaseException] = []
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="wf-node") as ex:
+            futures = [ex.submit(self._execute_node, n, pool) for n in nodes]
+            for fut in futures:
+                exc = fut.exception()
+                if exc is not None:
+                    errors.append(exc)
+        if errors:
+            raise errors[0]
+
     # ---------- 单节点 ----------
     def _execute_node(self, node: dict, pool: VariablePool) -> None:
         node_id = str(node.get("id"))
@@ -124,20 +152,23 @@ class WorkflowEngine:
             executor = get_executor(node_type)
             assert executor is not None
             outs = executor(node, pool, self.ctx)
-            pool.set(node_id, outs)
-            record.update(status="succeeded", outputs=_clip(outs), elapsed_ms=int((time.time() - started) * 1000))
-            self._executed.add(node_id)
-            if node_type in ("ifelse", "if-else"):
-                self._selection[node_id] = str((outs or {}).get("result", "false"))
+            with self._lock:
+                pool.set(node_id, outs)
+                record.update(status="succeeded", outputs=_clip(outs), elapsed_ms=int((time.time() - started) * 1000))
+                self._executed.add(node_id)
+                if node_type in ("ifelse", "if-else"):
+                    self._selection[node_id] = str((outs or {}).get("result", "false"))
             self.log("INFO", f"✔ 节点完成 [{title}]，耗时 {record['elapsed_ms']}ms")
         except Exception as exc:  # noqa: BLE001
             record.update(status="failed", elapsed_ms=int((time.time() - started) * 1000), error=str(exc))
-            self.node_runs.append(record)
+            with self._lock:
+                self.node_runs.append(record)
             if self._progress:
                 self._progress(dict(record))
             self.log("ERROR", f"✘ 节点失败 [{title}]：{exc}")
             raise WorkflowError(f"节点「{title}」执行失败：{exc}") from exc
-        self.node_runs.append(record)
+        with self._lock:
+            self.node_runs.append(record)
         if self._progress:
             self._progress(dict(record))
 

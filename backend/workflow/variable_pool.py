@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any
 
 _REF_RE = re.compile(r"\{\{#\s*([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\s*#\}\}")
@@ -16,14 +17,16 @@ _REF_RE = re.compile(r"\{\{#\s*([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\s*#\}\}")
 class VariablePool:
     def __init__(self, inputs: dict[str, Any] | None = None) -> None:
         self._store: dict[str, dict[str, Any]] = {"sys": dict(inputs or {})}
+        self._lock = threading.Lock()  # 并行节点同时写各自输出时保护
 
     # ---------- 读写 ----------
     def set(self, node_id: str, outputs: dict[str, Any]) -> None:
-        if node_id == "sys":
-            self._store["sys"].update(outputs)
-            return
-        cur = self._store.setdefault(node_id, {})
-        cur.update(outputs)
+        with self._lock:
+            if node_id == "sys":
+                self._store["sys"].update(outputs)
+                return
+            cur = self._store.setdefault(node_id, {})
+            cur.update(outputs)
 
     def get(self, path: str, default: Any = None) -> Any:
         parts = path.split(".")
