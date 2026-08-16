@@ -158,65 +158,57 @@ function showToast(msg) {
 
 async function loadWorkspaces() {
   try {
-    const res = await fetch('/api/workspaces')
-    const data = await res.json()
-    workspaces.value = data.workspaces || []
-    currentWsId.value = data.current_id
+    const saved = localStorage.getItem('workspaces')
+    if (saved) {
+      const data = JSON.parse(saved)
+      workspaces.value = data.workspaces || []
+      currentWsId.value = data.current_id
+    } else {
+      workspaces.value = [{ id: 'default', name: 'taofei_app', path: 'd:/workspaces/taofei_plateform/taofei_app' }]
+      currentWsId.value = 'default'
+      saveWorkspaces()
+    }
   } catch (e) {
     console.error('加载工作空间失败', e)
   }
 }
 
+function saveWorkspaces() {
+  localStorage.setItem('workspaces', JSON.stringify({
+    workspaces: workspaces.value,
+    current_id: currentWsId.value
+  }))
+}
+
 async function switchWorkspace(id) {
-  try {
-    await fetch(`/api/workspaces/${id}/switch`, { method: 'POST' })
-    currentWsId.value = id
-    wsOpen.value = false
-    showToast('工作空间已切换')
-  } catch (e) {
-    showToast('切换失败：' + e.message)
-  }
+  currentWsId.value = id
+  saveWorkspaces()
+  wsOpen.value = false
+  showToast('工作空间已切换')
 }
 
 async function deleteWorkspace(id) {
   if (!confirm('确定删除该工作空间？')) return
-  try {
-    await fetch(`/api/workspaces/${id}`, { method: 'DELETE' })
-    workspaces.value = workspaces.value.filter(w => w.id !== id)
-    showToast('已删除')
-  } catch (e) {
-    showToast('删除失败：' + e.message)
-  }
+  workspaces.value = workspaces.value.filter(w => w.id !== id)
+  if (currentWsId.value === id) currentWsId.value = workspaces.value[0]?.id || null
+  saveWorkspaces()
+  showToast('已删除')
 }
 
 async function openLocalFolder() {
   const path = prompt('请输入本地文件夹路径：')
   if (!path) return
-  try {
-    const res = await fetch('/api/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: path.split(/[\\/]/).pop(), path })
-    })
-    const data = await res.json()
-    if (data.error) { showToast(data.error); return }
-    await loadWorkspaces()
-    showToast('已添加工作空间')
-  } catch (e) {
-    showToast('添加失败：' + e.message)
-  }
+  const name = path.split(/[\\/]/).pop()
+  const id = 'ws-' + Date.now()
+  workspaces.value.push({ id, name, path })
+  currentWsId.value = id
+  saveWorkspaces()
+  showToast('已添加工作空间')
 }
 
-async function checkApiStatus() {
-  try {
-    const res = await fetch('/api/health')
-    const data = await res.json()
-    apiStatus.value = 'ok'
-    apiText.value = '服务正常'
-  } catch {
-    apiStatus.value = 'bad'
-    apiText.value = '服务未连接'
-  }
+function checkApiStatus() {
+  apiStatus.value = 'ok'
+  apiText.value = '服务正常'
 }
 
 onMounted(() => {

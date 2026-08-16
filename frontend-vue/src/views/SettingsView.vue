@@ -153,11 +153,7 @@ function applyBodyClass() {
 
 async function saveModel() {
   try {
-    await fetch('/api/model_config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config.value)
-    })
+    localStorage.setItem('model_config', JSON.stringify(config.value))
     alert('模型配置已保存')
   } catch (e) {
     alert('保存失败：' + e.message)
@@ -182,6 +178,8 @@ function clearTask() {
 onMounted(() => {
   const savedTheme = localStorage.getItem('theme')
   if (savedTheme === 'light') themeMode.value = 'light'
+  const savedConfig = localStorage.getItem('model_config')
+  if (savedConfig) config.value = JSON.parse(savedConfig)
   applyBodyClass()
 })
 </script>
