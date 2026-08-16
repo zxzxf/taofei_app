@@ -406,6 +406,7 @@
 
   /* ===== 对话中心 ===== */
   .chat-view { display: flex; gap: 18px; height: calc(100vh - 120px); min-height: 520px; }
+  .chat-view { display: flex; gap: 16px; height: calc(100vh - 140px); min-height: 520px; }
   .chat-sessions {
     width: 260px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
@@ -446,6 +447,19 @@
     flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     display: flex; flex-direction: column; overflow: hidden;
   }
+  .chat-files-panel {
+    width: 320px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+  }
+  .chat-files-head { padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; justify-content: space-between; }
+  .chat-files-path { font-size: 11px; color: var(--text-muted); font-weight: 400; margin-top: 2px; word-break: break-all; }
+  .chat-files-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+  .chat-files-item { display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: background .1s; }
+  .chat-files-item:hover { background: rgba(59, 130, 246, 0.08); }
+  .chat-files-icon { font-size: 14px; width: 18px; text-align: center; flex-shrink: 0; }
+  .chat-files-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-files-size { width: 52px; text-align: right; color: var(--text-muted); flex-shrink: 0; }
+  .chat-files-empty { padding: 30px 14px; text-align: center; color: var(--text-muted); font-size: 12px; }
   .chat-area-head { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
   .chat-area-title { font-size: 14px; font-weight: 700; }
   .chat-messages { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
@@ -1078,6 +1092,15 @@
           <div class="chat-input-area">
             <textarea id="chatInput" rows="1" placeholder="输入问题，例如：帮我生成一份行业调研报告…（已启用的技能可用 @技能名 调用）" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea>
             <button class="chat-send" id="chatSend" onclick="sendChat()">➤</button>
+          </div>
+        </div>
+        <div class="chat-files-panel" id="chatFilesPanel">
+          <div class="chat-files-head">
+            <span>📁 工作空间文件</span>
+          </div>
+          <div class="chat-files-path" id="chatFilesPath">未选择工作空间</div>
+          <div class="chat-files-list" id="chatFilesList">
+            <div class="chat-files-empty">选择工作空间后将在此显示目录与文件</div>
           </div>
         </div>
       </div>
@@ -1997,6 +2020,7 @@ async function loadWorkspaces() {
     currentWorkspace = (workspacesData.workspaces || []).find(w => w.id === workspacesData.current_id) || null;
     renderWorkspaceSection();
     renderWorkspaceDropdownList();
+    renderChatFilesPanel();
   } catch (e) { /* ignore */ }
 }
 
@@ -2010,6 +2034,7 @@ function renderWorkspaceSection() {
     nameEl.textContent = '选择工作空间';
     pathEl.textContent = '点击选择或创建';
   }
+  renderChatFilesPanel();
 }
 
 function toggleWorkspaceDropdown(force) {
@@ -2128,7 +2153,7 @@ async function addWorkspace() {
     const data = await res.json();
     if (data.error) { toast('❌ ' + data.error); return; }
     workspacesData = { current_id: data.current_id, workspaces: [...workspacesData.workspaces, data.workspace] };
-    currentWorkspace = data.workspace; hideWorkspaceAddForm(); renderWorkspaceSection(); renderWorkspaceDropdownList(); toggleWorkspaceDropdown(false);
+    currentWorkspace = data.workspace; hideWorkspaceAddForm(); renderWorkspaceSection(); renderWorkspaceDropdownList(); toggleWorkspaceDropdown(false); renderChatFilesPanel();
     toast('✅ 工作空间已添加并切换');
   } catch (e) { toast('❌ 添加失败：' + e.message); }
 }
@@ -2139,7 +2164,7 @@ async function switchWorkspace(id) {
     const data = await res.json();
     if (data.error) { toast('❌ ' + data.error); return; }
     workspacesData.current_id = data.current_id; currentWorkspace = data.workspace;
-    renderWorkspaceSection(); renderWorkspaceDropdownList(); toggleWorkspaceDropdown(false);
+    renderWorkspaceSection(); renderWorkspaceDropdownList(); toggleWorkspaceDropdown(false); renderChatFilesPanel();
     toast('✅ 已切换到：' + data.workspace.name);
   } catch (e) { toast('❌ 切换失败：' + e.message); }
 }
@@ -2259,7 +2284,7 @@ function newChatSession() {
   const s = createSession('新对话');
   s.messages = [{ role: 'ai', text: '好的，我已开启新对话。请告诉我您的需求。', time: Date.now() }];
   chatSessions.unshift(s); currentChatId = s.id; saveChatSessions();
-  renderChatSessions(); renderCurrentChat();
+  renderChatSessions(); renderCurrentChat(); renderChatFilesPanel();
 }
 
 function switchChatSession(id) {
@@ -2384,7 +2409,73 @@ function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function sendChat() {
+async function renderChatFilesPanel() {
+  const panel = document.getElementById('chatFilesList');
+  const pathEl = document.getElementById('chatFilesPath');
+  const headEl = document.querySelector('#chatFilesPanel .chat-files-head span');
+  if (!panel) return;
+  if (!currentWorkspace) {
+    if (pathEl) pathEl.textContent = '未选择工作空间';
+    if (headEl) headEl.textContent = '📁 工作空间文件';
+    panel.innerHTML = '<div class="chat-files-empty">选择工作空间后将在此显示目录与文件</div>';
+    return;
+  }
+  if (pathEl) pathEl.textContent = currentWorkspace.path;
+  if (headEl) headEl.textContent = '📁 ' + currentWorkspace.name;
+  panel.innerHTML = '<div class="chat-files-empty">正在加载目录…</div>';
+  try {
+    const res = await fetch('/api/workspaces/' + currentWorkspace.id + '/files?max_depth=3');
+    const data = await res.json();
+    if (data.error) {
+      panel.innerHTML = '<div class="chat-files-empty">❌ ' + escapeHtml(data.error) + '</div>';
+      return;
+    }
+    const items = data.files || [];
+    if (!items.length) {
+      panel.innerHTML = '<div class="chat-files-empty">空目录</div>';
+      return;
+    }
+    // 目录在前，同名按字典序
+    items.sort((a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      return (a.rel || a.name).localeCompare(b.rel || b.name);
+    });
+    panel.innerHTML = items.map(item => {
+      const parts = (item.rel || item.name).split('/');
+      const depth = Math.max(0, parts.length - 1);
+      const name = parts[parts.length - 1];
+      const icon = item.is_dir ? '📁' : getFileIcon(name);
+      const size = item.is_dir ? '' : formatFileSize(item.size);
+      return `<div class="chat-files-item" style="padding-left:${14 + depth * 14}px" title="${escapeHtml(item.rel || item.name)}">
+        <span class="chat-files-icon">${icon}</span>
+        <span class="chat-files-name">${escapeHtml(name)}</span>
+        <span class="chat-files-size">${size}</span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    panel.innerHTML = '<div class="chat-files-empty">❌ 加载失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function getFileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  const map = {
+    py: '🐍', js: '📜', ts: '📘', html: '🌐', css: '🎨', json: '📋',
+    md: '📝', txt: '📄', yml: '⚙️', yaml: '⚙️', env: '🔐', bat: '⚡',
+    sh: '⚡', sql: '🗃️', log: '📃', xml: '📰', csv: '📊', png: '🖼️',
+    jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', svg: '🖼️', pdf: '📕', zip: '📦'
+  };
+  return map[ext] || '📄';
+}
+
+function formatFileSize(bytes) {
+  if (bytes === undefined || bytes === null) return '';
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if (!text || chatSending) return;
