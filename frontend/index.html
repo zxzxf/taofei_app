@@ -429,6 +429,12 @@
   .chat-session-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chat-session-files { font-size: 10px; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px; }
   .chat-session-files .folder { color: var(--primary); }
+  .chat-session-tree { margin-top: 6px; font-size: 11px; color: var(--text-secondary); max-height: 160px; overflow-y: auto; overflow-x: hidden; }
+  .chat-session-tree .tree-item { display: flex; align-items: center; gap: 4px; padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-session-tree .tree-icon { font-size: 11px; width: 16px; text-align: center; flex-shrink: 0; }
+  .chat-session-tree .tree-dir { color: #f59e0b; }
+  .chat-session-tree .tree-file { color: var(--text-muted); }
+  .chat-session-tree .tree-name { overflow: hidden; text-overflow: ellipsis; }
   .chat-session-delete {
     width: 26px; height: 26px; border-radius: 6px; border: none; background: transparent;
     color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -2314,16 +2320,48 @@ async function loadChatSessionFiles(s) {
       el.innerHTML = `<span title="${escapeHtml(data.error)}">⚠️ 目录读取失败</span>`;
       return;
     }
-    const files = (data.files || []).filter(f => !f.is_dir);
-    const dirs = (data.files || []).filter(f => f.is_dir);
-    const folderName = escapeHtml(s.workspaceName || '工作空间');
-    const fileNames = files.slice(0, 3).map(f => escapeHtml(f.name)).join('、');
-    const more = files.length > 3 ? ` 等 ${files.length} 个文件` : (files.length ? ` ${files.length} 个文件` : '');
-    const subInfo = dirs.length ? ` · ${dirs.length} 个子目录` : '';
-    el.innerHTML = `<span class="folder">📂 ${folderName}</span><span>${more}${subInfo}${fileNames ? ' · ' + fileNames : ''}</span>`;
+    el.innerHTML = buildSessionFileTree(data.files || []);
   } catch (e) {
     el.innerHTML = `<span title="${escapeHtml(e.message)}">⚠️ 加载失败</span>`;
   }
+}
+
+function buildSessionFileTree(items) {
+  if (!items.length) return '<span style="color:var(--text-muted)">空目录</span>';
+  // 按目录层级排序：目录在前，同名按字典序
+  items.sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    return (a.rel || a.name).localeCompare(b.rel || b.name);
+  });
+  const rootName = items[0] && items[0].rel ? (items[0].rel.split('/')[0] || '工作空间') : '工作空间';
+  const rootUl = [];
+  const childrenByParent = new Map();
+  items.forEach(item => {
+    const parts = (item.rel || item.name).split('/');
+    const parent = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+    if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+    childrenByParent.get(parent).push(item);
+  });
+  function renderNode(name, rel, depth, isDir) {
+    const icon = isDir ? '📁' : '📄';
+    const cls = isDir ? 'tree-dir' : 'tree-file';
+    const indent = depth * 12;
+    return `<div class="tree-item" style="padding-left:${indent}px"><span class="tree-icon ${cls}">${icon}</span><span class="tree-name">${escapeHtml(name)}</span></div>`;
+  }
+  function walk(parentRel, depth) {
+    const children = childrenByParent.get(parentRel) || [];
+    children.forEach(item => {
+      const parts = (item.rel || item.name).split('/');
+      const name = parts[parts.length - 1];
+      rootUl.push(renderNode(name, item.rel, depth, item.is_dir));
+      if (item.is_dir) walk(item.rel, depth + 1);
+    });
+  }
+  // 根节点作为第一层，根下直接子项作为第二层
+  const rootItem = items.find(i => (i.rel || i.name) === rootName);
+  rootUl.push(renderNode(rootName, rootName, 0, true));
+  walk(rootName, 1);
+  return `<div class="chat-session-tree">${rootUl.join('')}</div>`;
 }
 
 function renderCurrentChat() {
