@@ -53,7 +53,7 @@
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
     background: var(--bg);
     color: var(--text);
-    display: flex;
+    display: flex; flex-direction: column;
     overflow: hidden;
   }
   body:not(.light-theme) {
@@ -86,50 +86,50 @@
   }
   option { background: var(--panel); padding: 6px 8px; }
 
-  /* ===== 左侧导航 ===== */
+  /* ===== 顶部导航 ===== */
   .sidebar {
-    width: 230px;
+    width: 100%; height: auto;
     background: rgba(13, 19, 32, 0.96);
-    border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: row; align-items: center; flex-shrink: 0;
     backdrop-filter: blur(16px);
+    position: relative; z-index: 10;
   }
   .brand {
-    display: flex; align-items: center; gap: 12px; padding: 20px 18px;
-    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+    border-right: 1px solid var(--border); flex-shrink: 0;
   }
   .brand-logo {
-    width: 40px; height: 40px; border-radius: 12px;
+    width: 32px; height: 32px; border-radius: 8px;
     background: linear-gradient(135deg, #4f46e5, #3b82f6);
     color: #fff; display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 20px; box-shadow: 0 0 18px rgba(59, 130, 246, 0.45);
+    font-weight: 800; font-size: 16px; box-shadow: 0 0 14px rgba(59, 130, 246, 0.45);
   }
-  .brand-name { font-weight: 700; font-size: 17px; letter-spacing: .3px; }
-  .brand-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .brand-name { font-weight: 700; font-size: 14px; letter-spacing: .3px; }
+  .brand-sub { display: none; }
 
-  .nav-section { padding: 14px 12px; flex: 1; overflow-y: auto; }
-  .nav-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .6px; margin: 14px 10px 8px; }
+  .nav-section { display: flex; flex-direction: row; align-items: center; gap: 2px; padding: 0 8px; flex: 1; overflow-x: auto; overflow-y: hidden; }
+  .nav-label { display: none; }
   .nav-item {
-    display: flex; align-items: center; gap: 11px; padding: 11px 12px;
-    border-radius: var(--radius-sm); cursor: pointer; font-size: 13.5px; color: var(--text-secondary);
-    transition: all .15s; user-select: none; margin-bottom: 2px;
+    display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+    border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-secondary);
+    transition: all .15s; user-select: none; white-space: nowrap; flex-shrink: 0;
   }
   .nav-item:hover { background: rgba(59, 130, 246, 0.08); color: var(--text); }
   .nav-item.active {
-    background: linear-gradient(90deg, rgba(59, 130, 246, 0.2), rgba(59, 130, 246, 0.02));
+    background: rgba(59, 130, 246, 0.15);
     color: var(--primary); font-weight: 600;
-    box-shadow: inset 3px 0 0 var(--primary);
   }
-  .nav-item .icon { font-size: 16px; width: 20px; text-align: center; }
+  .nav-item .icon { font-size: 15px; width: 18px; text-align: center; }
   .nav-badge {
-    margin-left: auto; background: rgba(239, 68, 68, 0.15); color: var(--danger);
-    font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: 700;
+    background: rgba(239, 68, 68, 0.15); color: var(--danger);
+    font-size: 9px; padding: 1px 5px; border-radius: 10px; font-weight: 700;
   }
-  .nav-bottom { border-top: 1px solid var(--border); padding: 14px; }
-  .api-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: #475569; }
-  .dot.ok { background: var(--success); box-shadow: 0 0 8px var(--success); }
-  .dot.bad { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+  .nav-bottom { border: none; padding: 0 14px; flex-shrink: 0; }
+  .api-status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #475569; }
+  .dot.ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
+  .dot.bad { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
 
   /* ===== 主区域 ===== */
   .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -188,7 +188,7 @@
 
   /* ===== 工作台 ===== */
   .stats-grid {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px;
   }
   @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
   @media (max-width: 768px) { .stats-grid { grid-template-columns: 1fr; } }
@@ -215,6 +215,25 @@
   .dashboard-row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 18px; margin-bottom: 18px; }
   .dashboard-col { display: flex; flex-direction: column; gap: 18px; }
   @media (max-width: 1200px) { .dashboard-row { grid-template-columns: 1fr; } }
+
+  /* ===== 工作台左侧导航布局 ===== */
+  .dashboard-layout { display: flex; gap: 0; min-height: 500px; }
+  .dashboard-nav {
+    display: flex; flex-direction: column; gap: 4px; width: 180px; flex-shrink: 0;
+    padding: 14px 8px; border-right: 1px solid var(--border);
+  }
+  .dash-nav-item {
+    background: transparent; border: none; color: var(--text-secondary); padding: 10px 14px;
+    border-radius: 8px; font-size: 13.5px; cursor: pointer; transition: all .15s; text-align: left;
+    display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden;
+  }
+  .dash-nav-item > span:first-child { flex-shrink: 0; width: 18px; text-align: center; }
+  .dash-nav-item:hover { color: var(--text); background: rgba(255,255,255,.03); }
+  .dash-nav-item.active { background: rgba(59, 130, 246, 0.12); color: var(--primary); font-weight: 600; }
+  body.light-theme .dash-nav-item:hover { background: rgba(0, 0, 0, 0.04); }
+  .dashboard-content { flex: 1; padding: 0 0 0 24px; overflow-y: auto; }
+  .dash-panel { display: none; }
+  .dash-panel.active { display: block; }
 
   .feature-bar { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
   .feature-pill {
@@ -375,6 +394,25 @@
   .weather-day .t { font-size: 12.5px; font-weight: 700; }
   .weather-day .t small { color: var(--text-muted); font-weight: 500; }
 
+  /* ===== 集成管理左侧导航布局 ===== */
+  .integration-layout { display: flex; gap: 0; min-height: 500px; }
+  .integration-nav {
+    display: flex; flex-direction: column; gap: 4px; width: 180px; flex-shrink: 0;
+    padding: 14px 8px; border-right: 1px solid var(--border);
+  }
+  .integration-nav-item {
+    background: transparent; border: none; color: var(--text-secondary); padding: 10px 14px;
+    border-radius: 8px; font-size: 13.5px; cursor: pointer; transition: all .15s; text-align: left;
+    display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden;
+  }
+  .integration-nav-item > span:first-child { flex-shrink: 0; width: 18px; text-align: center; }
+  .integration-nav-item:hover { color: var(--text); background: rgba(255,255,255,.03); }
+  .integration-nav-item.active { background: rgba(59, 130, 246, 0.12); color: var(--primary); font-weight: 600; }
+  body.light-theme .integration-nav-item:hover { background: rgba(0, 0, 0, 0.04); }
+  .integration-content { flex: 1; padding: 0 0 0 24px; overflow-y: auto; }
+  .integration-panel { display: none; }
+  .integration-panel.active { display: block; }
+
   /* ===== 技能管理 ===== */
   .skill-row {
     display: flex; align-items: center; gap: 14px; padding: 13px 14px;
@@ -521,14 +559,20 @@
   .md blockquote { border-left: 3px solid var(--success); background: rgba(16, 185, 129, 0.06); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--text-secondary); }
 
   /* ===== 系统设置 ===== */
+  .settings-layout { display: flex; gap: 0; height: 100%; min-height: 400px; }
   .settings-tabs {
-    display: flex; gap: 8px; margin-bottom: 18px; border-bottom: 1px solid var(--border); padding-bottom: 10px;
+    display: flex; flex-direction: column; gap: 4px; width: 180px; flex-shrink: 0;
+    padding: 14px 8px; border-right: 1px solid var(--border);
   }
   .settings-tab {
-    background: transparent; border: none; color: var(--text-secondary); padding: 8px 16px; border-radius: 8px; font-size: 13.5px; cursor: pointer; transition: all .15s;
+    background: transparent; border: none; color: var(--text-secondary); padding: 10px 14px;
+    border-radius: 8px; font-size: 13.5px; cursor: pointer; transition: all .15s; text-align: left;
+    display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden;
   }
+  .settings-tab > span:first-child { flex-shrink: 0; width: 18px; text-align: center; }
   .settings-tab:hover { color: var(--text); background: rgba(255,255,255,.03); }
   .settings-tab.active { background: rgba(59, 130, 246, 0.12); color: var(--primary); font-weight: 600; }
+  .settings-content { flex: 1; padding: 18px 0 0 24px; overflow-y: auto; }
   .settings-panel { display: none; }
   .settings-panel.active { display: block; }
   .settings-form { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; max-width: 720px; }
@@ -568,7 +612,7 @@
   body.light-theme .sidebar { background: rgba(255, 255, 255, 0.96); }
   body.light-theme .nav-item:hover { background: rgba(59, 130, 246, 0.06); color: var(--text); }
   body.light-theme .nav-item.active {
-    background: linear-gradient(90deg, rgba(59, 130, 246, 0.12), rgba(59, 130, 246, 0.02));
+    background: rgba(59, 130, 246, 0.12);
   }
   body.light-theme .settings-tab:hover { background: rgba(0, 0, 0, 0.04); }
   body.light-theme .md blockquote { background: rgba(16, 185, 129, 0.08); }
@@ -604,10 +648,10 @@
   body.compact .dashboard-row { gap: 12px; }
 
   /* ===== 工作空间选择器 ===== */
-  .workspace-section { padding: 12px 14px; border-bottom: 1px solid var(--border); position: relative; }
+  .workspace-section { padding: 6px 10px; border: none; border-right: 1px solid var(--border); position: relative; flex-shrink: 0; }
   .workspace-selector {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px;
     background: var(--panel-2); cursor: pointer; transition: all .12s;
   }
   .workspace-selector:hover { border-color: var(--primary); background: rgba(59, 130, 246, 0.08); }
@@ -621,7 +665,7 @@
   .workspace-arrow { font-size: 11px; color: var(--text-muted); transition: transform .15s; margin-left: 6px; }
   .workspace-selector.open .workspace-arrow { transform: rotate(180deg); }
   .workspace-dropdown {
-    position: absolute; top: calc(100% - 4px); left: 14px; right: 14px;
+    position: absolute; top: calc(100% + 2px); left: 10px; right: 10px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
     box-shadow: var(--shadow); z-index: 100; display: flex; flex-direction: column; overflow: hidden;
     opacity: 0; transform: translateY(-6px); pointer-events: none; transition: all .15s;
@@ -630,8 +674,15 @@
   .ws-search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
   .ws-search input { flex: 1; border: none; outline: none; font-size: 13px; font-family: inherit; background: transparent; color: var(--text); }
   .ws-search input::placeholder { color: var(--text-muted); }
-  .ws-dropdown-list { max-height: 220px; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
-  .ws-dropdown-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+  .ws-dropdown-list { max-height: 280px; overflow-y: auto; padding: 6px; }
+  .ws-tree-node { user-select: none; }
+  .ws-tree-folder { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ws-tree-folder:hover { background: rgba(59, 130, 246, 0.06); }
+  .ws-tree-arrow { font-size: 10px; width: 12px; text-align: center; transition: transform .15s; flex-shrink: 0; }
+  .ws-tree-arrow.open { transform: rotate(90deg); }
+  .ws-tree-children { display: none; margin-left: 16px; }
+  .ws-tree-children.open { display: block; }
+  .ws-dropdown-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
   .ws-dropdown-item:hover { background: rgba(59, 130, 246, 0.08); }
   .ws-dropdown-item.selected { background: rgba(59, 130, 246, 0.12); }
   .ws-item-info { flex: 1; min-width: 0; }
@@ -753,6 +804,25 @@
   }
   .task-tab:hover { color: var(--text); border-color: var(--border-strong); }
   .task-tab.active { background: rgba(59,130,246,.14); color: var(--primary); border-color: rgba(59,130,246,.4); }
+
+  /* ===== 任务编排左侧导航布局 ===== */
+  .task-layout { display: flex; gap: 0; min-height: 500px; }
+  .task-nav {
+    display: flex; flex-direction: column; gap: 4px; width: 180px; flex-shrink: 0;
+    padding: 14px 8px; border-right: 1px solid var(--border);
+  }
+  .task-nav-item {
+    background: transparent; border: none; color: var(--text-secondary); padding: 10px 14px;
+    border-radius: 8px; font-size: 13.5px; cursor: pointer; transition: all .15s; text-align: left;
+    display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden;
+  }
+  .task-nav-item > span:first-child { flex-shrink: 0; width: 18px; text-align: center; }
+  .task-nav-item:hover { color: var(--text); background: rgba(255,255,255,.03); }
+  .task-nav-item.active { background: rgba(59, 130, 246, 0.12); color: var(--primary); font-weight: 600; }
+  body.light-theme .task-nav-item:hover { background: rgba(0, 0, 0, 0.04); }
+  .task-content { flex: 1; padding: 0 0 0 24px; overflow-y: auto; }
+  .task-panel { display: none; }
+  .task-panel.active { display: block; }
   .flow-wrap { display: flex; gap: 14px; align-items: stretch; height: calc(100vh - 260px); min-height: 420px; }
   .flow-palette { width: 148px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
   .flow-palette-title { font-size: 12px; color: var(--text-muted); font-weight: 600; padding: 4px 2px; }
@@ -931,10 +1001,20 @@
 
     <!-- 工作台 -->
     <div id="view-dashboard" class="view active">
-      <div class="stats-grid" id="statsGrid"></div>
-
-      <div class="dashboard-row">
-        <div class="dashboard-col">
+     <div class="dashboard-layout">
+      <div class="dashboard-nav">
+        <button class="dash-nav-item active" data-section="overview" onclick="switchDashboardSection('overview')"><span>📊</span> 数据概览</button>
+        <button class="dash-nav-item" data-section="orchestration" onclick="switchDashboardSection('orchestration')"><span>🔄</span> 智能体编排</button>
+        <button class="dash-nav-item" data-section="trend" onclick="switchDashboardSection('trend')"><span>📈</span> 任务趋势</button>
+        <button class="dash-nav-item" data-section="agents" onclick="switchDashboardSection('agents')"><span>🔥</span> 热门智能体</button>
+        <button class="dash-nav-item" data-section="activity" onclick="switchDashboardSection('activity')"><span>🔔</span> 最近动态</button>
+        <button class="dash-nav-item" data-section="quickstart" onclick="switchDashboardSection('quickstart')"><span>🚀</span> 快速开始</button>
+      </div>
+      <div class="dashboard-content">
+        <div id="dash-overview" class="dash-panel active">
+          <div class="stats-grid" id="statsGrid"></div>
+        </div>
+        <div id="dash-orchestration" class="dash-panel">
           <div class="glass-card">
             <div class="card-head">
               <div class="card-title">🔄 智能体编排</div>
@@ -954,6 +1034,8 @@
               <div class="flow-node primary"><div class="node-title">输出结果</div><div class="node-desc">结构化交付</div></div>
             </div>
           </div>
+        </div>
+        <div id="dash-trend" class="dash-panel">
           <div class="glass-card">
             <div class="card-head">
               <div class="card-title">📈 任务执行趋势</div>
@@ -962,7 +1044,7 @@
             <div class="chart-wrap" style="height:220px;"><canvas id="trendChart"></canvas></div>
           </div>
         </div>
-        <div class="dashboard-col">
+        <div id="dash-agents" class="dash-panel">
           <div class="glass-card">
             <div class="card-head">
               <div class="card-title">🔥 热门智能体</div>
@@ -970,10 +1052,14 @@
             </div>
             <div class="agent-grid" id="agentGrid"></div>
           </div>
+        </div>
+        <div id="dash-activity" class="dash-panel">
           <div class="glass-card">
             <div class="card-head"><div class="card-title">🔔 最近动态</div></div>
             <div class="activity-list" id="activityList"></div>
           </div>
+        </div>
+        <div id="dash-quickstart" class="dash-panel">
           <div class="glass-card">
             <div class="card-head"><div class="card-title">🚀 快速开始</div></div>
             <p style="color:var(--text-secondary);font-size:13px;line-height:1.7;margin-bottom:14px;">
@@ -983,77 +1069,83 @@
           </div>
         </div>
       </div>
+     </div>
     </div>
 
     <!-- 任务编排 -->
     <div id="view-task" class="view">
-      <div class="task-tabs">
-        <div class="task-tab active" id="taskTabBtnTpl" onclick="switchTaskTab('tpl')">🚀 模板任务</div>
-        <div class="task-tab" id="taskTabBtnFlow" onclick="switchTaskTab('flow')">🧩 可视化编排</div>
+     <div class="task-layout">
+      <div class="task-nav">
+        <button class="task-nav-item active" data-section="input" onclick="switchTaskSection('input')"><span>📝</span> 新建任务</button>
+        <button class="task-nav-item" data-section="result" onclick="switchTaskSection('result')"><span>📄</span> 运行结果</button>
+        <button class="task-nav-item" data-section="flow" onclick="switchTaskSection('flow')"><span>🧩</span> 可视化编排</button>
       </div>
-
-      <div id="taskPaneTpl">
-      <div class="hero-input">
-        <h1>今天想让 AI 帮你做什么？</h1>
-        <p>输入一个主题，研究员 Agent 负责调研，分析师 Agent 负责成稿</p>
-        <div class="input-box">
-          <input id="topicInput" type="text" placeholder="例如：网络安全态势感知技术，或 AI 智能体框架…" autocomplete="off">
-          <button class="btn-run" id="runBtn">▶ 开始运行</button>
-        </div>
-      </div>
-      <div class="card-title" style="margin-bottom:12px;">📌 推荐模板</div>
-      <div class="template-grid" id="templateGrid"></div>
-      <div class="status-bar hidden" id="statusBar">
-        <div class="spinner"></div>
-        <span id="statusText">任务执行中…</span>
-      </div>
-      <div class="error-box hidden" id="errorBox"></div>
-      <div class="result-wrap">
-        <div class="result-card hidden" id="resultCard">
-          <div class="result-head">
-            <span style="font-weight:700;font-size:15px;">📄 生成报告</span>
-            <button class="btn-copy" id="copyBtn">复制全文</button>
+      <div class="task-content">
+        <div id="taskPanel-input" class="task-panel active">
+          <div class="hero-input">
+            <h1>今天想让 AI 帮你做什么？</h1>
+            <p>输入一个主题，研究员 Agent 负责调研，分析师 Agent 负责成稿</p>
+            <div class="input-box">
+              <input id="topicInput" type="text" placeholder="例如：网络安全态势感知技术，或 AI 智能体框架…" autocomplete="off">
+              <button class="btn-run" id="runBtn">▶ 开始运行</button>
+            </div>
           </div>
-          <div class="md" id="resultMd"></div>
+          <div class="card-title" style="margin-bottom:12px;">📌 推荐模板</div>
+          <div class="template-grid" id="templateGrid"></div>
         </div>
-      </div>
-      </div>
-
-      <div id="taskPaneFlow" class="hidden">
-        <div class="flow-toolbar">
-          <select id="flowSelect" onchange="onFlowSelectChange()" style="min-width:180px"></select>
-          <input type="text" id="flowName" placeholder="工作流名称" style="min-width:160px">
-          <button class="btn-mini" onclick="newFlow()">＋ 新建</button>
-          <button class="btn-mini" onclick="saveFlow()">💾 保存</button>
-          <button class="btn-mini run" onclick="runFlow()">▶ 运行</button>
-          <button class="btn-mini" onclick="document.getElementById('dslFileInput').click()">⬇ 导入 Dify DSL</button>
-          <button class="btn-mini" onclick="deleteFlow()">🗑 删除</button>
-          <button class="btn-mini" onclick="fitFlowView()" title="缩放画布以显示全部节点">🔍 适应画布</button>
-          <input type="file" id="dslFileInput" accept=".yml,.yaml" class="hidden" onchange="importDslFile(event)">
-          <span style="font-size:12px;color:var(--text-muted);margin-left:auto">拖拽连线；条件分支节点的连线可选「是/否」分支</span>
-        </div>
-        <div class="flow-wrap">
-          <div class="flow-palette" id="flowPalette">
-            <div class="flow-palette-title">节点类型</div>
+        <div id="taskPanel-result" class="task-panel">
+          <div class="status-bar hidden" id="statusBar">
+            <div class="spinner"></div>
+            <span id="statusText">任务执行中…</span>
           </div>
-          <div class="flow-canvas-box"><div id="flowCanvas"></div></div>
-          <div class="flow-config glass-card" id="flowConfig" style="padding:16px">
-            <div style="font-size:13px;color:var(--text-muted)">点击节点或连线进行配置</div>
+          <div class="error-box hidden" id="errorBox"></div>
+          <div class="result-wrap">
+            <div class="result-card hidden" id="resultCard">
+              <div class="result-head">
+                <span style="font-weight:700;font-size:15px;">📄 生成报告</span>
+                <button class="btn-copy" id="copyBtn">复制全文</button>
+              </div>
+              <div class="md" id="resultMd"></div>
+            </div>
           </div>
         </div>
-        <div class="glass-card flow-run-panel" id="flowRunPanel" style="padding:16px">
-          <div class="card-head" style="margin-bottom:10px">
-            <div><div class="card-title">▶ 运行工作流</div>
-            <div class="card-sub" style="margin-top:4px">输入 query 后点击运行，节点执行过程实时展示</div></div>
+        <div id="taskPanel-flow" class="task-panel">
+          <div class="flow-toolbar">
+            <select id="flowSelect" onchange="onFlowSelectChange()" style="min-width:180px"></select>
+            <input type="text" id="flowName" placeholder="工作流名称" style="min-width:160px">
+            <button class="btn-mini" onclick="newFlow()">＋ 新建</button>
+            <button class="btn-mini" onclick="saveFlow()">💾 保存</button>
+            <button class="btn-mini run" onclick="runFlow()">▶ 运行</button>
+            <button class="btn-mini" onclick="document.getElementById('dslFileInput').click()">⬇ 导入 Dify DSL</button>
+            <button class="btn-mini" onclick="deleteFlow()">🗑 删除</button>
+            <button class="btn-mini" onclick="fitFlowView()" title="缩放画布以显示全部节点">🔍 适应画布</button>
+            <input type="file" id="dslFileInput" accept=".yml,.yaml" class="hidden" onchange="importDslFile(event)">
+            <span style="font-size:12px;color:var(--text-muted);margin-left:auto">拖拽连线；条件分支节点的连线可选「是/否」分支</span>
           </div>
-          <div style="display:flex;gap:10px;margin-bottom:12px">
-            <input type="text" id="flowRunQuery" placeholder="运行输入 query，例如：你好"
-              style="flex:1;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px">
-            <button class="btn-primary" onclick="runFlow()">▶ 运行</button>
+          <div class="flow-wrap">
+            <div class="flow-palette" id="flowPalette">
+              <div class="flow-palette-title">节点类型</div>
+            </div>
+            <div class="flow-canvas-box"><div id="flowCanvas"></div></div>
+            <div class="flow-config glass-card" id="flowConfig" style="padding:16px">
+              <div style="font-size:13px;color:var(--text-muted)">点击节点或连线进行配置</div>
+            </div>
           </div>
-          <div id="flowRunResult"></div>
+          <div class="glass-card flow-run-panel" id="flowRunPanel" style="padding:16px">
+            <div class="card-head" style="margin-bottom:10px">
+              <div><div class="card-title">▶ 运行工作流</div>
+              <div class="card-sub" style="margin-top:4px">输入 query 后点击运行，节点执行过程实时展示</div></div>
+            </div>
+            <div style="display:flex;gap:10px;margin-bottom:12px">
+              <input type="text" id="flowRunQuery" placeholder="运行输入 query，例如：你好"
+                style="flex:1;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px">
+              <button class="btn-primary" onclick="runFlow()">▶ 运行</button>
+            </div>
+            <div id="flowRunResult"></div>
+          </div>
         </div>
       </div>
+     </div>
     </div>
 
     <!-- 智能体中心 -->
@@ -1121,54 +1213,67 @@
 
     <!-- 集成管理 -->
     <div id="view-integration" class="view">
-      <div class="glass-card" style="margin-bottom:20px">
-        <div class="card-head" style="margin-bottom:6px">
-          <div>
-            <div class="card-title">🔌 集成管理</div>
-            <div class="card-sub" style="margin-top:4px">统一接入外部系统与 API，让智能体具备真实的数据获取与执行能力</div>
+     <div class="integration-layout">
+      <div class="integration-nav">
+        <button class="integration-nav-item active" data-section="weather" onclick="switchIntegrationSection('weather')"><span>🌤️</span> 天气查询</button>
+        <button class="integration-nav-item" data-section="skills" onclick="switchIntegrationSection('skills')"><span>🛠️</span> 技能管理</button>
+        <button class="integration-nav-item" data-section="list" onclick="switchIntegrationSection('list')"><span>🔌</span> 集成列表</button>
+      </div>
+      <div class="integration-content">
+        <div id="integrationPanel-weather" class="integration-panel active">
+          <div class="glass-card weather-panel">
+            <div class="card-head">
+              <div class="card-title">🌤️ 天气查询（Open-Meteo · 已接入）</div>
+              <div class="card-sub">免费 · 无需 API Key · 支持全球城市</div>
+            </div>
+            <div class="weather-query">
+              <input type="text" id="weatherCity" placeholder="输入城市名，如：北京、上海、深圳" onkeydown="if(event.key==='Enter')queryWeather()">
+              <button class="btn-primary" id="weatherBtn" onclick="queryWeather()">查询天气</button>
+            </div>
+            <div id="weatherResult"></div>
           </div>
         </div>
-      </div>
-
-      <div class="glass-card weather-panel">
-        <div class="card-head">
-          <div class="card-title">🌤️ 天气查询（Open-Meteo · 已接入）</div>
-          <div class="card-sub">免费 · 无需 API Key · 支持全球城市</div>
-        </div>
-        <div class="weather-query">
-          <input type="text" id="weatherCity" placeholder="输入城市名，如：北京、上海、深圳" onkeydown="if(event.key==='Enter')queryWeather()">
-          <button class="btn-primary" id="weatherBtn" onclick="queryWeather()">查询天气</button>
-        </div>
-        <div id="weatherResult"></div>
-      </div>
-
-      <div class="glass-card" style="margin-top:20px">
-        <div class="card-head">
-          <div>
-            <div class="card-title">🛠️ 技能管理</div>
-            <div class="card-sub" style="margin-top:4px">支持 HTTP API 技能与 Claude 官方技能（SKILL.md），对话中心可用「@技能名」调用</div>
-          </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn-ghost" onclick="openSkillImport()">⬇ 导入官方技能</button>
-            <button class="btn-primary" onclick="openSkillModal()">+ 新建技能</button>
+        <div id="integrationPanel-skills" class="integration-panel">
+          <div class="glass-card">
+            <div class="card-head">
+              <div>
+                <div class="card-title">🛠️ 技能管理</div>
+                <div class="card-sub" style="margin-top:4px">支持 HTTP API 技能与 Claude 官方技能（SKILL.md），对话中心可用「@技能名」调用</div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <button class="btn-ghost" onclick="openSkillImport()">⬇ 导入官方技能</button>
+                <button class="btn-primary" onclick="openSkillModal()">+ 新建技能</button>
+              </div>
+            </div>
+            <div id="skillList"></div>
           </div>
         </div>
-        <div id="skillList"></div>
+        <div id="integrationPanel-list" class="integration-panel">
+          <div class="glass-card" style="margin-bottom:20px">
+            <div class="card-head" style="margin-bottom:6px">
+              <div>
+                <div class="card-title">🔌 集成列表</div>
+                <div class="card-sub" style="margin-top:4px">统一接入外部系统与 API，让智能体具备真实的数据获取与执行能力</div>
+              </div>
+            </div>
+          </div>
+          <div class="integration-grid" id="integrationGrid"></div>
+        </div>
       </div>
-
-      <div class="integration-grid" id="integrationGrid"></div>
+     </div>
     </div>
 
     <!-- 系统设置 -->
     <div id="view-settings" class="view">
+     <div class="settings-layout">
       <div class="settings-tabs">
-        <button class="settings-tab active" data-tab="model" onclick="switchSettingsTab('model')">模型与 API</button>
-        <button class="settings-tab" data-tab="appearance" onclick="switchSettingsTab('appearance')">外观</button>
-        <button class="settings-tab" data-tab="notifications" onclick="switchSettingsTab('notifications')">通知</button>
-        <button class="settings-tab" data-tab="data" onclick="switchSettingsTab('data')">数据管理</button>
-        <button class="settings-tab" data-tab="about" onclick="switchSettingsTab('about')">关于</button>
+        <button class="settings-tab active" data-tab="model" onclick="switchSettingsTab('model')"><span>🔧</span> 模型与 API</button>
+        <button class="settings-tab" data-tab="appearance" onclick="switchSettingsTab('appearance')"><span>🎨</span> 外观</button>
+        <button class="settings-tab" data-tab="notifications" onclick="switchSettingsTab('notifications')"><span>🔔</span> 通知</button>
+        <button class="settings-tab" data-tab="data" onclick="switchSettingsTab('data')"><span>📦</span> 数据管理</button>
+        <button class="settings-tab" data-tab="about" onclick="switchSettingsTab('about')"><span>ℹ️</span> 关于</button>
       </div>
-
+      <div class="settings-content">
       <div id="settings-model" class="settings-panel active">
         <div class="settings-form">
           <div class="field">
@@ -1303,6 +1408,8 @@
           </p>
         </div>
       </div>
+      </div>
+     </div>
     </div>
 
   </div>
@@ -1510,11 +1617,11 @@ const PAGE_TITLES = {
 const PAGE_TAGS = {
   dashboard: ['易用性 · 零基础上手','高效性 · 自主拆解任务','安全性 · 私有化部署'],
   agents: ['预置 Agent','自定义编排','权限管理'],
-  task: ['研究员 Agent','分析师 Agent','结构化输出'],
+  task: ['新建任务','运行结果','可视化编排'],
   knowledge: ['文档上传','RAG 检索','企业知识库'],
   chat: ['多轮对话','任务触发','历史记录'],
   analysis: ['运行数据','成本分析','趋势洞察'],
-  integration: ['企业微信','钉钉','API 网关'],
+  integration: ['天气查询','技能管理','集成列表'],
   settings: ['模型配置','外观','数据管理'],
 };
 
@@ -1528,10 +1635,20 @@ function switchView(view) {
   if (el) el.classList.add('active');
   document.getElementById('pageTitle').textContent = PAGE_TITLES[view] || '';
   const tags = PAGE_TAGS[view] || [];
-  const tagTabMap = { '模型配置': 'model', '外观': 'appearance', '数据管理': 'data' };
+  const tagTabMap = {
+    '模型配置': { fn: 'switchSettingsTab', arg: 'model' },
+    '外观': { fn: 'switchSettingsTab', arg: 'appearance' },
+    '数据管理': { fn: 'switchSettingsTab', arg: 'data' },
+    '新建任务': { fn: 'switchTaskSection', arg: 'input' },
+    '运行结果': { fn: 'switchTaskSection', arg: 'result' },
+    '可视化编排': { fn: 'switchTaskSection', arg: 'flow' },
+    '天气查询': { fn: 'switchIntegrationSection', arg: 'weather' },
+    '技能管理': { fn: 'switchIntegrationSection', arg: 'skills' },
+    '集成列表': { fn: 'switchIntegrationSection', arg: 'list' },
+  };
   document.getElementById('headerTags').innerHTML = tags.map(t => {
-    const tab = tagTabMap[t];
-    const click = tab ? `onclick="switchSettingsTab('${tab}')" style="cursor:pointer"` : '';
+    const map = tagTabMap[t];
+    const click = map ? `onclick="${map.fn}('${map.arg}')" style="cursor:pointer"` : '';
     return `<span class="header-tag" ${click}>${t}</span>`;
   }).join('');
   if (view === 'dashboard') { loadStats(); drawTrendChart(); renderAgents(); renderActivities(); }
@@ -1781,6 +1898,13 @@ async function queryWeather() {
   }
 }
 
+function switchIntegrationSection(section) {
+  document.querySelectorAll('.integration-nav-item').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.integration-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.integration-nav-item[data-section="${section}"]`).classList.add('active');
+  document.getElementById('integrationPanel-' + section).classList.add('active');
+}
+
 async function loadIntegrations() {
   const grid = document.getElementById('integrationGrid');
   try {
@@ -1808,6 +1932,14 @@ async function loadIntegrations() {
 /* ============ 工作台 ============ */
 let trendData = [120, 180, 150, 220, 260, 310, 380];
 let trendLabels = null;   // 后端返回的真实日期标签，null 时回退周一~周日
+
+function switchDashboardSection(section) {
+  document.querySelectorAll('.dash-nav-item').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.dash-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.dash-nav-item[data-section="${section}"]`).classList.add('active');
+  document.getElementById('dash-' + section).classList.add('active');
+  if (section === 'trend') drawTrendChart();
+}
 
 async function loadStats() {
   let stats = [
@@ -2034,10 +2166,12 @@ function renderWorkspaceSection() {
   const pathEl = document.getElementById('workspacePath');
   if (currentWorkspace) {
     nameEl.textContent = currentWorkspace.name;
-    pathEl.textContent = currentWorkspace.path;
+    pathEl.textContent = '';
+    pathEl.style.display = 'none';
   } else {
     nameEl.textContent = '选择工作空间';
     pathEl.textContent = '点击选择或创建';
+    pathEl.style.display = '';
   }
   renderChatFilesPanel();
 }
@@ -2065,17 +2199,30 @@ function renderWorkspaceDropdownList() {
     list.innerHTML = term ? '<div class="ws-empty">没有匹配的工作空间</div>' : '<div class="ws-empty">暂无工作空间，点击下方「新建」或「打开本地文件夹」</div>';
     return;
   }
-  list.innerHTML = wsList.map(ws => {
+
+  let html = '';
+  wsList.forEach(ws => {
     const selected = ws.id === workspacesData.current_id ? 'selected' : '';
-    return `<div class="ws-dropdown-item ${selected}" data-id="${ws.id}">
-      <div class="workspace-icon">📁</div>
-      <div class="ws-item-info" onclick="switchWorkspace('${ws.id}')">
-        <div class="ws-item-name">${ws.name}</div>
-        <div class="ws-item-path">${ws.path}</div>
-      </div>
-      <div class="ws-item-actions"><button onclick="deleteWorkspace('${ws.id}', event)">删除</button></div>
-    </div>`;
-  }).join('');
+    const projectName = ws.name || ws.path.split(/[\\/]/).filter(Boolean).pop() || ws.path;
+    html += `<div class="ws-dropdown-item ${selected}" data-id="${ws.id}">`;
+    html += `<div class="workspace-icon">📁</div>`;
+    html += `<div class="ws-item-info" onclick="switchWorkspace('${ws.id}')">`;
+    html += `<div class="ws-item-name">${projectName}</div>`;
+    html += `</div>`;
+    html += `<div class="ws-item-actions"><button onclick="deleteWorkspace('${ws.id}', event)">删除</button></div>`;
+    html += `</div>`;
+  });
+
+  list.innerHTML = html;
+}
+
+function toggleWsTreeFolder(folderId, event) {
+  if (event) event.stopPropagation();
+  const el = document.getElementById(folderId);
+  const arrow = document.getElementById(folderId + '_arrow');
+  if (!el) return;
+  el.classList.toggle('open');
+  if (arrow) arrow.classList.toggle('open');
 }
 
 function showWorkspaceAddForm() {
@@ -2202,6 +2349,7 @@ async function startTask() {
   document.getElementById('resultCard').classList.add('hidden');
   document.getElementById('statusBar').classList.remove('hidden');
   document.getElementById('statusText').textContent = '任务已提交，等待执行…';
+  switchTaskSection('result');
   try {
     const payload = { topic, workspace_id: currentWorkspace ? currentWorkspace.id : '' };
     const res = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -2727,8 +2875,8 @@ function applyTheme() {
   if (sel) sel.value = theme;
   const btn = document.getElementById('themeToggleBtn');
   if (btn) btn.textContent = document.body.classList.contains('light-theme') ? '☀️' : '🌙';
-  const dash = document.getElementById('view-dashboard');
-  if (dash && dash.classList.contains('active')) drawTrendChart();
+  const trendPanel = document.getElementById('dash-trend');
+  if (trendPanel && trendPanel.classList.contains('active')) drawTrendChart();
   if (flowInited && lf) applyFlowTheme();
 }
 
@@ -2930,12 +3078,12 @@ const NODE_TYPES = {
   end:      { label: '结束', icon: '🏁', color: '#ef4444', defaults: { title: '结束', outputs: [{ name: 'answer', value: '{{#start_1.query#}}' }] } },
 };
 
-function switchTaskTab(tab) {
-  document.getElementById('taskTabBtnTpl').classList.toggle('active', tab === 'tpl');
-  document.getElementById('taskTabBtnFlow').classList.toggle('active', tab === 'flow');
-  document.getElementById('taskPaneTpl').classList.toggle('hidden', tab !== 'tpl');
-  document.getElementById('taskPaneFlow').classList.toggle('hidden', tab !== 'flow');
-  if (tab === 'flow') initFlowCanvas();
+function switchTaskSection(section) {
+  document.querySelectorAll('.task-nav-item').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.task-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.task-nav-item[data-section="${section}"]`).classList.add('active');
+  document.getElementById('taskPanel-' + section).classList.add('active');
+  if (section === 'flow') initFlowCanvas();
 }
 
 function initFlowCanvas() {
@@ -3507,8 +3655,8 @@ function markNodesRunState(runs, skippedIds) {
 loadStats(); drawTrendChart(); renderAgents(); renderActivities(); renderTemplates();
 
 window.addEventListener('resize', () => {
-  if (document.getElementById('view-dashboard').classList.contains('active')) drawTrendChart();
-  if (lf && document.getElementById('taskPaneFlow') && !document.getElementById('taskPaneFlow').classList.contains('hidden')) {
+  if (document.getElementById('dash-trend') && document.getElementById('dash-trend').classList.contains('active')) drawTrendChart();
+  if (lf && document.getElementById('taskPanel-flow') && document.getElementById('taskPanel-flow').classList.contains('active')) {
     try { lf.resize(); lf.fitView(); } catch (e) {}
   }
 });
