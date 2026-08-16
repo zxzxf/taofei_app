@@ -2320,20 +2320,19 @@ async function loadChatSessionFiles(s) {
       el.innerHTML = `<span title="${escapeHtml(data.error)}">⚠️ 目录读取失败</span>`;
       return;
     }
-    el.innerHTML = buildSessionFileTree(data.files || []);
+    el.innerHTML = buildSessionFileTree(data.files || [], s.workspaceName || '工作空间');
   } catch (e) {
     el.innerHTML = `<span title="${escapeHtml(e.message)}">⚠️ 加载失败</span>`;
   }
 }
 
-function buildSessionFileTree(items) {
-  if (!items.length) return '<span style="color:var(--text-muted)">空目录</span>';
+function buildSessionFileTree(items, rootName) {
+  if (!items.length) return `<div class="chat-session-tree"><div class="tree-item"><span class="tree-icon tree-dir">📁</span><span class="tree-name">${escapeHtml(rootName)}</span></div><div class="tree-item" style="padding-left:12px"><span class="tree-name" style="color:var(--text-muted)">（空目录）</span></div></div>`;
   // 按目录层级排序：目录在前，同名按字典序
   items.sort((a, b) => {
     if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
     return (a.rel || a.name).localeCompare(b.rel || b.name);
   });
-  const rootName = items[0] && items[0].rel ? (items[0].rel.split('/')[0] || '工作空间') : '工作空间';
   const rootUl = [];
   const childrenByParent = new Map();
   items.forEach(item => {
@@ -2357,10 +2356,9 @@ function buildSessionFileTree(items) {
       if (item.is_dir) walk(item.rel, depth + 1);
     });
   }
-  // 根节点作为第一层，根下直接子项作为第二层
-  const rootItem = items.find(i => (i.rel || i.name) === rootName);
-  rootUl.push(renderNode(rootName, rootName, 0, true));
-  walk(rootName, 1);
+  // 根节点显示工作空间名称，其子项从相对路径根开始
+  rootUl.push(renderNode(rootName, '', 0, true));
+  walk('', 1);
   return `<div class="chat-session-tree">${rootUl.join('')}</div>`;
 }
 
