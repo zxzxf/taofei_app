@@ -934,7 +934,11 @@
 
   <nav class="nav-section">
     <div class="nav-label">核心能力</div>
-    <div class="nav-item active" data-view="dashboard" onclick="switchView('dashboard')">
+    <div class="nav-item active" data-view="chat" onclick="switchView('chat')">
+      <span class="icon">💬</span> 对话中心
+      <span class="nav-badge">新</span>
+    </div>
+    <div class="nav-item" data-view="dashboard" onclick="switchView('dashboard')">
       <span class="icon">🏠</span> 工作台
     </div>
     <div class="nav-item" data-view="agents" onclick="switchView('agents')">
@@ -945,10 +949,6 @@
     </div>
     <div class="nav-item" data-view="knowledge" onclick="switchView('knowledge')">
       <span class="icon">📚</span> 知识库
-    </div>
-    <div class="nav-item" data-view="chat" onclick="switchView('chat')">
-      <span class="icon">💬</span> 对话中心
-      <span class="nav-badge">新</span>
     </div>
 
     <div class="nav-label">数据与运营</div>
@@ -977,11 +977,11 @@
 <main class="main">
   <div class="main-header">
     <div class="header-left">
-      <span class="page-title" id="pageTitle">智能体工作台</span>
+      <span class="page-title" id="pageTitle">对话中心</span>
       <div class="header-tags" id="headerTags">
-        <span class="header-tag">易用性 · 零基础上手</span>
-        <span class="header-tag">高效性 · 自主拆解任务</span>
-        <span class="header-tag">安全性 · 私有化部署</span>
+        <span class="header-tag">多轮对话</span>
+        <span class="header-tag">任务触发</span>
+        <span class="header-tag">历史记录</span>
       </div>
     </div>
     <div class="header-right">
@@ -1000,7 +1000,7 @@
   <div class="content">
 
     <!-- 工作台 -->
-    <div id="view-dashboard" class="view active">
+    <div id="view-dashboard" class="view">
      <div class="dashboard-layout">
       <div class="dashboard-nav">
         <button class="dash-nav-item active" data-section="overview" onclick="switchDashboardSection('overview')"><span>📊</span> 数据概览</button>
@@ -1167,7 +1167,7 @@
     </div>
 
     <!-- 对话中心 -->
-    <div id="view-chat" class="view">
+    <div id="view-chat" class="view active">
       <div class="chat-view">
         <div class="chat-sessions">
           <div class="chat-sessions-head">
@@ -1178,15 +1178,6 @@
             <input type="text" id="chatSearch" placeholder="搜索会话" oninput="renderChatSessions()">
           </div>
           <div class="chat-session-list" id="chatSessionList"></div>
-        </div>
-        <div class="chat-files-panel" id="chatFilesPanel">
-          <div class="chat-files-head">
-            <span>📁 工作空间文件</span>
-          </div>
-          <div class="chat-files-path" id="chatFilesPath">未选择工作空间</div>
-          <div class="chat-files-list" id="chatFilesList">
-            <div class="chat-files-empty">选择工作空间后将在此显示目录与文件</div>
-          </div>
         </div>
         <div class="chat-area" id="chatArea">
           <div class="chat-area-head">
@@ -3652,7 +3643,7 @@ function markNodesRunState(runs, skippedIds) {
   skippedIds.forEach(id => setNodeBadge(id, '∅'));
 }
 
-loadStats(); drawTrendChart(); renderAgents(); renderActivities(); renderTemplates();
+loadStats(); drawTrendChart(); renderAgents(); renderActivities(); renderTemplates(); renderChatSessions(); renderCurrentChat();
 
 window.addEventListener('resize', () => {
   if (document.getElementById('dash-trend') && document.getElementById('dash-trend').classList.contains('active')) drawTrendChart();
