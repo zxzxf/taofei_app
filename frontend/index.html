@@ -426,7 +426,9 @@
   .chat-session.active { background: rgba(59, 130, 246, 0.14); border-left: 3px solid var(--primary); }
   .chat-session-info { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .chat-session-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .chat-session-meta { font-size: 11px; color: var(--text-muted); }
+  .chat-session-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-session-files { font-size: 10px; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px; }
+  .chat-session-files .folder { color: var(--primary); }
   .chat-session-delete {
     width: 26px; height: 26px; border-radius: 6px; border: none; background: transparent;
     color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -2237,7 +2239,14 @@ function saveChatSessions() {
 }
 
 function createSession(title) {
-  return { id: 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), title, time: Date.now(), messages: [] };
+  return {
+    id: 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+    title,
+    time: Date.now(),
+    messages: [],
+    workspaceId: currentWorkspace ? currentWorkspace.id : null,
+    workspaceName: currentWorkspace ? currentWorkspace.name : ''
+  };
 }
 
 function newChatSession() {
@@ -2282,14 +2291,39 @@ function renderChatSessions() {
   const list = document.getElementById('chatSessionList');
   const filtered = chatSessions.filter(s => s.title.toLowerCase().includes(term));
   list.innerHTML = filtered.map(s => `
-    <div class="chat-session ${s.id === currentChatId ? 'active' : ''}" onclick="switchChatSession('${s.id}')">
+    <div class="chat-session ${s.id === currentChatId ? 'active' : ''}" onclick="switchChatSession('${s.id}')" data-sid="${s.id}">
       <div class="chat-session-info">
         <div class="chat-session-title">${escapeHtml(s.title)}</div>
         <div class="chat-session-meta">${new Date(s.time).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${s.messages.length} 条消息</div>
+        <div class="chat-session-files" id="chatFiles_${s.id}">${s.workspaceId ? '<span>📂 加载中…</span>' : ''}</div>
       </div>
       <button class="chat-session-delete" title="删除会话" onclick="deleteChatSession('${s.id}', event)">🗑</button>
     </div>
   `).join('');
+  // 异步加载每个会话的文件摘要
+  filtered.filter(s => s.workspaceId).forEach(s => loadChatSessionFiles(s));
+}
+
+async function loadChatSessionFiles(s) {
+  const el = document.getElementById('chatFiles_' + s.id);
+  if (!el) return;
+  try {
+    const res = await fetch('/api/workspaces/' + s.workspaceId + '/files?max_depth=2');
+    const data = await res.json();
+    if (data.error) {
+      el.innerHTML = `<span title="${escapeHtml(data.error)}">⚠️ 目录读取失败</span>`;
+      return;
+    }
+    const files = (data.files || []).filter(f => !f.is_dir);
+    const dirs = (data.files || []).filter(f => f.is_dir);
+    const folderName = escapeHtml(s.workspaceName || '工作空间');
+    const fileNames = files.slice(0, 3).map(f => escapeHtml(f.name)).join('、');
+    const more = files.length > 3 ? ` 等 ${files.length} 个文件` : (files.length ? ` ${files.length} 个文件` : '');
+    const subInfo = dirs.length ? ` · ${dirs.length} 个子目录` : '';
+    el.innerHTML = `<span class="folder">📂 ${folderName}</span><span>${more}${subInfo}${fileNames ? ' · ' + fileNames : ''}</span>`;
+  } catch (e) {
+    el.innerHTML = `<span title="${escapeHtml(e.message)}">⚠️ 加载失败</span>`;
+  }
 }
 
 function renderCurrentChat() {
@@ -2322,6 +2356,11 @@ async function sendChat() {
   if (!s) { s = createSession('新对话'); chatSessions.unshift(s); currentChatId = s.id; }
   s.messages.push({ role: 'user', text, time: Date.now() });
   if (s.title === '新对话') s.title = text.slice(0, 20);
+  // 绑定当前工作空间
+  if (currentWorkspace && !s.workspaceId) {
+    s.workspaceId = currentWorkspace.id;
+    s.workspaceName = currentWorkspace.name;
+  }
   s.time = Date.now(); saveChatSessions(); renderChatSessions(); renderCurrentChat();
   input.value = ''; input.style.height = '44px';
   chatSending = true; document.getElementById('chatSend').disabled = true;
