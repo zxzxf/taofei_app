@@ -2,7 +2,7 @@
   <div class="task-layout">
     <div class="task-nav">
       <button class="task-nav-item" :class="{ active: section === 'input' }" @click="section = 'input'"><span>📝</span> 新建任务</button>
-      <button class="task-nav-item" :class="{ active: section === 'tasklist' }" @click="switchToTaskList"><span>📋</span> 任务列表</button>
+      <button class="task-nav-item" :class="{ active: section === 'tasklist' }" @click="switchToTaskList"><span>📋</span> 任务编排管理</button>
       <button class="task-nav-item" :class="{ active: section === 'result' }" @click="section = 'result'"><span>📄</span> 运行结果</button>
       <button class="task-nav-item" :class="{ active: section === 'flow' }" @click="section = 'flow'"><span>🧩</span> 可视化编排</button>
     </div>
@@ -26,7 +26,7 @@
           </div>
         </div>
       </div>
-      <!-- 任务列表 -->
+      <!-- 任务编排管理 -->
       <div v-show="section === 'tasklist'" class="task-panel active">
         <div class="task-list-toolbar">
           <div class="task-search-box">

@@ -48,7 +48,13 @@ load_dotenv(EXE_DIR / ".env")  # 先读 exe 同目录 .env
 if not os.getenv("DEEPSEEK_API_KEY") and not PACKAGED:
     load_dotenv(BASE_DIR / ".env")  # 开发模式兜底再读项目根 .env
 
-from crewai import Agent, Crew, LLM, Process, Task  # noqa: E402
+try:
+    from crewai import Agent, Crew, Process, Task  # noqa: E402
+    from langchain_community.chat_models import ChatOpenAI  # noqa: E402
+    HAS_CREWAI = True
+except ImportError:
+    HAS_CREWAI = False
+    Agent = Crew = Process = Task = ChatOpenAI = None  # type: ignore
 
 app = FastAPI(title="CrewAI Workbench", version="1.2.0")
 
@@ -192,8 +198,10 @@ def _get_current_workspace() -> dict | None:
     return None
 
 
-def _build_llm() -> LLM:
+def _build_llm():
     """根据用户配置动态构建 LLM（兼容 provider/model 与裸 model 格式）。"""
+    if not HAS_CREWAI:
+        return None
     cfg = _load_model_config()
     model = cfg.get("model") or DEFAULT_MODEL_CONFIG["model"]
     api_key = cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "")
@@ -203,7 +211,7 @@ def _build_llm() -> LLM:
         kwargs["base_url"] = base_url
     if api_key:
         kwargs["api_key"] = api_key
-    return LLM(**kwargs)
+    return ChatOpenAI(**kwargs)
 
 # ---------------------------------------------------------------
 # 日志采集系统
@@ -448,7 +456,11 @@ def _read_workspace_context(workspace_path: str | None, max_chars: int = 30000) 
 
 def _build_crew(topic: str, workspace_path: str | None = None) -> Crew:
     """构建固定双 Agent 协作 Crew（研究员 + 分析师），LLM 由用户配置决定。"""
+    if not HAS_CREWAI:
+        raise RuntimeError("crewai 未正确安装，无法使用 CrewAI 功能")
     llm = _build_llm()
+    if llm is None:
+        raise RuntimeError("LLM 初始化失败，请检查模型配置")
     context = _read_workspace_context(workspace_path)
     researcher = Agent(
         role="资深研究员",
@@ -653,20 +665,25 @@ def chat(req: ChatRequest):
     """直接调用大模型接口，进行多轮对话；自动注入已启用的 Claude 技能。"""
     if not req.messages:
         return JSONResponse({"error": "消息不能为空"}, status_code=400)
+    if not HAS_CREWAI:
+        return JSONResponse({"error": "LLM 功能不可用：crewai/langchain 未安装"}, status_code=503)
     try:
         llm = _build_llm()
+        if llm is None:
+            return JSONResponse({"error": "LLM 初始化失败，请检查模型配置"}, status_code=500)
         # 构造适合 LLM.call 的消息列表
         messages = [{"role": m.role, "content": m.content} for m in req.messages]
         skill_prompt = _build_skill_system_prompt(messages)
         if skill_prompt:
             messages = [{"role": "system", "content": skill_prompt}] + messages
-        reply = llm.call(messages)
+        reply = llm.invoke(messages)
+        reply_text = reply.content if hasattr(reply, 'content') else str(reply)
         log_buffer.emit(
             "INFO", "system",
             f"对话中心调用 LLM：{len(messages)} 条消息"
-            f"{'（含 Claude 技能上下文）' if skill_prompt else ''} -> 回复 {len(str(reply))} 字符",
+            f"{'（含 Claude 技能上下文）' if skill_prompt else ''} -> 回复 {len(reply_text)} 字符",
         )
-        return {"reply": reply, "skills_injected": bool(skill_prompt)}
+        return {"reply": reply_text, "skills_injected": bool(skill_prompt)}
     except Exception as e:
         err_msg = str(e)
         log_buffer.emit("ERROR", "system", f"对话中心 LLM 调用失败：{err_msg}")
@@ -1032,8 +1049,8 @@ def import_claude_skills(req: ImportClaudeRequest):
 # ---------------------------------------------------------------
 WORKFLOWS_FILE = EXE_DIR / "workflows.json"
 
-from workflow import WorkflowEngine  # noqa: E402  自研工作流引擎包
-from workflow.dsl import convert_dify_dsl  # noqa: E402
+from wf_engine import WorkflowEngine  # noqa: E402  自研工作流引擎包
+from wf_engine.dsl import convert_dify_dsl  # noqa: E402
 
 
 def _load_workflows() -> list[dict]:
@@ -1126,10 +1143,16 @@ def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
             _tasks[task_id]["status"] = "running"
         log_buffer.emit("INFO", "system", f"工作流「{wf['name']}」开始执行", task_id)
 
+        if not HAS_CREWAI:
+            raise RuntimeError("LLM 功能不可用：crewai/langchain 未安装")
+
         llm = _build_llm()
+        if llm is None:
+            raise RuntimeError("LLM 初始化失败，请检查模型配置")
 
         def llm_call(messages: list[dict]) -> str:
-            return str(llm.call(messages))
+            result = llm.invoke(messages)
+            return result.content if hasattr(result, 'content') else str(result)
 
         def wlog(level: str, message: str) -> None:
             log_buffer.emit(level, "workflow", message, task_id)
@@ -1560,17 +1583,10 @@ def upload_workspace_files(req: WorkspaceUploadRequest):
 # ---------------------------------------------------------------
 FRONTEND_DIR = BASE_DIR / "frontend"
 
-
-@app.get("/")
-def index():
-    return FileResponse(FRONTEND_DIR / "index.html")
-
-
-if PACKAGED:
-    # 打包后静态文件嵌入在 _MEIPASS/frontend
-    app.mount("/static", StaticFiles(directory=BASE_DIR / "frontend"), name="static")
-else:
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+# Vue3 前端使用相对路径 (./assets/...)，将 frontend 目录挂载到根路径
+# 使用 HTML 模式：找不到文件时回退到 index.html（支持 Vue Router history 模式）
+# API 路由已在上方定义，会优先匹配
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 
 # ---------------------------------------------------------------
