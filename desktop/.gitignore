@@ -1,0 +1,4 @@
+node_modules/
+release/
+release_v*/
+release_old*/

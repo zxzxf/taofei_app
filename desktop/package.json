@@ -1,0 +1,63 @@
+{
+  "name": "taofei-desktop",
+  "version": "1.2.0",
+  "description": "淘飞AI · 企业级AI智能体平台",
+  "main": "main.js",
+  "author": "Taofei",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "scripts": {
+    "start": "node launcher.js",
+    "dev": "node launcher.js",
+    "dist": "electron-builder --win"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zxzxf/taofei_app.git"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.taofei.workbench",
+    "productName": "TaofeiAI",
+    "directories": {
+      "output": "release_v2",
+      "buildResources": "."
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/CrewAIWorkbench_v2/CrewAIWorkbench",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../.env",
+        "to": "backend/.env",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "TaofeiAI"
+    }
+  }
+}
