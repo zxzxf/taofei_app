@@ -61,6 +61,43 @@ set PYTHONPATH=%CD%\build\_noop_site
 
 > 打包排除项：`magic`（python-magic）、`lancedb`（向量记忆库）在 Windows 上导入即原生崩溃，且本应用不使用文件类型检测与记忆功能，已在 spec 中排除。
 
+## Electron 桌面客户端（推荐分发方式）
+
+在 PyInstaller 后端之上套一层 **Electron 壳**，变成真正的桌面客户端：原生窗口、无浏览器地址栏、退出自动清理后端进程。
+
+```
+desktop/
+├── main.js            # Electron 主进程：拉起后端子进程 + 创建窗口 + 生命周期管理
+├── preload.js         # 预加载脚本（最小化暴露）
+├── package.json       # electron-builder 配置
+└── build-desktop.bat  # 一键打包：PyInstaller 后端 → Electron 安装包
+```
+
+**开发模式运行**（带控制台日志）：
+
+```bash
+cd desktop
+npm install
+npm start        # 自动调 .venv 的 Python 启动后端，弹原生窗口
+```
+
+**打包为安装程序**（需已安装 Node.js）：
+
+```bash
+# 双击 desktop\build-desktop.bat，或命令行：
+cd desktop && build-desktop.bat
+# 产物：desktop\release\TaofeiAI Setup 1.2.0.exe
+```
+
+安装包为 **per-user 安装**（装到 %LocalAppData%\Programs，无需管理员权限），后端 exe 与 `.env` 打包在 `resources\backend\` 下。
+
+**架构说明**：
+1. Electron 启动时 spawn 后端（开发模式用 `.venv\Scripts\python.exe backend\main.py --no-browser`；生产模式用打包内嵌的 `CrewAIWorkbench.exe`）
+2. 后端 stdout 输出 `__BACKEND_PORT__:{port}`，Electron 解析后轮询 `/api/health` 直到就绪
+3. 就绪后 `BrowserWindow` 加载 `http://127.0.0.1:{port}`
+4. 窗口关闭/应用退出时 `taskkill /t` 清理后端进程树
+5. 单实例锁：重复启动只会聚焦已开窗口
+
 ## API 一览
 
 | 方法 | 路径 | 说明 |
