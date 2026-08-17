@@ -11,6 +11,11 @@
       <div v-show="tab === 'model'" class="settings-panel active">
         <div class="settings-form">
           <div class="field">
+            <label>配置名称</label>
+            <input v-model="config.name" type="text" placeholder="例如：DeepSeek 主账号、OpenAI 备用、Anthropic 实验">
+            <div class="hint">给这套配置起个名字，保存后会出现在下方列表中</div>
+          </div>
+          <div class="field">
             <label>模型服务商</label>
             <select v-model="config.provider">
               <option value="deepseek">DeepSeek</option>
@@ -38,7 +43,7 @@
             <label>Base URL（可选）</label>
             <input v-model="config.baseUrl" type="text" placeholder="https://api.deepseek.com">
           </div>
-          <div style="display:flex;justify-content:flex-end;gap:10px;align-items:center;">
+          <div style="display:flex;justify-content:flex-end;gap:10px;align-items:center;flex-wrap:wrap;">
             <span v-if="testResult" class="test-result" :class="testResult.ok ? 'ok' : 'fail'">
               <template v-if="testResult.ok">✓ 连接成功（{{ testResult.latency_ms }} ms）</template>
               <template v-else>✗ {{ testResult.error }}<span v-if="testResult.latency_ms > 0">（{{ testResult.latency_ms }} ms）</span></template>
@@ -46,7 +51,52 @@
             <button class="btn-ghost" :disabled="testing" @click="testConnection">
               {{ testing ? '测试中...' : '测试连接' }}
             </button>
-            <button class="settings-form btn-save" style="background:linear-gradient(135deg,var(--primary),var(--purple));border:none;color:#fff;border-radius:8px;padding:9px 24px;font-size:14px;font-weight:600;cursor:pointer;" @click="saveModel">保存模型配置</button>
+            <button class="btn-save" :disabled="saving" @click="saveModel" style="background:linear-gradient(135deg,var(--primary),var(--purple));border:none;color:#fff;border-radius:8px;padding:9px 24px;font-size:14px;font-weight:600;cursor:pointer;">
+              {{ saving ? '保存中...' : '保存模型配置' }}
+            </button>
+          </div>
+          <div v-if="saveMessage" class="save-tip" :class="saveMessage.type">{{ saveMessage.text }}</div>
+        </div>
+
+        <!-- 已保存的配置列表 -->
+        <div class="settings-form" style="margin-top:18px;">
+          <div class="field-title">
+            <span>已保存的配置</span>
+            <span class="hint-inline">点击「使用」即可切换当前模型</span>
+          </div>
+          <div v-if="presets.length === 0" class="empty-tip">
+            还没有保存的配置。填好上方表单后点击「保存模型配置」即可出现在这里。
+          </div>
+          <div v-else class="preset-list">
+            <div
+              v-for="p in presets"
+              :key="p.id"
+              class="preset-item"
+              :class="{ active: p.id === activePresetId }"
+            >
+              <div class="preset-main">
+                <div class="preset-name">
+                  <span>{{ p.name }}</span>
+                  <span v-if="p.id === activePresetId" class="badge-current">✓ 当前</span>
+                </div>
+                <div class="preset-meta">
+                  <span class="chip">{{ p.provider }}</span>
+                  <span class="preset-model">{{ p.model || '(未填)' }}</span>
+                  <span v-if="p.base_url" class="preset-url">{{ p.base_url }}</span>
+                </div>
+                <div class="preset-key">
+                  <span>API Key: {{ p.has_api_key ? p.api_key_masked : '未设置' }}</span>
+                </div>
+              </div>
+              <div class="preset-actions">
+                <button class="btn-ghost" :disabled="loadingId === p.id" @click="usePreset(p)">
+                  {{ p.id === activePresetId ? '重新加载' : '使用' }}
+                </button>
+                <button class="btn-danger-text" :disabled="loadingId === p.id" @click="deletePreset(p)">
+                  删除
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -141,11 +191,24 @@ import { ref, onMounted } from 'vue'
 
 const tab = ref('model')
 const showKey = ref(false)
-const config = ref({ provider: 'deepseek', model: 'deepseek/deepseek-chat', apiKey: '', baseUrl: 'https://api.deepseek.com' })
+const config = ref({
+  name: '',
+  provider: 'deepseek',
+  model: 'deepseek/deepseek-chat',
+  apiKey: '',
+  baseUrl: 'https://api.deepseek.com',
+})
 const themeMode = ref('dark')
 const glow = ref(true)
 const compact = ref(false)
 const retention = ref('90')
+
+// 模型预设列表状态
+const presets = ref([])          // [{id, name, provider, model, base_url, has_api_key, api_key_masked, ...}]
+const activePresetId = ref('')   // 后端当前激活预设 id
+const loadingId = ref('')        // 正在操作（使用/删除）的预设 id，用于按钮 loading
+const saving = ref(false)        // 保存按钮 loading
+const saveMessage = ref(null)    // {type: 'ok'|'err', text: '...'}
 
 function applyTheme() {
   document.body.classList.toggle('light-theme', themeMode.value === 'light')
@@ -157,12 +220,124 @@ function applyBodyClass() {
   document.body.classList.toggle('compact', compact.value)
 }
 
-async function saveModel() {
+async function loadPresets() {
   try {
-    localStorage.setItem('model_config', JSON.stringify(config.value))
-    alert('模型配置已保存')
+    const res = await fetch('/api/model-presets')
+    const data = await res.json()
+    presets.value = data.presets || []
+    activePresetId.value = data.active_id || ''
   } catch (e) {
-    alert('保存失败：' + e.message)
+    console.error('加载预设列表失败', e)
+  }
+}
+
+function showSaveTip(type, text, timeout = 2400) {
+  saveMessage.value = { type, text }
+  if (timeout > 0) {
+    setTimeout(() => {
+      if (saveMessage.value && saveMessage.value.text === text) {
+        saveMessage.value = null
+      }
+    }, timeout)
+  }
+}
+
+async function saveModel() {
+  if (saving.value) return
+  if (!config.value.model.trim()) {
+    showSaveTip('err', '请先填写模型名称')
+    return
+  }
+  saving.value = true
+  try {
+    const res = await fetch('/api/model-presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: config.value.name.trim(),
+        provider: config.value.provider,
+        model: config.value.model.trim(),
+        api_key: config.value.apiKey,
+        base_url: config.value.baseUrl,
+      }),
+    })
+    const data = await res.json()
+    if (!res.ok || data.ok === false) {
+      showSaveTip('err', '保存失败：' + (data.error || res.statusText))
+      return
+    }
+    const saved = data.preset || {}
+    activePresetId.value = data.active_id || saved.id || ''
+    showSaveTip('ok', `已保存为「${saved.name || '新配置'}」，已切换为当前模型`)
+    // 重新拉取列表，确保 server-side 排序/字段一致
+    await loadPresets()
+  } catch (e) {
+    showSaveTip('err', '保存失败：' + e.message)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function usePreset(p) {
+  if (loadingId.value) return
+  loadingId.value = p.id
+  try {
+    // 如果是当前激活预设，仅做"重新加载"到表单
+    if (p.id === activePresetId.value) {
+      const detail = await fetch(`/api/model-presets/${p.id}`).catch(() => null)
+      // 简化：直接从列表项加载（API Key 脱敏版，提示用户重新填）
+      config.value = {
+        name: p.name,
+        provider: p.provider,
+        model: p.model,
+        apiKey: p.has_api_key ? '' : '',  // 不回填已脱敏的 key，避免误以为真值
+        baseUrl: p.base_url,
+      }
+      showSaveTip('ok', `已重新加载「${p.name}」（API Key 请重新填写以查看完整值）`)
+      return
+    }
+    const res = await fetch(`/api/model-presets/${p.id}/activate`, { method: 'POST' })
+    const data = await res.json()
+    if (!res.ok || data.ok === false) {
+      showSaveTip('err', '切换失败：' + (data.error || res.statusText))
+      return
+    }
+    activePresetId.value = data.active_id || p.id
+    // 加载到表单（API Key 不回填脱敏值）
+    config.value = {
+      name: p.name,
+      provider: p.provider,
+      model: p.model,
+      apiKey: '',
+      baseUrl: p.base_url,
+    }
+    showSaveTip('ok', `已切换到「${p.name}」，后续调用将使用此配置`)
+    await loadPresets()
+  } catch (e) {
+    showSaveTip('err', '切换失败：' + e.message)
+  } finally {
+    loadingId.value = ''
+  }
+}
+
+async function deletePreset(p) {
+  if (loadingId.value) return
+  if (!confirm(`确定删除配置「${p.name}」？`)) return
+  loadingId.value = p.id
+  try {
+    const res = await fetch(`/api/model-presets/${p.id}`, { method: 'DELETE' })
+    const data = await res.json()
+    if (!res.ok || data.ok === false) {
+      showSaveTip('err', '删除失败：' + (data.error || res.statusText))
+      return
+    }
+    activePresetId.value = data.active_id || ''
+    showSaveTip('ok', `已删除「${p.name}」`)
+    await loadPresets()
+  } catch (e) {
+    showSaveTip('err', '删除失败：' + e.message)
+  } finally {
+    loadingId.value = ''
   }
 }
 
@@ -203,11 +378,24 @@ function clearTask() {
   alert('已清空')
 }
 
-onMounted(() => {
+onMounted(async () => {
   const savedTheme = localStorage.getItem('theme')
   if (savedTheme === 'light') themeMode.value = 'light'
   const savedConfig = localStorage.getItem('model_config')
-  if (savedConfig) config.value = JSON.parse(savedConfig)
+  if (savedConfig) {
+    try {
+      Object.assign(config.value, JSON.parse(savedConfig))
+    } catch (e) { /* ignore */ }
+  }
   applyBodyClass()
+  // 拉取后端预设列表
+  await loadPresets()
+  // 如果有当前激活预设，且表单 model 为空/默认值，自动填入（API Key 除外）
+  const active = presets.value.find(p => p.id === activePresetId.value)
+  if (active && !config.value.model) {
+    config.value.provider = active.provider
+    config.value.model = active.model
+    config.value.baseUrl = active.base_url
+  }
 })
 </script>

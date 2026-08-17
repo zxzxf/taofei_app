@@ -65,6 +65,7 @@ app = FastAPI(title="CrewAI Workbench", version="1.2.0")
 # ---------------------------------------------------------------
 MODEL_CONFIG_FILE = EXE_DIR / "model_config.json"
 WORKSPACES_FILE = EXE_DIR / "workspaces.json"
+MODEL_PRESETS_FILE = EXE_DIR / "model_presets.json"
 
 DEFAULT_MODEL_CONFIG: dict[str, str] = {
     "provider": "deepseek",
@@ -97,6 +98,60 @@ def _save_model_config(cfg: dict[str, str]) -> None:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception as exc:  # noqa: BLE001
         log_buffer.emit("ERROR", "system", f"保存模型配置失败：{exc}")
+
+
+# ---------------------------------------------------------------
+# 模型预设（多套配置，可命名保存、切换、删除）
+#   持久化到 model_presets.json
+#   结构：{"presets": [...], "active_id": "..."}
+# ---------------------------------------------------------------
+def _load_presets() -> dict:
+    """读取模型预设列表。"""
+    default: dict = {"presets": [], "active_id": ""}
+    try:
+        if MODEL_PRESETS_FILE.exists():
+            with open(MODEL_PRESETS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                if isinstance(data.get("presets"), list):
+                    default["presets"] = data["presets"]
+                if isinstance(data.get("active_id"), str):
+                    default["active_id"] = data["active_id"]
+    except Exception:
+        pass
+    return default
+
+
+def _save_presets(data: dict) -> None:
+    """保存模型预设到本地 JSON 文件。"""
+    try:
+        with open(MODEL_PRESETS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        log_buffer.emit("ERROR", "system", f"保存模型预设失败：{exc}")
+
+
+def _mask_api_key(key: str) -> str:
+    """脱敏 API Key：保留前 4 后 4，中间 * 号。空或太短则原样返回。"""
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "****"
+    return f"{key[:4]}{'*' * (len(key) - 8)}{key[-4:]}"
+
+
+def _preset_to_public(p: dict) -> dict:
+    """对外返回预设时脱敏 API Key。"""
+    return {
+        "id": p.get("id", ""),
+        "name": p.get("name", ""),
+        "provider": p.get("provider", ""),
+        "model": p.get("model", ""),
+        "base_url": p.get("base_url", ""),
+        "has_api_key": bool(p.get("api_key", "").strip()),
+        "api_key_masked": _mask_api_key(p.get("api_key", "")),
+        "created_at": p.get("created_at", ""),
+    }
 
 
 # ---------------------------------------------------------------
@@ -607,6 +662,136 @@ def set_model_config(req: ModelConfigRequest):
     return {"ok": True, "has_api_key": bool(cfg["api_key"])}
 
 
+# ---------------------------------------------------------------
+# 模型预设 CRUD（多套配置管理）
+# ---------------------------------------------------------------
+class ModelPresetRequest(BaseModel):
+    name: str = ""
+    provider: str = "deepseek"
+    model: str = ""
+    api_key: str = ""
+    base_url: str = ""
+
+
+@app.get("/api/model-presets")
+def list_model_presets():
+    """列出所有已保存的模型预设（含当前激活 id）。API Key 已脱敏。"""
+    data = _load_presets()
+    return {
+        "active_id": data.get("active_id", ""),
+        "presets": [_preset_to_public(p) for p in data.get("presets", [])],
+    }
+
+
+@app.post("/api/model-presets")
+def create_model_preset(req: ModelPresetRequest):
+    """新建一个模型预设，并自动设为当前激活。"""
+    name = req.name.strip() or f"{req.provider}/{req.model or '未命名'}"
+    data = _load_presets()
+    preset = {
+        "id": f"preset_{uuid.uuid4().hex[:10]}",
+        "name": name,
+        "provider": req.provider.strip() or "deepseek",
+        "model": req.model.strip(),
+        "api_key": req.api_key.strip(),
+        "base_url": req.base_url.strip(),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    data.setdefault("presets", []).append(preset)
+    data["active_id"] = preset["id"]
+    _save_presets(data)
+    # 同步写入 model_config.json，让运行时立即使用
+    _save_model_config({
+        "provider": preset["provider"],
+        "model": preset["model"],
+        "api_key": preset["api_key"],
+        "base_url": preset["base_url"],
+    })
+    log_buffer.emit(
+        "INFO", "system",
+        f"已保存模型预设：{preset['name']}（{preset['provider']} / {preset['model']}）",
+    )
+    return {"ok": True, "preset": _preset_to_public(preset), "active_id": preset["id"]}
+
+
+@app.put("/api/model-presets/{preset_id}")
+def update_model_preset(preset_id: str, req: ModelPresetRequest):
+    """更新一个已存在的预设。api_key 留空则保留原 Key。"""
+    data = _load_presets()
+    target = None
+    for p in data.get("presets", []):
+        if p.get("id") == preset_id:
+            target = p
+            break
+    if not target:
+        return JSONResponse({"ok": False, "error": "预设不存在"}, status_code=404)
+    api_key = req.api_key.strip() or target.get("api_key", "")
+    target["name"] = req.name.strip() or target.get("name", "")
+    target["provider"] = req.provider.strip() or target.get("provider", "deepseek")
+    target["model"] = req.model.strip()
+    target["api_key"] = api_key
+    target["base_url"] = req.base_url.strip()
+    _save_presets(data)
+    # 如果更新的是当前激活预设，同步 model_config.json
+    if data.get("active_id") == preset_id:
+        _save_model_config({
+            "provider": target["provider"],
+            "model": target["model"],
+            "api_key": target["api_key"],
+            "base_url": target["base_url"],
+        })
+    return {"ok": True, "preset": _preset_to_public(target)}
+
+
+@app.delete("/api/model-presets/{preset_id}")
+def delete_model_preset(preset_id: str):
+    """删除一个预设。若删除的是当前激活，则清空 active_id。"""
+    data = _load_presets()
+    before = len(data.get("presets", []))
+    data["presets"] = [p for p in data.get("presets", []) if p.get("id") != preset_id]
+    if len(data["presets"]) == before:
+        return JSONResponse({"ok": False, "error": "预设不存在"}, status_code=404)
+    if data.get("active_id") == preset_id:
+        data["active_id"] = ""
+    _save_presets(data)
+    return {"ok": True, "active_id": data.get("active_id", "")}
+
+
+@app.post("/api/model-presets/{preset_id}/activate")
+def activate_model_preset(preset_id: str):
+    """激活一个预设（设为当前模型配置）。"""
+    data = _load_presets()
+    target = None
+    for p in data.get("presets", []):
+        if p.get("id") == preset_id:
+            target = p
+            break
+    if not target:
+        return JSONResponse({"ok": False, "error": "预设不存在"}, status_code=404)
+    data["active_id"] = preset_id
+    _save_presets(data)
+    _save_model_config({
+        "provider": target.get("provider", "deepseek"),
+        "model": target.get("model", ""),
+        "api_key": target.get("api_key", ""),
+        "base_url": target.get("base_url", ""),
+    })
+    log_buffer.emit(
+        "INFO", "system",
+        f"已切换到预设：{target.get('name', preset_id)}",
+    )
+    return {
+        "ok": True,
+        "active_id": preset_id,
+        "config": {
+            "provider": target.get("provider", ""),
+            "model": target.get("model", ""),
+            "base_url": target.get("base_url", ""),
+            "has_api_key": bool(target.get("api_key", "").strip()),
+        },
+    }
+
+
 class TestConnectionRequest(BaseModel):
     provider: str = ""
     model: str = ""
@@ -630,9 +815,11 @@ def _classify_error(err: str) -> str:
     if "403" in s or "forbidden" in low or "insufficient" in low or "balance" in low \
             or "country" in low or "region" in low:
         return "访问被拒绝：可能是 Key 无权限、余额不足或所在地区不支持"
-    # 404 模型不存在
-    if "404" in s and ("model" in low or "not found" in low):
-        return "模型不存在或无权访问，请检查模型名称"
+    # 404 模型不存在 / 端点不存在
+    if "404" in s:
+        if "model" in low or "not found" in low:
+            return "模型不存在或无权访问，请检查模型名称"
+        return "404 端点不存在，请检查 Base URL 和模型名称是否正确"
     # 429 限流
     if "429" in s or "rate limit" in low or "tpm" in low or "rpm" in low:
         return "请求频率超限，请稍后再试"
@@ -652,49 +839,100 @@ def _classify_error(err: str) -> str:
 
 @app.post("/api/test-connection")
 def test_connection(req: TestConnectionRequest):
-    """用当前表单配置做一次极简调用验证连通性。直接走 openai SDK。
+    """用当前表单配置做一次极简调用验证连通性。
 
-    全局 try/except 兜底：任何意外错误都以 JSON 返回，避免前端拿到纯文本
-    'Internal Server Error' 解析失败。
+    自动识别 API 类型：
+    - base_url 含 "anthropic" → 走 Anthropic Messages API（httpx 原生请求）
+    - 其他 → 走 OpenAI SDK chat.completions
+
+    全局 try/except 兜底：任何意外错误都以 JSON 返回。
     """
     import time
     start_total = time.perf_counter()
     try:
-        try:
-            import openai  # noqa: F401
-        except Exception:
-            return JSONResponse(
-                {"ok": False, "error": "openai SDK 未安装，无法测试", "latency_ms": 0},
-                status_code=503,
-            )
-
         cfg = _load_model_config()
-        api_key = req.api_key.strip() or cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "")
+        api_key = req.api_key.strip() or cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "") \
+            or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
         if not api_key:
-            return {"ok": False, "error": "未配置 API Key（请填写或设置 DEEPSEEK_API_KEY 环境变量）", "latency_ms": 0}
+            return {"ok": False, "error": "未配置 API Key（请在设置页填写或设置环境变量）", "latency_ms": 0}
 
         model = req.model.strip() or cfg.get("model") or DEFAULT_MODEL_CONFIG["model"]
         base_url = req.base_url.strip() or cfg.get("base_url") or ""
         provider = (req.provider or cfg.get("provider") or "deepseek").strip()
 
-        client_kwargs: dict[str, Any] = {"api_key": api_key, "timeout": 15.0}
-        if base_url:
-            client_kwargs["base_url"] = base_url
+        # 判断是否 Anthropic 兼容端点
+        is_anthropic = "anthropic" in base_url.lower()
 
         start = time.perf_counter()
-        client = openai.OpenAI(**client_kwargs)
-        client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=5,
-            temperature=0,
-        )
-        latency_ms = int((time.perf_counter() - start) * 1000)
-        log_buffer.emit(
-            "INFO", "system",
-            f"测试连接成功：{provider} / {model}（{latency_ms} ms）",
-        )
-        return {"ok": True, "latency_ms": latency_ms, "model": model, "provider": provider}
+
+        if is_anthropic:
+            # ---- Anthropic Messages API ----
+            try:
+                import httpx
+            except Exception:
+                return {"ok": False, "error": "httpx 未安装，无法测试 Anthropic 端点", "latency_ms": 0}
+
+            # 构造 messages 端点 URL
+            url = base_url.rstrip("/")
+            if not url.endswith("/v1/messages"):
+                url = url + "/v1/messages"
+
+            headers = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "max_tokens": 5,
+                "messages": [{"role": "user", "content": "ping"}],
+            }
+
+            resp = httpx.post(url, json=payload, headers=headers, timeout=15.0)
+            latency_ms = int((time.perf_counter() - start) * 1000)
+
+            if resp.status_code == 200:
+                log_buffer.emit("INFO", "system",
+                    f"测试连接成功（Anthropic）：{provider} / {model}（{latency_ms} ms）")
+                return {"ok": True, "latency_ms": latency_ms, "model": model, "provider": provider,
+                        "api_type": "anthropic"}
+            else:
+                err = f"HTTP {resp.status_code}: {resp.text[:300]}"
+                msg = _classify_error(err)
+                # Anthropic 404 通常是模型名错误或端点路径不对
+                if resp.status_code == 404:
+                    msg = f"404 端点不存在：{url}\n请检查 Base URL 是否正确（Anthropic 兼容端点应类似 https://api.deepseek.com/anthropic）"
+                log_buffer.emit("WARNING", "system", f"测试连接失败（Anthropic）：{msg}")
+                return {"ok": False, "error": msg, "detail": err, "latency_ms": latency_ms,
+                        "api_type": "anthropic"}
+
+        else:
+            # ---- OpenAI 兼容 API ----
+            try:
+                import openai  # noqa: F401
+            except Exception:
+                return JSONResponse(
+                    {"ok": False, "error": "openai SDK 未安装，无法测试", "latency_ms": 0},
+                    status_code=503,
+                )
+
+            client_kwargs: dict[str, Any] = {"api_key": api_key, "timeout": 15.0}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+
+            client = openai.OpenAI(**client_kwargs)
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=5,
+                temperature=0,
+            )
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            log_buffer.emit("INFO", "system",
+                f"测试连接成功：{provider} / {model}（{latency_ms} ms）")
+            return {"ok": True, "latency_ms": latency_ms, "model": model, "provider": provider,
+                    "api_type": "openai"}
+
     except Exception as e:
         # 兜底：捕获所有意外异常，确保返回 JSON
         latency_ms = int((time.perf_counter() - start_total) * 1000)
@@ -703,10 +941,7 @@ def test_connection(req: TestConnectionRequest):
             msg = _classify_error(err)
         except Exception:
             msg = err[:300] if err else "未知错误"
-        log_buffer.emit(
-            "WARNING", "system",
-            f"测试连接失败：{msg}",
-        )
+        log_buffer.emit("WARNING", "system", f"测试连接失败：{msg}")
         return {"ok": False, "error": msg, "detail": err[:300], "latency_ms": latency_ms}
 
 
