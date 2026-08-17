@@ -4,17 +4,22 @@ REM ============================================
 REM  淘飞AI 桌面客户端一键打包脚本
 REM
 REM  用法:
-REM    双击运行            = 全部打包（后端+前端+安装包）
-REM    build-desktop.bat /b = 只打包后端（PyInstaller）
+REM    双击运行            = 全部打包（前端+后端+安装包+覆盖更新）
+REM    build-desktop.bat /b = 只打包后端（前端+PyInstaller）
 REM    build-desktop.bat /e = 只打包安装包（electron-builder）
 REM    build-desktop.bat /u = 只更新 D:\TaofeiAI（免安装覆盖）
 REM
 REM  产物:
-REM    dist\CrewAIWorkbench_v3\CrewAIWorkbench\  = PyInstaller 后端
+REM    dist\CrewAIWorkbench_v3\CrewAIWorkbench\  = PyInstaller 后端（含已构建的前端）
 REM    desktop\release_v3\TaofeiAI Setup 1.2.1.exe = NSIS 安装包
 REM    desktop\release_v3\win-unpacked\            = 免安装版
 REM
 REM  前置: .venv 已创建 + Node.js 已安装
+REM  自动步骤:
+REM    [0/4] frontend-vue 执行 npm install + npm run build → 输出到 项目根\frontend\
+REM    [1/4] PyInstaller 收集 frontend\ 与 backend\ → dist\CrewAIWorkbench_v3\
+REM    [2/4] electron-builder 组合 Electron + extraResources → release_v3\
+REM    [3/4] （可选）复制 win-unpacked 到 D:\TaofeiAI
 REM ============================================
 setlocal enabledelayedexpansion
 
@@ -48,11 +53,43 @@ echo ========================================
 echo.
 
 REM ==========================================
-REM  Step 1: PyInstaller 打包后端
+REM  Step 0: 构建前端（Vite 输出到 项目根\frontend\）
+REM  Step 1: PyInstaller 打包后端（会收集 frontend\）
 REM ==========================================
 if /i "%MODE%"=="electron" goto step_electron
 if /i "%MODE%"=="upgrade" goto step_upgrade
 
+echo [0/3] Building frontend with Vite...
+cd /d "%PROJECT_ROOT%\frontend-vue"
+
+where npm >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] npm not found. Install Node.js from https://nodejs.org
+    pause
+    exit /b 1
+)
+
+REM 首次运行需要 npm install
+if not exist "node_modules\vite\bin\vite.js" (
+    echo        npm install...
+    call npm install
+    if errorlevel 1 ( echo [ERROR] npm install failed & pause & exit /b 1 )
+) else (
+    echo        node_modules OK, skipping install
+)
+
+echo        npm run build...
+call npm run build
+if errorlevel 1 ( echo [ERROR] Frontend build failed & pause & exit /b 1 )
+
+if not exist "%PROJECT_ROOT%\frontend\index.html" (
+    echo [ERROR] Frontend build did not produce frontend\index.html
+    pause
+    exit /b 1
+)
+echo       [OK] Frontend: %PROJECT_ROOT%\frontend\
+
+echo.
 echo [1/3] Building backend with PyInstaller...
 
 if not exist ".venv\Scripts\python.exe" (
@@ -96,7 +133,7 @@ REM  Step 2: npm install + electron-builder
 REM ==========================================
 :step_electron
 echo.
-echo [2/3] Building desktop installer with electron-builder...
+echo [3/4] Building desktop installer with electron-builder...
 cd /d "%DESKTOP_DIR%"
 
 where npm >nul 2>nul
@@ -136,7 +173,7 @@ REM  Step 3: 更新 D:\TaofeiAI
 REM ==========================================
 :step_upgrade
 echo.
-echo [3/3] Updating %INSTALL_DIR%...
+echo [4/4] Updating %INSTALL_DIR%...
 cd /d "%DESKTOP_DIR%"
 
 if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (

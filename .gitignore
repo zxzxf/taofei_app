@@ -14,8 +14,11 @@ __pycache__/
 dist/
 build/[!.]*
 !build/CrewAIWorkbench.spec
-!build/_noop_site/
 build/CrewAIWorkbench/
+build/_noop_site/
+
+# Frontend build output (regenerate via frontend-vue/npm run build)
+frontend/
 
 # Virtual environments
 .venv/
