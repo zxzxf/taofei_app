@@ -1,6 +1,6 @@
 {
   "name": "taofei-desktop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "淘飞AI · 企业级AI智能体平台",
   "main": "main.js",
   "author": "Taofei",
@@ -22,7 +22,7 @@
     "appId": "com.taofei.workbench",
     "productName": "TaofeiAI",
     "directories": {
-      "output": "release_v2",
+      "output": "release_v3",
       "buildResources": "."
     },
     "files": [
@@ -32,7 +32,7 @@
     ],
     "extraResources": [
       {
-        "from": "../dist/CrewAIWorkbench_v2/CrewAIWorkbench",
+        "from": "../dist/CrewAIWorkbench_v3/CrewAIWorkbench",
         "to": "backend",
         "filter": [
           "**/*"
