@@ -196,7 +196,7 @@
               <!-- 网格背景 -->
               <div class="flow-grid"></div>
               <!-- 连线 -->
-              <svg class="flow-svg">
+              <svg class="flow-svg" :viewBox="`${flowViewBox.x} ${flowViewBox.y} ${flowViewBox.w} ${flowViewBox.h}`" :style="flowSvgStyle">
                 <!-- 透明粗路径作为点击区域 -->
                 <path v-for="(conn,i) in connections" :key="'hit'+i"
                   :d="bezierPath(conn)" class="flow-edge-hit"
@@ -702,6 +702,42 @@ const nodeTypeMap = computed(() => {
   return m
 })
 
+const flowViewBox = computed(() => {
+  if (!nodes.value.length) return { x: 0, y: 0, w: 3000, h: 2000 }
+  let maxX = 0, maxY = 0
+  nodes.value.forEach(n => {
+    const w = nodeTypeMap.value[n.type]?.w || 200
+    const h = nodeTypeMap.value[n.type]?.h || 68
+    maxX = Math.max(maxX, n.x + w + 100)
+    maxY = Math.max(maxY, n.y + h + 100)
+  })
+  connections.value.forEach(c => {
+    const fromNode = nodes.value.find(n => n.id === c.from)
+    const toNode = nodes.value.find(n => n.id === c.to)
+    if (fromNode) {
+      const w = nodeTypeMap.value[fromNode.type]?.w || 200
+      const h = nodeTypeMap.value[fromNode.type]?.h || 68
+      maxX = Math.max(maxX, fromNode.x + w + 100)
+      maxY = Math.max(maxY, fromNode.y + h + 100)
+    }
+    if (toNode) {
+      const w = nodeTypeMap.value[toNode.type]?.w || 200
+      const h = nodeTypeMap.value[toNode.type]?.h || 68
+      maxX = Math.max(maxX, toNode.x + w + 100)
+      maxY = Math.max(maxY, toNode.y + h + 100)
+    }
+  })
+  return { x: 0, y: 0, w: Math.max(Math.ceil(maxX), 2000), h: Math.max(Math.ceil(maxY), 1500) }
+})
+
+const flowSvgStyle = computed(() => {
+  const vb = flowViewBox.value
+  return {
+    width: vb.w + 'px',
+    height: vb.h + 'px'
+  }
+})
+
 // === 节点输出Schema：定义每种节点产生的输出变量 ===
 const nodeOutputSchema = {
   start: [{ field: 'input', type: 'string', label: '用户输入' }],
@@ -1163,11 +1199,8 @@ function getPortPosFromDOM(nodeId, port) {
 }
 
 function bezierPath(conn) {
-  // 优先使用DOM元素的实际位置，确保连线与端口对齐
-  const fromDOM = getPortPosFromDOM(conn.from, 'out')
-  const toDOM = getPortPosFromDOM(conn.to, 'in')
-  const from = fromDOM || nodePortPos(conn.from, 'out')
-  const to = toDOM || nodePortPos(conn.to, 'in')
+  const from = nodePortPos(conn.from, 'out')
+  const to = nodePortPos(conn.to, 'in')
   const dx = Math.abs(to.x - from.x) * 0.5
   return `M ${from.x} ${from.y} C ${from.x + dx} ${from.y}, ${to.x - dx} ${to.y}, ${to.x} ${to.y}`
 }

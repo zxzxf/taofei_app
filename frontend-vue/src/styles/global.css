@@ -559,12 +559,12 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .flow-palette-icon { font-size: 13px; width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
 /* 画布 */
-.flow-canvas-box { flex: 1; min-width: 300px; height: 100%; position: relative; overflow: hidden; cursor: grab; background: var(--bg-soft); }
+.flow-canvas-box { flex: 1; min-width: 300px; height: 100%; position: relative; overflow: visible; cursor: grab; background: var(--bg-soft); }
 .flow-canvas-box:active { cursor: grabbing; }
 .flow-canvas-inner { position: absolute; inset: 0; transform-origin: 0 0; }
 .flow-grid { position: absolute; left: -2000px; top: -2000px; width: 6000px; height: 6000px; background-image: radial-gradient(circle, var(--border) 1px, transparent 1px); background-size: 20px 20px; opacity: .5; pointer-events: none; }
 .flow-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); font-size: 13px; pointer-events: none; z-index: 10; }
-.flow-svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.flow-svg { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
 .flow-edge-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
 .flow-edge { fill: none; stroke: var(--text-muted); stroke-width: 2; pointer-events: none; opacity: .5; transition: opacity .15s, stroke .15s; }
 .flow-edge:hover, .flow-edge.selected { opacity: 1; stroke-width: 3; stroke: var(--primary); }
