@@ -222,7 +222,7 @@
                   'drop-target': connTargetId===node.id,
                   dragging: draggingNodeId===node.id
                 }]"
-                :style="{left:node.x+'px', top:node.y+'px', width:(nodeTypeMap[node.type]?.w || 200)+'px'}"
+                :style="{left:node.x+'px', top:node.y+'px', width:(nodeTypeMap[node.type]?.w || 200)+'px', height:(nodeTypeMap[node.type]?.h || 68)+'px'}"
                 @mousedown.stop="onNodeMouseDown($event,node)" @click.stop="selectNode(node.id)">
                 <div class="flow-node-header">
                   <span class="flow-node-icon" :style="{background:nodeColor(node.type)}">{{ node.icon }}</span>
