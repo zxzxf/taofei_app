@@ -38,8 +38,14 @@
             <label>Base URL（可选）</label>
             <input v-model="config.baseUrl" type="text" placeholder="https://api.deepseek.com">
           </div>
-          <div style="display:flex;justify-content:flex-end;gap:10px;">
-            <button class="btn-ghost" @click="testConnection">测试连接</button>
+          <div style="display:flex;justify-content:flex-end;gap:10px;align-items:center;">
+            <span v-if="testResult" class="test-result" :class="testResult.ok ? 'ok' : 'fail'">
+              <template v-if="testResult.ok">✓ 连接成功（{{ testResult.latency_ms }} ms）</template>
+              <template v-else>✗ {{ testResult.error }}<span v-if="testResult.latency_ms > 0">（{{ testResult.latency_ms }} ms）</span></template>
+            </span>
+            <button class="btn-ghost" :disabled="testing" @click="testConnection">
+              {{ testing ? '测试中...' : '测试连接' }}
+            </button>
             <button class="settings-form btn-save" style="background:linear-gradient(135deg,var(--primary),var(--purple));border:none;color:#fff;border-radius:8px;padding:9px 24px;font-size:14px;font-weight:600;cursor:pointer;" @click="saveModel">保存模型配置</button>
           </div>
         </div>
@@ -160,8 +166,30 @@ async function saveModel() {
   }
 }
 
+const testing = ref(false)
+const testResult = ref(null) // { ok, latency_ms, error, ... }
+
 async function testConnection() {
-  alert('测试连接功能开发中')
+  if (testing.value) return
+  testing.value = true
+  testResult.value = null
+  try {
+    const res = await fetch('/api/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: config.value.provider,
+        model: config.value.model,
+        api_key: config.value.apiKey,
+        base_url: config.value.baseUrl,
+      }),
+    })
+    testResult.value = await res.json()
+  } catch (e) {
+    testResult.value = { ok: false, error: '请求失败：' + e.message, latency_ms: 0 }
+  } finally {
+    testing.value = false
+  }
 }
 
 function clearChat() {

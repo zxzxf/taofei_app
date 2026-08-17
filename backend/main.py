@@ -607,6 +607,109 @@ def set_model_config(req: ModelConfigRequest):
     return {"ok": True, "has_api_key": bool(cfg["api_key"])}
 
 
+class TestConnectionRequest(BaseModel):
+    provider: str = ""
+    model: str = ""
+    api_key: str = ""
+    base_url: str = ""
+
+
+def _classify_error(err: str) -> str:
+    """把 openai SDK 抛出的异常字符串翻译成用户可读的中文消息。
+
+    触发场景：测试连接 / 任务运行时 openai 接口报错。仅依赖字符串匹配，
+    不引入 openai 异常类型以避免 import 失败时崩溃。
+    """
+    s = err or ""
+    low = s.lower()
+    # 401 / 403 / incorrect api key
+    if "401" in s or "invalid api key" in low or "incorrect api key" in low \
+            or "authentication" in low or "auth_error" in low or "no such organization" in low:
+        return "API Key 无效或未授权（请检查密钥与对应服务商）"
+    # 403 / 地理位置 / 余额
+    if "403" in s or "forbidden" in low or "insufficient" in low or "balance" in low \
+            or "country" in low or "region" in low:
+        return "访问被拒绝：可能是 Key 无权限、余额不足或所在地区不支持"
+    # 404 模型不存在
+    if "404" in s and ("model" in low or "not found" in low):
+        return "模型不存在或无权访问，请检查模型名称"
+    # 429 限流
+    if "429" in s or "rate limit" in low or "tpm" in low or "rpm" in low:
+        return "请求频率超限，请稍后再试"
+    # 5xx 服务端错误
+    if any(code in s for code in ("500", "502", "503", "504")):
+        return "模型服务端异常，请稍后重试"
+    # 超时
+    if "timeout" in low or "timed out" in low:
+        return "请求超时，请检查网络或 Base URL"
+    # 连接错误
+    if "connection" in low or "connect" in low or "dns" in low or "getaddrinfo" in low \
+            or "name or service not known" in low or "ssl" in low:
+        return f"无法连接到模型服务：{s[:200]}"
+    # 默认截断
+    return s[:300] if s else "未知错误"
+
+
+@app.post("/api/test-connection")
+def test_connection(req: TestConnectionRequest):
+    """用当前表单配置做一次极简调用验证连通性。直接走 openai SDK。
+
+    全局 try/except 兜底：任何意外错误都以 JSON 返回，避免前端拿到纯文本
+    'Internal Server Error' 解析失败。
+    """
+    import time
+    start_total = time.perf_counter()
+    try:
+        try:
+            import openai  # noqa: F401
+        except Exception:
+            return JSONResponse(
+                {"ok": False, "error": "openai SDK 未安装，无法测试", "latency_ms": 0},
+                status_code=503,
+            )
+
+        cfg = _load_model_config()
+        api_key = req.api_key.strip() or cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "")
+        if not api_key:
+            return {"ok": False, "error": "未配置 API Key（请填写或设置 DEEPSEEK_API_KEY 环境变量）", "latency_ms": 0}
+
+        model = req.model.strip() or cfg.get("model") or DEFAULT_MODEL_CONFIG["model"]
+        base_url = req.base_url.strip() or cfg.get("base_url") or ""
+        provider = (req.provider or cfg.get("provider") or "deepseek").strip()
+
+        client_kwargs: dict[str, Any] = {"api_key": api_key, "timeout": 15.0}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        start = time.perf_counter()
+        client = openai.OpenAI(**client_kwargs)
+        client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=5,
+            temperature=0,
+        )
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        log_buffer.emit(
+            "INFO", "system",
+            f"测试连接成功：{provider} / {model}（{latency_ms} ms）",
+        )
+        return {"ok": True, "latency_ms": latency_ms, "model": model, "provider": provider}
+    except Exception as e:
+        # 兜底：捕获所有意外异常，确保返回 JSON
+        latency_ms = int((time.perf_counter() - start_total) * 1000)
+        err = str(e)
+        try:
+            msg = _classify_error(err)
+        except Exception:
+            msg = err[:300] if err else "未知错误"
+        log_buffer.emit(
+            "WARNING", "system",
+            f"测试连接失败：{msg}",
+        )
+        return {"ok": False, "error": msg, "detail": err[:300], "latency_ms": latency_ms}
+
+
 @app.post("/api/run")
 def run_task(req: RunRequest):
     topic = req.topic.strip()
@@ -1596,6 +1699,9 @@ def main():
     import socket
     import webbrowser
 
+    # --no-browser: Electron 模式下不自动打开浏览器
+    no_browser = "--no-browser" in sys.argv
+
     port = int(os.getenv("CREWAI_APP_PORT", "8000"))
 
     # 检查端口占用，被占用则自动 +1
@@ -1613,7 +1719,11 @@ def main():
     print("  按 Ctrl+C 停止服务")
     print("=" * 56)
 
-    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    # Electron 通过 stdout 解析此行获取端口
+    print(f"__BACKEND_PORT__:{port}", flush=True)
+
+    if not no_browser:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
     import uvicorn
 
