@@ -196,62 +196,6 @@ async function deleteWorkspace(id) {
   emitWorkspaceChanged()
 }
 
-async function _createWorkspaceFromPathAndActivate(path) {
-  if (!path) return
-  const name = path.split(/[\\/]/).filter(Boolean).pop() || '新工作空间'
-  try {
-    const res = await fetch('/api/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, path }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      showToast('创建失败：' + (err.error || '路径无效'))
-      return
-    }
-    const data = await res.json()
-    workspaces.value.push(data.workspace)
-    currentWsId.value = data.current_id || data.workspace?.id
-    saveWorkspaces()
-    showToast('已添加工作空间')
-    wsOpen.value = false
-    emitWorkspaceChanged()
-  } catch (e) {
-    showToast('创建失败：' + (e.message || String(e)))
-  }
-}
-
-async function openLocalFolder() {
-  // 1) 优先调用后端打开系统原生目录选择对话框（体验更顺滑，且能校验目录存在）
-  let path = ''
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 30_000)
-    const res = await fetch('/api/browse-directory', { signal: controller.signal })
-    clearTimeout(timer)
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}))
-      if (data?.canceled) return
-      if (data?.path) path = String(data.path)
-    }
-  } catch (_e) {
-    // 网络错误 / 后端沙箱无法弹对话框 / 用户超时：静默走 fallback
-  }
-
-  // 2) 后端无法完成选择时，退回粘贴路径方式
-  if (!path) {
-    const input = prompt(
-      '请粘贴本地文件夹路径（例如 E:\\projects\\my-app）：',
-      'E:\\20260814\\taofei_app'
-    )
-    if (!input) return
-    path = input
-  }
-
-  return _createWorkspaceFromPathAndActivate(path)
-}
-
 function checkApiStatus() {
   apiStatus.value = 'ok'
   apiText.value = '服务正常'
