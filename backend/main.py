@@ -629,6 +629,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
     model_preset_id: str | None = None  # 会话级模型：指定时优先用该预设的 LLM 配置
+    workspace_id: str | None = None  # 当前工作空间 ID，用于注入上下文
 
 
 @app.get("/api/health")
@@ -1023,9 +1024,46 @@ def _build_skill_system_prompt(messages: list[dict]) -> str | None:
     return "\n".join(lines)
 
 
+def _build_workspace_system_prompt(workspace_id: str | None) -> str | None:
+    """根据 workspace_id 构建工作空间上下文 system prompt，注入文件列表和关键文件内容。"""
+    if not workspace_id:
+        return None
+    ws_path = _workspace_path_by_id(workspace_id)
+    if not ws_path:
+        return None
+    ws_data = _load_workspaces()
+    ws_name = ""
+    for ws in ws_data.get("workspaces", []):
+        if ws.get("id") == workspace_id:
+            ws_name = ws.get("name", "")
+            break
+    try:
+        file_list = _list_workspace_files(ws_path, max_depth=3)
+    except Exception:
+        file_list = []
+
+    lines = [f"当前工作空间信息："]
+    lines.append(f"- 名称：{ws_name or workspace_id}")
+    lines.append(f"- 路径：{ws_path}")
+    lines.append(f"- 文件/目录列表（{len(file_list)} 项）：")
+
+    for f in file_list:
+        prefix = "📁" if f["is_dir"] else "📄"
+        size_str = f" ({f['size']} bytes)" if not f["is_dir"] else ""
+        lines.append(f"  {prefix} {f['rel']}{size_str}")
+
+    context = _read_workspace_context(ws_path, max_chars=8000)
+    if context:
+        lines.append(f"\n工作空间关键文件内容摘要：")
+        lines.append(context)
+
+    lines.append("\n当用户询问文件、目录或项目结构时，请基于以上工作空间信息进行回答。不要说你无法访问文件系统。")
+    return "\n".join(lines)
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest):
-    """直接调用大模型接口，进行多轮对话；自动注入已启用的 Claude 技能。"""
+    """直接调用大模型接口，进行多轮对话；自动注入已启用的 Claude 技能和工作空间上下文。"""
     if not req.messages:
         return JSONResponse({"error": "消息不能为空"}, status_code=400)
     if not HAS_CREWAI:
@@ -1037,8 +1075,14 @@ def chat(req: ChatRequest):
         # 构造适合 LLM.call 的消息列表（前端历史中 AI 消息 role 为 'ai'，需映射为 'assistant'）
         messages = [{"role": ("assistant" if m.role == "ai" else m.role), "content": m.content} for m in req.messages]
         skill_prompt = _build_skill_system_prompt(messages)
+        workspace_prompt = _build_workspace_system_prompt(req.workspace_id)
+        system_messages = []
+        if workspace_prompt:
+            system_messages.append(workspace_prompt)
         if skill_prompt:
-            messages = [{"role": "system", "content": skill_prompt}] + messages
+            system_messages.append(skill_prompt)
+        if system_messages:
+            messages = [{"role": "system", "content": "\n\n".join(system_messages)}] + messages
         try:
             reply_text = llm.call(messages)
         except TypeError:
@@ -1049,9 +1093,10 @@ def chat(req: ChatRequest):
         log_buffer.emit(
             "INFO", "system",
             f"对话中心调用 LLM：{len(messages)} 条消息"
+            f"{'（含工作空间上下文）' if workspace_prompt else ''}"
             f"{'（含 Claude 技能上下文）' if skill_prompt else ''} -> 回复 {len(reply_text)} 字符",
         )
-        return {"reply": reply_text, "skills_injected": bool(skill_prompt)}
+        return {"reply": reply_text, "skills_injected": bool(skill_prompt), "workspace_injected": bool(workspace_prompt)}
     except Exception as e:
         err_msg = str(e)
         log_buffer.emit("ERROR", "system", f"对话中心 LLM 调用失败：{err_msg}")
@@ -1417,8 +1462,14 @@ def import_claude_skills(req: ImportClaudeRequest):
 # ---------------------------------------------------------------
 WORKFLOWS_FILE = EXE_DIR / "workflows.json"
 
-from wf_engine import WorkflowEngine  # noqa: E402  自研工作流引擎包
-from wf_engine.dsl import convert_dify_dsl  # noqa: E402
+try:
+    from wf_engine import WorkflowEngine  # noqa: E402
+    from wf_engine.dsl import convert_dify_dsl  # noqa: E402
+    HAS_WF_ENGINE = True
+except ImportError:
+    WorkflowEngine = None  # type: ignore
+    convert_dify_dsl = None  # type: ignore
+    HAS_WF_ENGINE = False
 
 
 def _load_workflows() -> list[dict]:
@@ -1511,6 +1562,9 @@ def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
             _tasks[task_id]["status"] = "running"
         log_buffer.emit("INFO", "system", f"工作流「{wf['name']}」开始执行", task_id)
 
+        if not HAS_WF_ENGINE:
+            raise RuntimeError("wf_engine 工作流引擎未安装")
+
         if not HAS_CREWAI:
             raise RuntimeError("LLM 功能不可用：crewai/langchain 未安装")
 
@@ -1583,6 +1637,8 @@ def run_workflow(wf_id: str, req: WorkflowRunRequest):
 
 @app.post("/api/workflows/import-dsl")
 def import_workflow_dsl(req: WorkflowDslRequest):
+    if not HAS_WF_ENGINE:
+        return JSONResponse({"error": "wf_engine 工作流引擎未安装，无法导入 DSL"}, status_code=503)
     try:
         graph, warnings = convert_dify_dsl(req.dsl)
     except ValueError as exc:
