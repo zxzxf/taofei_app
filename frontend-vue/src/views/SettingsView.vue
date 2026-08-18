@@ -90,7 +90,7 @@
               </div>
               <div class="preset-actions">
                 <button class="btn-ghost" :disabled="loadingId === p.id" @click="usePreset(p)">
-                  {{ p.id === activePresetId ? '重新加载' : '使用' }}
+                  {{ p.id === activePresetId ? '✓ 使用中' : '使用' }}
                 </button>
                 <button class="btn-danger-text" :disabled="loadingId === p.id" @click="deletePreset(p)">
                   删除
@@ -194,7 +194,7 @@ const showKey = ref(false)
 const config = ref({
   name: '',
   provider: 'deepseek',
-  model: 'deepseek/deepseek-chat',
+  model: 'deepseek-chat',
   apiKey: '',
   baseUrl: 'https://api.deepseek.com',
 })
@@ -269,6 +269,8 @@ async function saveModel() {
     const saved = data.preset || {}
     activePresetId.value = data.active_id || saved.id || ''
     showSaveTip('ok', `已保存为「${saved.name || '新配置'}」，已切换为当前模型`)
+    // 丢弃过期的 localStorage 缓存（保存成功后以后端配置为唯一真相源）
+    try { localStorage.removeItem('model_config') } catch (e) { /* ignore */ }
     // 重新拉取列表，确保 server-side 排序/字段一致
     await loadPresets()
   } catch (e) {
@@ -282,20 +284,6 @@ async function usePreset(p) {
   if (loadingId.value) return
   loadingId.value = p.id
   try {
-    // 如果是当前激活预设，仅做"重新加载"到表单
-    if (p.id === activePresetId.value) {
-      const detail = await fetch(`/api/model-presets/${p.id}`).catch(() => null)
-      // 简化：直接从列表项加载（API Key 脱敏版，提示用户重新填）
-      config.value = {
-        name: p.name,
-        provider: p.provider,
-        model: p.model,
-        apiKey: p.has_api_key ? '' : '',  // 不回填已脱敏的 key，避免误以为真值
-        baseUrl: p.base_url,
-      }
-      showSaveTip('ok', `已重新加载「${p.name}」（API Key 请重新填写以查看完整值）`)
-      return
-    }
     const res = await fetch(`/api/model-presets/${p.id}/activate`, { method: 'POST' })
     const data = await res.json()
     if (!res.ok || data.ok === false) {
@@ -303,7 +291,7 @@ async function usePreset(p) {
       return
     }
     activePresetId.value = data.active_id || p.id
-    // 加载到表单（API Key 不回填脱敏值）
+    // 把激活后的配置回填到表单（API Key 保留为空，由用户填回完整值或保持当前激活态）
     config.value = {
       name: p.name,
       provider: p.provider,
@@ -311,7 +299,11 @@ async function usePreset(p) {
       apiKey: '',
       baseUrl: p.base_url,
     }
-    showSaveTip('ok', `已切换到「${p.name}」，后续调用将使用此配置`)
+    // 丢弃过期的 localStorage 缓存（以后端激活预设为准）
+    try { localStorage.removeItem('model_config') } catch (e) { /* ignore */ }
+    if (p.id === activePresetId.value) {
+      showSaveTip('ok', `已使用「${p.name}」作为当前模型，后续对话将基于此配置`)
+    }
     await loadPresets()
   } catch (e) {
     showSaveTip('err', '切换失败：' + e.message)
@@ -390,12 +382,17 @@ onMounted(async () => {
   applyBodyClass()
   // 拉取后端预设列表
   await loadPresets()
-  // 如果有当前激活预设，且表单 model 为空/默认值，自动填入（API Key 除外）
+  // 只要后端存在激活预设，就优先以后端激活配置覆盖表单（不管 localStorage 旧值与默认值），
+  // 避免 localStorage 中缓存的错误配置（如旧 model/base_url）覆盖了正确的后端激活预设。
   const active = presets.value.find(p => p.id === activePresetId.value)
-  if (active && !config.value.model) {
+  if (active) {
+    config.value.name = active.name
     config.value.provider = active.provider
     config.value.model = active.model
     config.value.baseUrl = active.base_url
+    config.value.apiKey = ''  // API Key 不回填，由用户按需重新输入（保存时留空保留原 Key）
+    // 丢弃 localStorage 中过期的旧缓存，避免下次打开再回填错误值
+    try { localStorage.removeItem('model_config') } catch (e) { /* ignore */ }
   }
 })
 </script>

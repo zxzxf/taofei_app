@@ -1,0 +1,14 @@
+{
+  "presets": [
+    {
+      "id": "preset_a6ccdac1f5",
+      "name": "deepseek",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "api_key": "sk-5d55705b6c644243b17fd132a5dbe7a0",
+      "base_url": "https://api.deepseek.com",
+      "created_at": "2026-08-18T14:11:22"
+    }
+  ],
+  "active_id": "preset_a6ccdac1f5"
+}

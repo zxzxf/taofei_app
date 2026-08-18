@@ -1,6 +1,6 @@
 <template>
   <div class="chat-view">
-    <div class="chat-sessions">
+    <div class="chat-sessions" :style="{ width: sessionsWidth + 'px', flexShrink: 0 }">
       <div class="chat-sessions-head">
         <h3>会话列表</h3>
         <button class="chat-new-btn" @click="openNewSessionDialog">+ 新对话</button>
@@ -33,6 +33,7 @@
         </div>
       </div>
     </div>
+    <div class="chat-resizer" :class="{ active: resizing }" @mousedown="startResize"></div>
     <div class="chat-area">
       <div class="chat-area-head">
         <div class="chat-area-head-left">
@@ -112,15 +113,42 @@
       </div>
     </div>
 
-    <div class="chat-files" :class="{ collapsed: filesCollapsed }">
+    <div class="chat-resizer chat-resizer-right" :class="{ active: filesResizing }" @mousedown="startFilesResize"></div>
+
+    <div class="chat-files" :class="{ collapsed: filesCollapsed }" :style="filesCollapsed ? {} : { width: filesWidth + 'px', flexShrink: 0 }">
       <div class="chat-files-head">
-        <div class="chat-files-title" @click="filesCollapsed = !filesCollapsed">
-          <span class="chat-files-icon">📁</span>
-          <span class="chat-files-name">工作空间文件</span>
-          <span class="chat-files-arrow">{{ filesCollapsed ? '▸' : '▾' }}</span>
-        </div>
-        <div class="chat-files-actions" v-if="!filesCollapsed">
-          <button class="chat-files-refresh" @click="loadWorkspaceFiles" :title="`刷新（${wsName || '加载中…'}）`">↻</button>
+        <div class="chat-files-title-row">
+          <div class="chat-files-title">
+            <span class="chat-files-icon" @click="filesCollapsed = !filesCollapsed" style="cursor:pointer">📁</span>
+            <div class="ws-picker" :class="{ open: wsPickerOpen }">
+              <div class="ws-picker-trigger" @click.stop="onWsPickerToggle">
+                <span class="ws-picker-name">{{ wsName || '选择工作空间' }}</span>
+              </div>
+              <div class="ws-picker-dropdown" v-if="wsPickerOpen">
+                <div class="ws-picker-list">
+                  <div
+                    v-for="ws in workspaceList"
+                    :key="ws.id"
+                    class="ws-picker-item"
+                    :class="{ selected: ws.id === currentWorkspaceId }"
+                    @click.stop="pickWorkspace(ws)"
+                  >
+                    <span class="ws-picker-item-name">{{ ws.name }}</span>
+                    <button class="ws-picker-item-del" @click.stop="removeWorkspace(ws.id)" title="删除">🗑</button>
+                  </div>
+                  <div v-if="!workspaceList.length" class="ws-picker-empty">暂无工作空间</div>
+                </div>
+                <div class="ws-picker-actions">
+                  <button @click.stop="createWorkspace">+ 新建</button>
+                  <button @click.stop="openLocalFolder">打开本地</button>
+                </div>
+              </div>
+            </div>
+            <span class="chat-files-arrow" @click="filesCollapsed = !filesCollapsed" style="cursor:pointer">{{ filesCollapsed ? '▸' : '▾' }}</span>
+          </div>
+          <div class="chat-files-actions" v-if="!filesCollapsed">
+            <button class="chat-files-refresh" @click="loadWorkspaceFiles" :title="`刷新（${wsName || '加载中…'}）`">↻</button>
+          </div>
         </div>
       </div>
       <div v-if="!filesCollapsed" class="chat-files-body">
@@ -423,7 +451,7 @@ async function send() {
     const payload = {
       messages: s.messages
         .filter(m => !m.pending)
-        .map(m => ({ role: m.role, content: m.text })),
+        .map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: m.text })),
       skills: (s.skills || []).map(sk => ({ id: sk.id, name: sk.name, type: sk.type })),
       model_preset_id: s.modelPresetId || globalDefaultPresetId.value || null,
     }
@@ -488,6 +516,18 @@ function loadSessions() {
   } catch (e) { console.error('加载会话失败', e) }
 }
 
+function onWorkspaceChanged(evt) {
+  // App.vue 切换工作空间时派发此事件
+  const newId = evt?.detail?.current_id
+  if (newId && newId !== currentWorkspaceId.value) {
+    currentWorkspaceId.value = newId
+    // 切换工作空间时重置展开状态
+    expandedDirs.value = {}
+  }
+  // 无论 ID 是否变化都刷新一次文件列表，保证右侧内容与顶栏选择一致
+  loadWorkspaceFiles()
+}
+
 onMounted(async () => {
   loadSessions()
   loadAvailableSkills()
@@ -500,7 +540,10 @@ onMounted(async () => {
   }
   saveSessions()
   window.addEventListener('taofei-model-changed', onModelChanged)
+  window.addEventListener('taofei-workspace-changed', onWorkspaceChanged)
   document.addEventListener('click', onDocClickChat)
+  document.addEventListener('click', onDocClickWorkspace)
+  await loadWorkspaceList()
   loadWorkspaceFiles()
   if (!sessions.value.length) {
     openNewSessionDialog()
@@ -509,7 +552,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('taofei-model-changed', onModelChanged)
+  window.removeEventListener('taofei-workspace-changed', onWorkspaceChanged)
   document.removeEventListener('click', onDocClickChat)
+  document.removeEventListener('click', onDocClickWorkspace)
 })
 
 watch(currentId, () => scrollToBottom())
@@ -524,22 +569,216 @@ const filesLoading = ref(false)
 const filesError = ref('')
 const filesCollapsed = ref(false)
 
+// 左侧会话列表宽度拖拽
+const sessionsWidth = ref(parseInt(localStorage.getItem('chatSessionsWidth') || '260'))
+const resizing = ref(false)
+let resizeStartX = 0
+let resizeStartWidth = 0
+
+function startResize(e) {
+  resizing.value = true
+  resizeStartX = e.clientX
+  resizeStartWidth = sessionsWidth.value
+  document.addEventListener('mousemove', onResize)
+  document.addEventListener('mouseup', stopResize)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+function onResize(e) {
+  if (!resizing.value) return
+  const delta = e.clientX - resizeStartX
+  const w = Math.min(500, Math.max(180, resizeStartWidth + delta))
+  sessionsWidth.value = w
+}
+
+function stopResize() {
+  resizing.value = false
+  document.removeEventListener('mousemove', onResize)
+  document.removeEventListener('mouseup', stopResize)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  localStorage.setItem('chatSessionsWidth', sessionsWidth.value)
+}
+
+// 右侧工作空间文件面板宽度拖拽
+const filesWidth = ref(parseInt(localStorage.getItem('chatFilesWidth') || '300'))
+const filesResizing = ref(false)
+let filesResizeStartX = 0
+let filesResizeStartWidth = 0
+
+function startFilesResize(e) {
+  if (filesCollapsed.value) return
+  filesResizing.value = true
+  filesResizeStartX = e.clientX
+  filesResizeStartWidth = filesWidth.value
+  document.addEventListener('mousemove', onFilesResize)
+  document.addEventListener('mouseup', stopFilesResize)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+function onFilesResize(e) {
+  if (!filesResizing.value) return
+  const delta = filesResizeStartX - e.clientX // 向右拖拽减小，向左增大
+  const w = Math.min(500, Math.max(200, filesResizeStartWidth + delta))
+  filesWidth.value = w
+}
+
+function stopFilesResize() {
+  filesResizing.value = false
+  document.removeEventListener('mousemove', onFilesResize)
+  document.removeEventListener('mouseup', stopFilesResize)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  localStorage.setItem('chatFilesWidth', filesWidth.value)
+}
+
+// 工作空间选择器
+const wsPickerOpen = ref(false)
+const workspaceList = ref([])
+
+async function loadWorkspaceList() {
+  try {
+    const res = await fetch('/api/workspaces')
+    if (res.ok) {
+      const data = await res.json()
+      workspaceList.value = data.workspaces || []
+      if (!currentWorkspaceId.value && data.current_id) {
+        currentWorkspaceId.value = data.current_id
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function pickWorkspace(ws) {
+  if (!ws || !ws.id) return
+  if (ws.id === currentWorkspaceId.value) {
+    wsPickerOpen.value = false
+    return
+  }
+  currentWorkspaceId.value = ws.id
+  wsName.value = ws.name
+  wsPath.value = ws.path
+  expandedDirs.value = {}
+  wsPickerOpen.value = false
+  loadWorkspaceFiles()
+}
+
+async function removeWorkspace(id) {
+  if (!confirm('确定删除该工作空间？')) return
+  try {
+    const res = await fetch(`/api/workspaces/${id}`, { method: 'DELETE' })
+    if (res.ok) {
+      const data = await res.json()
+      workspaceList.value = workspaceList.value.filter(w => w.id !== id)
+      if (currentWorkspaceId.value === id) {
+        currentWorkspaceId.value = data.current_id || workspaceList.value[0]?.id || ''
+        if (!currentWorkspaceId.value) {
+          wsName.value = ''
+          wsPath.value = ''
+          fileTree.value = []
+        }
+      }
+      loadWorkspaceFiles()
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function createWorkspace() {
+  const name = prompt('工作空间名称：')
+  if (!name) return
+  const path = prompt('工作空间路径：', 'E:\\20260814\\taofei_app')
+  if (!path) return
+  try {
+    const res = await fetch('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, path }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert('创建失败：' + (err.error || '路径无效'))
+      return
+    }
+    const data = await res.json()
+    workspaceList.value.push(data.workspace)
+    pickWorkspace(data.workspace)
+  } catch (e) {
+    alert('创建失败：' + (e.message || String(e)))
+  }
+}
+
+async function openLocalFolder() {
+  const path = prompt('请输入本地文件夹路径：')
+  if (!path) return
+  const name = path.split(/[\\/]/).filter(Boolean).pop() || '新工作空间'
+  try {
+    const res = await fetch('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, path }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert('创建失败：' + (err.error || '路径无效'))
+      return
+    }
+    const data = await res.json()
+    workspaceList.value.push(data.workspace)
+    pickWorkspace(data.workspace)
+  } catch (e) {
+    alert('创建失败：' + (e.message || String(e)))
+  }
+}
+
+// 切换工作空间选择器下拉
+function onWsPickerToggle() {
+  wsPickerOpen.value = !wsPickerOpen.value
+}
+
+// 点击外部关闭工作空间选择器
+function onDocClickWorkspace(e) {
+  if (!wsPickerOpen.value) return
+  const picker = document.querySelector('.ws-picker')
+  if (picker && !picker.contains(e.target)) {
+    wsPickerOpen.value = false
+  }
+}
+
 // 把后端返回的扁平列表构造为嵌套树（按 '/' 拆 rel）
 function buildTreeFromFlat(items) {
+  if (!Array.isArray(items)) return []
   const rootChildren = new Map()
   for (const it of items) {
+    if (!it) continue
     const parts = (it.rel || it.name || '').split('/').filter(Boolean)
+    if (!parts.length) continue
     let cursor = rootChildren
+    // 遍历中间层，创建/复用目录节点
     for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i]
       const key = parts.slice(0, i + 1).join('/')
-      if (!cursor.has(parts[i])) {
-        cursor.set(parts[i], { name: parts[i], rel: key, is_dir: true, size: 0, children: new Map() })
+      const existing = cursor.get(part)
+      if (!existing) {
+        cursor.set(part, { name: part, rel: key, is_dir: true, size: 0, children: new Map() })
+      } else if (!existing.children || !(existing.children instanceof Map)) {
+        // 路径上存在同名 leaf（非目录），把它升级为目录
+        existing.is_dir = true
+        existing.children = new Map()
       }
-      cursor = cursor.get(parts[i]).children
+      cursor = cursor.get(part).children
     }
-    const leafKey = it.rel || it.name
     const leafName = parts[parts.length - 1] || it.name
-    cursor.set(leafName, { ...it, rel: leafKey, children: null })
+    const leafKey = it.rel || it.name || leafName
+    if (!cursor) continue
+    const prev = cursor.get(leafName)
+    if (prev && prev.children instanceof Map) {
+      // 已存在同名目录节点 → 保留目录的 children，其他字段用新 leaf 覆盖
+      cursor.set(leafName, { ...prev, ...it, name: leafName, rel: leafKey, children: prev.children })
+    } else {
+      cursor.set(leafName, { name: leafName, ...it, rel: leafKey, children: null })
+    }
   }
   // Map → Array，目录优先、再按字母排序
   function sortMap(m) {
@@ -562,14 +801,16 @@ const fileTreeRows = computed(() => {
   // 把 fileTree 扁平化（按展开状态）成带 depth 的行
   const rows = []
   function walk(nodes, depth) {
+    if (!Array.isArray(nodes)) return
     for (const n of nodes) {
       rows.push({ node: n, depth })
-      if (n.is_dir && expandedDirs.value[n.rel] && Array.isArray(n.children) && n.children.length) {
+      const exp = expandedDirs.value && typeof expandedDirs.value === 'object' ? expandedDirs.value[n.rel] : false
+      if (n.is_dir && exp && Array.isArray(n.children) && n.children.length) {
         walk(n.children, depth + 1)
       }
     }
   }
-  walk(fileTree.value, 0)
+  walk(Array.isArray(fileTree.value) ? fileTree.value : [], 0)
   return rows
 })
 
@@ -837,7 +1078,6 @@ function onFilePick(node) {
 }
 /* ===== 右侧 · 工作空间文件面板 ===== */
 .chat-files {
-  width: 300px;
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--panel);
@@ -847,27 +1087,37 @@ function onFilePick(node) {
 }
 .chat-files.collapsed { width: 36px; }
 .chat-files-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px;
+  display: flex; align-items: center;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
   flex-shrink: 0;
+  overflow: visible;
 }
 .chat-files.collapsed .chat-files-head { padding: 10px 8px; justify-content: center; }
+.chat-files-title-row {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; min-width: 0;
+  gap: 8px;
+  overflow: visible;
+}
 .chat-files-title {
   display: flex; align-items: center; gap: 6px;
-  cursor: pointer; user-select: none; flex: 1; min-width: 0;
+  user-select: none;
+  min-width: 0;
 }
-.chat-files-icon { font-size: 14px; }
+.chat-files-icon { font-size: 14px; flex-shrink: 0; }
+.chat-files-sep { color: var(--text-muted); font-size: 14px; line-height: 1; }
 .chat-files-name {
   font-size: 12.5px; font-weight: 600; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  flex: 1; min-width: 0;
 }
+.chat-files.collapsed .chat-files-sep,
 .chat-files.collapsed .chat-files-name,
 .chat-files.collapsed .chat-files-arrow { display: none; }
-.chat-files-arrow { color: var(--text-muted); font-size: 10px; }
-.chat-files-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.chat-files.collapsed .ws-picker { display: none; }
+.chat-files-arrow { color: var(--text-muted); font-size: 10px; flex-shrink: 0; }
+.chat-files-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
 .chat-files.collapsed .chat-files-actions { display: none; }
 .chat-files-refresh {
   background: transparent; border: 1px solid var(--border);
@@ -876,6 +1126,94 @@ function onFilePick(node) {
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; padding: 0; line-height: 1;
 }
+
+/* ===== 工作空间选择器 ===== */
+.ws-picker {
+  position: relative;
+  display: inline-flex;
+  overflow: visible;
+}
+.ws-picker-trigger {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  cursor: pointer;
+  max-width: 120px;
+  transition: border-color 0.15s;
+}
+.ws-picker-trigger:hover { border-color: var(--accent); }
+.ws-picker-name {
+  font-size: 11.5px; font-weight: 500; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 90px;
+}
+.ws-picker-arrow { font-size: 9px; color: var(--text-muted); flex-shrink: 0; }
+.ws-picker.open .ws-picker-trigger { border-color: var(--accent); }
+.ws-picker-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 200;
+  min-width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+  overflow: hidden;
+}
+.ws-picker-list {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.ws-picker-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  transition: background 0.1s;
+}
+.ws-picker-item:hover { background: var(--bg-soft); }
+.ws-picker-item.selected {
+  background: var(--accent-soft, rgba(107,76,138,0.12));
+  color: var(--accent, #6B4C8A);
+  font-weight: 600;
+}
+.ws-picker-item-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 130px;
+}
+.ws-picker-item-del {
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; color: var(--text-muted);
+  padding: 2px 4px; opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.ws-picker-item:hover .ws-picker-item-del { opacity: 1; }
+.ws-picker-item-del:hover { color: #e74c3c; }
+.ws-picker-empty {
+  padding: 12px; text-align: center;
+  font-size: 12px; color: var(--text-muted);
+}
+.ws-picker-actions {
+  display: flex; border-top: 1px solid var(--border);
+}
+.ws-picker-actions button {
+  flex: 1;
+  padding: 7px 8px;
+  background: transparent; border: none;
+  font-size: 12px; cursor: pointer;
+  color: var(--text-muted);
+  transition: color 0.15s, background 0.15s;
+}
+.ws-picker-actions button:hover {
+  color: var(--accent);
+  background: var(--bg-soft);
+}
+.ws-picker-actions button + button { border-left: 1px solid var(--border); }
 .chat-files-refresh:hover { color: var(--primary); border-color: var(--primary); }
 
 .chat-files-body { flex: 1; overflow-y: auto; padding: 4px 0; min-height: 0; }

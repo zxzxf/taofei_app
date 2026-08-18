@@ -10,14 +10,14 @@ REM    build-desktop.bat /e = 只打包安装包（electron-builder）
 REM    build-desktop.bat /u = 只更新 D:\TaofeiAI（免安装覆盖）
 REM
 REM  产物:
-REM    dist\CrewAIWorkbench_v3\CrewAIWorkbench\  = PyInstaller 后端（含已构建的前端）
-REM    desktop\release_v3\TaofeiAI Setup 1.2.1.exe = NSIS 安装包
+REM    dist\CrewAIWorkbench.exe                   = PyInstaller 后端（onefile，含已构建的前端）
+REM    desktop\release_v3\TaofeiAI Setup 1.2.1.exe = NSIS 安装包（最终发布物）
 REM    desktop\release_v3\win-unpacked\            = 免安装版
 REM
 REM  前置: .venv 已创建 + Node.js 已安装
 REM  自动步骤:
 REM    [0/4] frontend-vue 执行 npm install + npm run build → 输出到 项目根\frontend\
-REM    [1/4] PyInstaller 收集 frontend\ 与 backend\ → dist\CrewAIWorkbench_v3\
+REM    [1/4] PyInstaller 收集 frontend\ 与 backend\ → dist\CrewAIWorkbench.exe（onefile）
 REM    [2/4] electron-builder 组合 Electron + extraResources → release_v3\
 REM    [3/4] （可选）复制 win-unpacked 到 D:\TaofeiAI
 REM ============================================
@@ -36,14 +36,14 @@ set "ELECTRON_RUN_AS_NODE="
 set "CI=false"
 
 REM ---------- 路径变量 ----------
-set "BACKEND_VER=v3"
 set "RELEASE_VER=release_v3"
 set "INSTALL_DIR=D:\TaofeiAI"
 
 cd /d "%~dp0.."
 set "PROJECT_ROOT=%cd%"
 set "DESKTOP_DIR=%PROJECT_ROOT%\desktop"
-set "DIST_DIR=%PROJECT_ROOT%\dist\CrewAIWorkbench_%BACKEND_VER%\CrewAIWorkbench"
+set "DIST_DIR=%PROJECT_ROOT%\dist"
+set "BACKEND_EXE=%DIST_DIR%\CrewAIWorkbench.exe"
 
 echo.
 echo ========================================
@@ -112,19 +112,19 @@ if errorlevel 1 (
     if errorlevel 1 ( echo [ERROR] PyInstaller install failed & pause & exit /b 1 )
 )
 
-echo        PyInstaller building...
+echo        PyInstaller building (onefile)...
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean ^
-    --distpath "dist\CrewAIWorkbench_%BACKEND_VER%" ^
-    --workpath "build\CrewAIWorkbench_%BACKEND_VER%" ^
+    --distpath "dist" ^
+    --workpath "build\pyinstaller" ^
     build\CrewAIWorkbench.spec
 if errorlevel 1 ( echo [ERROR] Backend build failed & pause & exit /b 1 )
 
-if not exist "%DIST_DIR%\CrewAIWorkbench.exe" (
-    echo [ERROR] Backend exe not found: %DIST_DIR%
+if not exist "%BACKEND_EXE%" (
+    echo [ERROR] Backend exe not found: %BACKEND_EXE%
     pause
     exit /b 1
 )
-echo       [OK] Backend: %DIST_DIR%
+echo       [OK] Backend: %BACKEND_EXE%
 
 if /i "%MODE%"=="backend" goto done
 
@@ -206,7 +206,7 @@ echo ========================================
 echo  Build complete!
 echo ========================================
 echo.
-echo  Backend:   %PROJECT_ROOT%\dist\CrewAIWorkbench_%BACKEND_VER%\CrewAIWorkbench\
+echo  Backend:   %PROJECT_ROOT%\dist\CrewAIWorkbench.exe
 echo  Installer: %DESKTOP_DIR%\%RELEASE_VER%\TaofeiAI Setup 1.2.1.exe
 echo  Portable:  %DESKTOP_DIR%\%RELEASE_VER%\win-unpacked\
 echo  Installed: %INSTALL_DIR%

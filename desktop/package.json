@@ -32,18 +32,12 @@
     ],
     "extraResources": [
       {
-        "from": "../dist/CrewAIWorkbench_v3/CrewAIWorkbench",
-        "to": "backend",
-        "filter": [
-          "**/*"
-        ]
+        "from": "../dist/CrewAIWorkbench.exe",
+        "to": "backend/CrewAIWorkbench.exe"
       },
       {
         "from": "../.env",
-        "to": "backend/.env",
-        "filter": [
-          "**/*"
-        ]
+        "to": "backend/.env"
       }
     ],
     "win": {

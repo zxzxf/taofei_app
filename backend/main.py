@@ -49,12 +49,11 @@ if not os.getenv("DEEPSEEK_API_KEY") and not PACKAGED:
     load_dotenv(BASE_DIR / ".env")  # 开发模式兜底再读项目根 .env
 
 try:
-    from crewai import Agent, Crew, Process, Task  # noqa: E402
-    from langchain_community.chat_models import ChatOpenAI  # noqa: E402
+    from crewai import Agent, Crew, LLM, Process, Task  # noqa: E402
     HAS_CREWAI = True
 except ImportError:
     HAS_CREWAI = False
-    Agent = Crew = Process = Task = ChatOpenAI = None  # type: ignore
+    Agent = Crew = LLM = Process = Task = None  # type: ignore
 
 app = FastAPI(title="CrewAI Workbench", version="1.2.0")
 
@@ -69,7 +68,7 @@ MODEL_PRESETS_FILE = EXE_DIR / "model_presets.json"
 
 DEFAULT_MODEL_CONFIG: dict[str, str] = {
     "provider": "deepseek",
-    "model": "deepseek/deepseek-chat",
+    "model": "deepseek-chat",
     "api_key": "",
     "base_url": "https://api.deepseek.com",
 }
@@ -253,11 +252,36 @@ def _get_current_workspace() -> dict | None:
     return None
 
 
-def _build_llm():
-    """根据用户配置动态构建 LLM（兼容 provider/model 与裸 model 格式）。"""
+def _build_llm(preset_id: str | None = None):
+    """根据用户配置动态构建 LLM（兼容 provider/model 与裸 model 格式）。
+
+    - preset_id 指定时，从 model_presets.json 找到对应预设，使用其 model/api_key/base_url
+    - 未指定时，回退到全局 model_config.json（顶栏激活预设的写入位置）
+
+    使用 crewai 自带的 LLM 包装（底层走 openai SDK），不依赖 langchain_community，
+    这样在精简依赖下也能工作。
+    """
     if not HAS_CREWAI:
         return None
     cfg = _load_model_config()
+    if preset_id:
+        # 优先用会话指定的预设
+        try:
+            presets_data = _load_presets()
+            for p in presets_data.get("presets", []):
+                if p.get("id") == preset_id:
+                    pmodel = (p.get("model") or "").strip()
+                    pkey = (p.get("api_key") or "").strip()
+                    pbase = (p.get("base_url") or "").strip()
+                    if pmodel:
+                        cfg["model"] = pmodel
+                    if pkey:
+                        cfg["api_key"] = pkey
+                    if pbase:
+                        cfg["base_url"] = pbase
+                    break
+        except Exception:
+            pass
     model = cfg.get("model") or DEFAULT_MODEL_CONFIG["model"]
     api_key = cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "")
     base_url = (cfg.get("base_url") or "").strip() or None
@@ -266,7 +290,7 @@ def _build_llm():
         kwargs["base_url"] = base_url
     if api_key:
         kwargs["api_key"] = api_key
-    return ChatOpenAI(**kwargs)
+    return LLM(**kwargs)
 
 # ---------------------------------------------------------------
 # 日志采集系统
@@ -604,6 +628,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
+    model_preset_id: str | None = None  # 会话级模型：指定时优先用该预设的 LLM 配置
 
 
 @app.get("/api/health")
@@ -1006,16 +1031,21 @@ def chat(req: ChatRequest):
     if not HAS_CREWAI:
         return JSONResponse({"error": "LLM 功能不可用：crewai/langchain 未安装"}, status_code=503)
     try:
-        llm = _build_llm()
+        llm = _build_llm(req.model_preset_id)
         if llm is None:
             return JSONResponse({"error": "LLM 初始化失败，请检查模型配置"}, status_code=500)
-        # 构造适合 LLM.call 的消息列表
-        messages = [{"role": m.role, "content": m.content} for m in req.messages]
+        # 构造适合 LLM.call 的消息列表（前端历史中 AI 消息 role 为 'ai'，需映射为 'assistant'）
+        messages = [{"role": ("assistant" if m.role == "ai" else m.role), "content": m.content} for m in req.messages]
         skill_prompt = _build_skill_system_prompt(messages)
         if skill_prompt:
             messages = [{"role": "system", "content": skill_prompt}] + messages
-        reply = llm.invoke(messages)
-        reply_text = reply.content if hasattr(reply, 'content') else str(reply)
+        try:
+            reply_text = llm.call(messages)
+        except TypeError:
+            # 极少数老版本 crewai 可能仅支持字符串，退化为单条 prompt
+            reply_text = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
+        if not isinstance(reply_text, str):
+            reply_text = str(reply_text)
         log_buffer.emit(
             "INFO", "system",
             f"对话中心调用 LLM：{len(messages)} 条消息"
@@ -1489,8 +1519,11 @@ def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
             raise RuntimeError("LLM 初始化失败，请检查模型配置")
 
         def llm_call(messages: list[dict]) -> str:
-            result = llm.invoke(messages)
-            return result.content if hasattr(result, 'content') else str(result)
+            try:
+                result = llm.call(messages)
+            except TypeError:
+                result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
+            return result if isinstance(result, str) else str(result)
 
         def wlog(level: str, message: str) -> None:
             log_buffer.emit(level, "workflow", message, task_id)
