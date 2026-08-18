@@ -2058,7 +2058,10 @@ def _can_show_gui_on_windows() -> bool:
 def browse_directory():
     """弹出系统目录选择对话框，返回用户选择的目录路径。
 
-    - Windows + 交互桌面会话：用 PowerShell 调原生 FolderBrowserDialog（置顶）
+    - Windows + 交互桌面会话：用 PowerShell 调 OpenFileDialog（ValidateNames=False hack）
+      实现现代 Windows 资源管理器风格的文件夹选择对话框。
+      通过 TopMost 属主窗体置顶（否则弹窗会落到其它窗口后面），并声明 DPI 感知
+      （否则高分屏缩放下对话框会被系统位图拉伸放大）
     - 其它环境：返回 ``{ unsupported: true }``，前端会退回"粘贴路径"方式，避免
       请求阻塞在 UI 无法显示的环境里。
     - 接口会阻塞等待用户在弹窗完成选择；取消 / 超时返回 ``{ canceled: true }``
@@ -2066,23 +2069,17 @@ def browse_directory():
     if not _can_show_gui_on_windows():
         return {"unsupported": True, "canceled": False, "path": ""}
     try:
-        ps_cmd = (
-            "Add-Type -AssemblyName System.Windows.Forms; "
-            "[System.Windows.Forms.Application]::EnableVisualStyles(); "
-            "$form = New-Object System.Windows.Forms.Form; "
-            "$form.TopMost = $true; "
-            "$form.ShowInTaskbar = $false; "
-            "$form.WindowState = 'Minimized'; "
-            "$form.CreateControl(); "
-            "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
-            "$f.Description = '选择工作目录'; "
-            "$f.ShowNewFolderButton = $true; "
-            "$r = $f.ShowDialog($form); "
-            "$form.Close(); "
-            "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath } else { '' }"
-        )
+        import shutil
+        ps_exe = shutil.which("powershell.exe") or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        if not os.path.isfile(ps_exe):
+            return {"unsupported": True, "canceled": False, "path": "", "reason": "powershell.exe not found"}
+
+        script_path = Path(__file__).resolve().parent / "browse_directory.ps1"
+        if not script_path.exists():
+            return {"unsupported": True, "canceled": False, "path": "", "reason": "browse_directory.ps1 not found"}
+
         result = subprocess.run(
-            ["powershell.exe", "-Sta", "-WindowStyle", "Hidden", "-NoProfile", "-Command", ps_cmd],
+            [ps_exe, "-Sta", "-WindowStyle", "Hidden", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
             capture_output=True,
             text=True,
             timeout=120,
@@ -2090,7 +2087,7 @@ def browse_directory():
             check=False,
         )
         path = (result.stdout or "").strip()
-        if not path:
+        if not path or path == "Folder Selection.":
             return {"unsupported": False, "canceled": True, "path": ""}
         normalized = _normalize_workspace_path(path)
         return {"unsupported": False, "canceled": False, "path": normalized}

@@ -9,94 +9,155 @@
     </div>
     <div class="settings-content">
       <div v-show="tab === 'model'" class="settings-panel active">
-        <div class="settings-form">
-          <div class="field">
-            <label>配置名称</label>
-            <input v-model="config.name" type="text" placeholder="例如：DeepSeek 主账号、OpenAI 备用、Anthropic 实验">
-            <div class="hint">给这套配置起个名字，保存后会出现在下方列表中</div>
+        <div class="model-config-page">
+          <!-- 页面标题栏 -->
+          <div class="model-page-header">
+            <div class="model-page-title-group">
+              <span class="model-page-icon">⚙</span>
+              <div>
+                <div class="model-page-title">模型配置</div>
+                <div class="model-page-subtitle">管理AI模型服务商和API密钥</div>
+              </div>
+            </div>
+            <button class="btn-primary-sm" @click="showForm = !showForm">
+              {{ showForm ? '收起' : '+ 新建配置' }}
+            </button>
           </div>
-          <div class="field">
-            <label>模型服务商</label>
-            <select v-model="config.provider">
-              <option value="deepseek">DeepSeek</option>
-              <option value="openai">OpenAI</option>
-              <option value="qwen">通义千问</option>
-              <option value="glm">智谱 GLM</option>
-              <option value="moonshot">Moonshot</option>
-              <option value="ollama">Ollama</option>
-              <option value="custom">自定义</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>模型名称</label>
-            <input v-model="config.model" type="text" placeholder="deepseek/deepseek-chat">
-            <div class="hint">例如 deepseek/deepseek-chat、gpt-4o-mini、qwen/qwen-plus</div>
-          </div>
-          <div class="field">
-            <label>API Key</label>
-            <div class="key-row">
-              <input v-model="config.apiKey" :type="showKey ? 'text' : 'password'" placeholder="输入 API Key">
-              <button class="btn-ghost" @click="showKey = !showKey">{{ showKey ? '隐藏' : '显示' }}</button>
+
+          <!-- 快速添加模板 -->
+          <div class="quick-add-section">
+            <div class="quick-add-title">模型模板 · 快速添加</div>
+            <div class="quick-add-chips">
+              <div
+                v-for="p in providerList"
+                :key="p.key"
+                class="quick-chip"
+                :class="{ added: isProviderAdded(p.key) }"
+                @click="quickAdd(p)"
+              >
+                <span class="quick-chip-icon">{{ p.icon }}</span>
+                <span class="quick-chip-name">{{ p.name }}</span>
+                <span class="quick-chip-action">{{ isProviderAdded(p.key) ? '✓' : '+' }}</span>
+              </div>
             </div>
           </div>
-          <div class="field">
-            <label>Base URL（可选）</label>
-            <input v-model="config.baseUrl" type="text" placeholder="https://api.deepseek.com">
-          </div>
-          <div style="display:flex;justify-content:flex-end;gap:10px;align-items:center;flex-wrap:wrap;">
-            <span v-if="testResult" class="test-result" :class="testResult.ok ? 'ok' : 'fail'">
-              <template v-if="testResult.ok">✓ 连接成功（{{ testResult.latency_ms }} ms）</template>
-              <template v-else>✗ {{ testResult.error }}<span v-if="testResult.latency_ms > 0">（{{ testResult.latency_ms }} ms）</span></template>
-            </span>
-            <button class="btn-ghost" :disabled="testing" @click="testConnection">
-              {{ testing ? '测试中...' : '测试连接' }}
-            </button>
-            <button class="btn-save" :disabled="saving" @click="saveModel" style="background:linear-gradient(135deg,var(--primary),var(--purple));border:none;color:#fff;border-radius:8px;padding:9px 24px;font-size:14px;font-weight:600;cursor:pointer;">
-              {{ saving ? '保存中...' : '保存模型配置' }}
-            </button>
-          </div>
-          <div v-if="saveMessage" class="save-tip" :class="saveMessage.type">{{ saveMessage.text }}</div>
-        </div>
 
-        <!-- 已保存的配置列表 -->
-        <div class="settings-form" style="margin-top:18px;">
-          <div class="field-title">
-            <span>已保存的配置</span>
-            <span class="hint-inline">点击「使用」即可切换当前模型</span>
+          <!-- 新建/编辑表单（可折叠） -->
+          <div v-show="showForm" class="model-form-card">
+            <div class="form-row-2col">
+              <div class="field">
+                <label>配置名称</label>
+                <input v-model="config.name" type="text" placeholder="例如：DeepSeek 主账号">
+              </div>
+              <div class="field">
+                <label>模型服务商</label>
+                <select v-model="config.provider">
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="qwen">通义千问</option>
+                  <option value="glm">智谱 GLM</option>
+                  <option value="moonshot">Moonshot</option>
+                  <option value="ollama">Ollama</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row-2col">
+              <div class="field">
+                <label>模型名称</label>
+                <input v-model="config.model" type="text" placeholder="deepseek-chat">
+              </div>
+              <div class="field">
+                <label>Base URL</label>
+                <input v-model="config.baseUrl" type="text" placeholder="https://api.deepseek.com">
+              </div>
+            </div>
+            <div class="field">
+              <label>API Key</label>
+              <div class="key-row">
+                <input v-model="config.apiKey" :type="showKey ? 'text' : 'password'" placeholder="输入 API Key">
+                <button class="btn-ghost" @click="showKey = !showKey">{{ showKey ? '隐藏' : '显示' }}</button>
+              </div>
+            </div>
+            <div class="form-actions">
+              <span v-if="testResult" class="test-result" :class="testResult.ok ? 'ok' : 'fail'">
+                <template v-if="testResult.ok">✓ {{ testResult.latency_ms }}ms</template>
+                <template v-else>✗ {{ testResult.error }}</template>
+              </span>
+              <button class="btn-ghost" :disabled="testing" @click="testConnection">
+                {{ testing ? '测试中...' : '测试连接' }}
+              </button>
+              <button class="btn-save" :disabled="saving" @click="saveModel">
+                {{ saving ? '保存中...' : '保存模型配置' }}
+              </button>
+            </div>
+            <div v-if="saveMessage" class="save-tip" :class="saveMessage.type">{{ saveMessage.text }}</div>
           </div>
-          <div v-if="presets.length === 0" class="empty-tip">
-            还没有保存的配置。填好上方表单后点击「保存模型配置」即可出现在这里。
+
+          <!-- 筛选栏 -->
+          <div class="model-filter-bar">
+            <div class="filter-counter">
+              已保存配置 <strong>{{ filteredPresets.length }}</strong> / {{ presets.length }} 个
+            </div>
+            <div class="filter-search">
+              <input v-model="searchQuery" type="text" placeholder="搜索配置名称或模型…">
+            </div>
+            <div class="filter-tabs">
+              <button :class="{ active: filterTab === 'all' }" @click="filterTab = 'all'">全部</button>
+              <button :class="{ active: filterTab === 'active' }" @click="filterTab = 'active'">当前</button>
+              <button :class="{ active: filterTab === 'other' }" @click="filterTab = 'other'">其他</button>
+            </div>
           </div>
-          <div v-else class="preset-list">
+
+          <!-- 配置列表 -->
+          <div v-if="listLoading && presets.length === 0" class="empty-tip">加载中…</div>
+          <div v-else-if="filteredPresets.length === 0" class="empty-tip">
+            {{ presets.length === 0 ? '还没有保存的配置，点击「新建配置」开始' : '没有匹配的配置' }}
+          </div>
+          <div v-else class="preset-list" :class="{ 'preset-list-loading': listLoading }">
             <div
-              v-for="p in presets"
+              v-for="p in paginatedPresets"
               :key="p.id"
-              class="preset-item"
+              class="preset-card"
               :class="{ active: p.id === activePresetId }"
             >
-              <div class="preset-main">
-                <div class="preset-name">
-                  <span>{{ p.name }}</span>
-                  <span v-if="p.id === activePresetId" class="badge-current">✓ 当前</span>
+              <div class="preset-card-icon">{{ getProviderIcon(p.provider) }}</div>
+              <div class="preset-card-body">
+                <div class="preset-card-top">
+                  <span class="preset-card-name">{{ p.name }}</span>
+                  <span v-if="p.id === activePresetId" class="badge-current">当前</span>
+                  <span v-else class="badge-inactive">未启用</span>
                 </div>
-                <div class="preset-meta">
+                <div class="preset-card-meta">
                   <span class="chip">{{ p.provider }}</span>
                   <span class="preset-model">{{ p.model || '(未填)' }}</span>
                   <span v-if="p.base_url" class="preset-url">{{ p.base_url }}</span>
-                </div>
-                <div class="preset-key">
-                  <span>API Key: {{ p.has_api_key ? p.api_key_masked : '未设置' }}</span>
+                  <span class="preset-key">{{ p.has_api_key ? p.api_key_masked : '未设置Key' }}</span>
                 </div>
               </div>
-              <div class="preset-actions">
-                <button class="btn-ghost" :disabled="loadingId === p.id" @click="usePreset(p)">
-                  {{ p.id === activePresetId ? '✓ 使用中' : '使用' }}
+              <div class="preset-card-actions">
+                <button class="btn-ghost btn-sm" :disabled="saving || loadingId === p.id" @click="usePreset(p)">
+                  {{ p.id === activePresetId ? '✓' : '使用' }}
                 </button>
-                <button class="btn-danger-text" :disabled="loadingId === p.id" @click="deletePreset(p)">
+                <button class="btn-danger-text btn-sm" :disabled="saving || loadingId === p.id" @click="deletePreset(p)">
                   删除
                 </button>
               </div>
             </div>
+          </div>
+
+          <!-- 分页 -->
+          <div v-if="totalPages > 1" class="preset-pagination">
+            <button class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">‹</button>
+            <button
+              v-for="pg in pageNumbers"
+              :key="pg"
+              class="page-num"
+              :class="{ active: pg === currentPage }"
+              @click="goToPage(pg)"
+            >{{ pg }}</button>
+            <button class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">›</button>
+            <span class="page-info">{{ currentPage }}/{{ totalPages }}页 · {{ filteredPresets.length }}条</span>
           </div>
         </div>
       </div>
@@ -187,7 +248,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 
 const tab = ref('model')
 const showKey = ref(false)
@@ -208,7 +269,70 @@ const presets = ref([])          // [{id, name, provider, model, base_url, has_a
 const activePresetId = ref('')   // 后端当前激活预设 id
 const loadingId = ref('')        // 正在操作（使用/删除）的预设 id，用于按钮 loading
 const saving = ref(false)        // 保存按钮 loading
+const listLoading = ref(false)   // 预设列表加载中
 const saveMessage = ref(null)    // {type: 'ok'|'err', text: '...'}
+const showForm = ref(false)      // 表单折叠
+const searchQuery = ref('')      // 搜索关键词
+const filterTab = ref('all')     // 筛选标签: all / active / other
+
+// 服务商模板
+const providerList = [
+  { key: 'deepseek', name: 'DeepSeek', icon: '🧠', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com' },
+  { key: 'openai', name: 'OpenAI', icon: '🌐', model: 'gpt-4o-mini', baseUrl: 'https://api.openai.com/v1' },
+  { key: 'qwen', name: '通义千问', icon: '🌟', model: 'qwen-plus', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  { key: 'glm', name: '智谱GLM', icon: '⚡', model: 'glm-4-flash', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
+  { key: 'moonshot', name: 'Moonshot', icon: '🌙', model: 'moonshot-v1-8k', baseUrl: 'https://api.moonshot.cn/v1' },
+  { key: 'ollama', name: 'Ollama', icon: '🦙', model: 'llama3.2', baseUrl: 'http://localhost:11434' },
+]
+
+function isProviderAdded(key) {
+  return presets.value.some(p => p.provider === key)
+}
+
+function quickAdd(p) {
+  config.value = { name: p.name, provider: p.key, model: p.model, apiKey: '', baseUrl: p.baseUrl }
+  showForm.value = true
+}
+
+function getProviderIcon(provider) {
+  const p = providerList.find(x => x.key === provider)
+  return p ? p.icon : '🔌'
+}
+
+// 筛选后的预设列表
+const filteredPresets = computed(() => {
+  let list = presets.value
+  if (filterTab.value === 'active') list = list.filter(p => p.id === activePresetId.value)
+  else if (filterTab.value === 'other') list = list.filter(p => p.id !== activePresetId.value)
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) list = list.filter(p =>
+    (p.name || '').toLowerCase().includes(q) ||
+    (p.model || '').toLowerCase().includes(q) ||
+    (p.provider || '').toLowerCase().includes(q)
+  )
+  return list
+})
+
+// 分页
+const currentPage = ref(1)
+const pageSize = 4
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredPresets.value.length / pageSize)))
+const paginatedPresets = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return filteredPresets.value.slice(start, start + pageSize)
+})
+const pageNumbers = computed(() => {
+  const pages = []
+  for (let i = 1; i <= totalPages.value; i++) pages.push(i)
+  return pages
+})
+function goToPage(pg) {
+  currentPage.value = Math.max(1, Math.min(totalPages.value, pg))
+}
+watch(totalPages, (tp) => {
+  if (currentPage.value > tp) currentPage.value = tp
+})
+watch([searchQuery, filterTab], () => { currentPage.value = 1 })
 
 function applyTheme() {
   document.body.classList.toggle('light-theme', themeMode.value === 'light')
@@ -221,14 +345,26 @@ function applyBodyClass() {
 }
 
 async function loadPresets() {
+  listLoading.value = true
   try {
     const res = await fetch('/api/model-presets')
     const data = await res.json()
     presets.value = data.presets || []
     activePresetId.value = data.active_id || ''
+    // 跳转到包含当前激活预设的页
+    if (activePresetId.value) {
+      const idx = presets.value.findIndex(p => p.id === activePresetId.value)
+      if (idx >= 0) currentPage.value = Math.floor(idx / pageSize) + 1
+    }
   } catch (e) {
     console.error('加载预设列表失败', e)
+  } finally {
+    listLoading.value = false
   }
+}
+
+function notifyModelChanged() {
+  window.dispatchEvent(new Event('taofei-model-changed'))
 }
 
 function showSaveTip(type, text, timeout = 2400) {
@@ -243,7 +379,7 @@ function showSaveTip(type, text, timeout = 2400) {
 }
 
 async function saveModel() {
-  if (saving.value) return
+  if (saving.value || loadingId.value) return
   if (!config.value.model.trim()) {
     showSaveTip('err', '请先填写模型名称')
     return
@@ -269,8 +405,11 @@ async function saveModel() {
     const saved = data.preset || {}
     activePresetId.value = data.active_id || saved.id || ''
     showSaveTip('ok', `已保存为「${saved.name || '新配置'}」，已切换为当前模型`)
+    showForm.value = false
     // 丢弃过期的 localStorage 缓存（保存成功后以后端配置为唯一真相源）
     try { localStorage.removeItem('model_config') } catch (e) { /* ignore */ }
+    // 通知其他组件（如 ChatView）模型已变更
+    notifyModelChanged()
     // 重新拉取列表，确保 server-side 排序/字段一致
     await loadPresets()
   } catch (e) {
@@ -281,7 +420,7 @@ async function saveModel() {
 }
 
 async function usePreset(p) {
-  if (loadingId.value) return
+  if (saving.value || loadingId.value) return
   loadingId.value = p.id
   try {
     const res = await fetch(`/api/model-presets/${p.id}/activate`, { method: 'POST' })
@@ -299,11 +438,13 @@ async function usePreset(p) {
       apiKey: '',
       baseUrl: p.base_url,
     }
+    showForm.value = true
     // 丢弃过期的 localStorage 缓存（以后端激活预设为准）
     try { localStorage.removeItem('model_config') } catch (e) { /* ignore */ }
     if (p.id === activePresetId.value) {
       showSaveTip('ok', `已使用「${p.name}」作为当前模型，后续对话将基于此配置`)
     }
+    notifyModelChanged()
     await loadPresets()
   } catch (e) {
     showSaveTip('err', '切换失败：' + e.message)
@@ -313,7 +454,7 @@ async function usePreset(p) {
 }
 
 async function deletePreset(p) {
-  if (loadingId.value) return
+  if (saving.value || loadingId.value) return
   if (!confirm(`确定删除配置「${p.name}」？`)) return
   loadingId.value = p.id
   try {
@@ -325,6 +466,7 @@ async function deletePreset(p) {
     }
     activePresetId.value = data.active_id || ''
     showSaveTip('ok', `已删除「${p.name}」`)
+    notifyModelChanged()
     await loadPresets()
   } catch (e) {
     showSaveTip('err', '删除失败：' + e.message)

@@ -21,6 +21,7 @@
   "build": {
     "appId": "com.taofei.workbench",
     "productName": "TaofeiAI",
+    "npmRebuild": false,
     "directories": {
       "output": "release_v3",
       "buildResources": "."

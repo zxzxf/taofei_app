@@ -174,19 +174,19 @@
                             stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
                           <path d="M9 11h6M12 8v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span>浏览器打开本地目录</span>
+                        <span>打开本地目录</span>
                       </button>
-                      <input
-                        ref="workspaceDirInput"
-                        type="file"
-                        webkitdirectory
-                        directory
-                        style="display:none"
-                        @change="onWorkspaceDirSelected"
-                      />
                     </div>
                   </div>
                 </div>
+            <input
+              ref="workspaceDirInput"
+              type="file"
+              webkitdirectory
+              directory
+              style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;overflow:hidden"
+              @change="onWorkspaceDirSelected"
+            />
             <span class="chat-files-arrow" @click="filesCollapsed = !filesCollapsed" style="cursor:pointer; display:none;">{{ filesCollapsed ? '▸' : '▾' }}</span>
           </div>
           <div class="chat-files-actions" v-if="!filesCollapsed">
@@ -697,7 +697,7 @@ async function loadWorkspaceList() {
   } catch (e) { /* ignore */ }
 }
 
-function pickWorkspace(ws) {
+async function pickWorkspace(ws) {
   if (!ws || !ws.id) return
   if (ws.id === currentWorkspaceId.value) {
     wsPickerOpen.value = false
@@ -708,6 +708,10 @@ function pickWorkspace(ws) {
   wsPath.value = ws.path
   expandedDirs.value = {}
   wsPickerOpen.value = false
+  // 持久化到后端：否则刷新页面后回退，且聊天上下文注入会用错工作空间
+  try {
+    await fetch(`/api/workspaces/${ws.id}/switch`, { method: 'POST' })
+  } catch (_e) { /* 失败时仍保持本地切换 */ }
   loadWorkspaceFiles()
 }
 
@@ -732,61 +736,58 @@ async function removeWorkspace(id) {
 }
 
 async function createWorkspace() {
-  // 「浏览器打开本地目录」= 浏览本地目录 → 选一个本地文件夹作为工作空间。
+  // 「打开本地目录」= 选择一个本地文件夹作为工作空间。
   // 优先级：
-  //   1) 浏览器原生目录选择（webkitdirectory input）：真正让用户在浏览器里浏览本地文件夹，
-  //      然后把文件上传到后端创建临时工作空间。这是浏览器环境下最可靠的方式。
+  //   1) 后端原生对话框 /api/browse-directory：Windows 现代资源管理器风格目录选择
+  //      （接口会阻塞等待用户选择，前端设 120s 超时）
   //   2) Electron 桌面端：window.desktop.openDirectoryPicker()
-  //      → 调用主进程 dialog.showOpenDialog，弹系统原生「选择文件夹」对话框。
-  //   3) 后端 PowerShell FolderBrowserDialog：仅当后端运行在交互桌面会话时才有效，
-  //      沙箱/服务环境通常弹不出来，作为次选兜底。
-  //   4) 以上都不可用 / 用户取消：prompt 粘贴路径兜底。
-  // 用户在任何一级真正点了取消 → 静默 return，不再二次骚扰弹 prompt。
+  //   3) 浏览器 webkitdirectory input：上传目录副本（后端不支持原生对话框的环境）
+  //   4) prompt 粘贴路径兜底。
+  // 用户在任何一级真正点了取消 → 静默 return。
+
+  // 原生对话框弹出期间收起页面下拉浮层，避免两层选择界面叠在一起
+  wsPickerOpen.value = false
 
   const desktopApi = window.desktop
   const isElectron = typeof desktopApi === 'object' && desktopApi && typeof desktopApi.openDirectoryPicker === 'function'
 
-  // --- 路径 1：浏览器用 <input webkitdirectory> 选目录并上传 ---
-  if (!isElectron && workspaceDirInput.value) {
-    workspaceDirInput.value.click()
-    return
-  }
-
   let path = ''
 
-  // --- 路径 2：Electron 桌面端原生对话框 ---
-  if (isElectron) {
+  // --- 路径 1：后端原生对话框 ---
+  if (!path) {
+    try {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 120000)
+      const res = await fetch('/api/browse-directory', { signal: ctrl.signal })
+      clearTimeout(timer)
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}))
+        if (data && data.canceled) return
+        if (data && data.path) path = String(data.path)
+      }
+    } catch (_e) { /* 超时/网络异常 → 走下一级 */ }
+  }
+
+  // --- 路径 2：Electron 桌面端 ---
+  if (!path && isElectron) {
     try {
       const pick = await desktopApi.openDirectoryPicker()
       if (pick && pick.canceled) return
       if (pick && pick.path) path = String(pick.path)
-    } catch (_e) {
-      // IPC 异常：往下走 /api/browse-directory 或 prompt 兜底
-    }
+    } catch (_e) {}
   }
 
-  // --- 路径 3：后端弹原生 FolderBrowserDialog（开发 / 浏览器打开时可用）---
-  if (!path) {
-    try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 30_000)
-      const res = await fetch('/api/browse-directory', { signal: controller.signal })
-      clearTimeout(timer)
-      if (res.ok) {
-        const data = await res.json().catch(() => ({}))
-        if (data?.canceled) return
-        if (data?.path) path = String(data.path)
-      }
-    } catch (_e) {
-      // 网络错误 / 后端沙箱无法弹对话框 / 用户超时：静默走 fallback
-    }
+  // --- 路径 3：浏览器 webkitdirectory input ---
+  if (!path && !isElectron && workspaceDirInput.value) {
+    workspaceDirInput.value.click()
+    return
   }
 
-  // --- 路径 4：兜底 prompt 粘贴路径（服务器环境 / 远程会话）---
+  // --- 路径 4：prompt 粘贴路径 ---
   if (!path) {
     const input = prompt(
-      '请粘贴或输入要打开的本地文件夹路径：\n（例如 E:\\projects\\my-app）',
-      'E:\\20260814\\taofei_app'
+      '请粘贴或输入要打开的本地文件夹路径：\n（例如 D:\\projects\\my-app）',
+      'D:\\workspaces\\taofei_plateform\\taofei_app'
     )
     if (!input) return
     path = input
