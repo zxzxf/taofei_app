@@ -857,7 +857,7 @@ async function loadWorkspaceFiles() {
       wsPath.value = ''
       return
     }
-    const res = await fetch(`/api/workspaces/${currentWorkspaceId.value}/files?max_depth=4`)
+    const res = await fetch(`/api/workspaces/${currentWorkspaceId.value}/files?max_depth=6&max_files=5000`)
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       throw new Error(err.error || `HTTP ${res.status}`)

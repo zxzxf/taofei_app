@@ -48,12 +48,21 @@ load_dotenv(EXE_DIR / ".env")  # 先读 exe 同目录 .env
 if not os.getenv("DEEPSEEK_API_KEY") and not PACKAGED:
     load_dotenv(BASE_DIR / ".env")  # 开发模式兜底再读项目根 .env
 
+# 注意：部分 crewai 版本（或安装方式）的顶级导出中不再包含独立的 LLM 类，
+# 也没有 crewai.llms 子模块；因此将核心类（Agent/Crew/Process/Task）与 LLM
+# 包装类分开导入：只要核心类存在即认为 HAS_CREWAI=True，LLM 缺失时由下方
+# _LLMCompat 适配器基于 langchain_openai 提供等效能力。
 try:
-    from crewai import Agent, Crew, LLM, Process, Task  # noqa: E402
+    from crewai import Agent, Crew, Process, Task  # noqa: E402
     HAS_CREWAI = True
 except ImportError:
     HAS_CREWAI = False
-    Agent = Crew = LLM = Process = Task = None  # type: ignore
+    Agent = Crew = Process = Task = None  # type: ignore
+
+try:
+    from crewai import LLM  # noqa: E402,F811
+except ImportError:
+    LLM = None  # type: ignore
 
 app = FastAPI(title="CrewAI Workbench", version="1.2.0")
 
@@ -197,12 +206,28 @@ def _normalize_workspace_path(path: str) -> str:
     return str(p)
 
 
-def _list_workspace_files(path: str, max_depth: int = 3) -> list[dict]:
+def _list_workspace_files(path: str, max_depth: int = 3, max_files: int = 2000) -> list[dict]:
     """安全地列出工作空间目录下的文件（限制深度、跳过隐藏目录、限制数量）。"""
     root = Path(path).resolve()
     files = []
     count = 0
-    max_files = 500
+    # 跳过常见的大体积无意义目录（依赖缓存、IDE 配置、版本控制元数据）
+    SKIP_DIR_NAMES = {
+        "__pycache__",
+        "node_modules",
+        ".git",
+        ".svn",
+        ".hg",
+        ".venv",
+        "venv",
+        "env",
+        "target",   # Rust build 缓存
+        ".idea",    # JetBrains IDE 配置
+        ".vscode",  # VS Code 配置
+        ".next",    # Next.js build 缓存
+        ".nuxt",    # Nuxt build 缓存
+        ".cache",
+    }
 
     def _scan(dir_path: Path, depth: int):
         nonlocal count
@@ -213,7 +238,8 @@ def _list_workspace_files(path: str, max_depth: int = 3) -> list[dict]:
         except PermissionError:
             return
         for entry in entries:
-            if entry.name.startswith("."):
+            name = entry.name
+            if name.startswith(".") or name in SKIP_DIR_NAMES:
                 continue
             try:
                 rel = entry.relative_to(root)
@@ -221,7 +247,7 @@ def _list_workspace_files(path: str, max_depth: int = 3) -> list[dict]:
                 continue
             is_dir = entry.is_dir()
             item = {
-                "name": entry.name,
+                "name": name,
                 "path": str(entry),
                 "rel": str(rel).replace("\\", "/"),
                 "is_dir": is_dir,
@@ -231,6 +257,8 @@ def _list_workspace_files(path: str, max_depth: int = 3) -> list[dict]:
             count += 1
             if is_dir:
                 _scan(entry, depth + 1)
+            if count >= max_files:
+                break
 
     _scan(root, 1)
     return files
@@ -252,17 +280,87 @@ def _get_current_workspace() -> dict | None:
     return None
 
 
+class _LLMCompat:
+    """当 crewai 未导出 ``crewai.LLM`` 类时的兼容替代实现。
+
+    底层基于 :mod:`langchain_openai` 的 :class:`ChatOpenAI`，提供两组能力：
+
+    * crewai 风格 ``.call(messages)`` 接口：``/api/chat`` 直接调用；
+      ``messages`` 既可以是角色/内容字典列表，也可以（作为降级）是单个字符串。
+    * langchain ChatModel 原生接口（``invoke`` / ``ainvoke`` / ``stream`` 等）：
+      经由 :meth:`__getattr__` 转发到内部 ``ChatOpenAI``，供 crewai 的
+      ``Agent(llm=self, ...)`` 直接使用。
+    """
+
+    __slots__ = ("_llm",)
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        **extra,
+    ) -> None:
+        from langchain_openai import ChatOpenAI
+
+        kwargs: dict[str, Any] = {"model": model}
+        if base_url:
+            kwargs["base_url"] = base_url
+        if api_key:
+            kwargs["api_key"] = api_key
+        # 兼容常见温度/最大 tokens 等透传参数（未知 key 丢弃避免构造异常）
+        for k, v in extra.items():
+            kwargs[k] = v
+        self._llm = ChatOpenAI(**kwargs)
+
+    # ------------------------------------------------------------------
+    # crewai.LLM 兼容 API
+    # ------------------------------------------------------------------
+    def call(self, messages):
+        from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+
+        if isinstance(messages, str):
+            lc_msgs: list = [HumanMessage(content=messages)]
+        else:
+            lc_msgs = []
+            for m in messages:
+                if isinstance(m, BaseMessage):
+                    lc_msgs.append(m)
+                    continue
+                role = m.get("role") if isinstance(m, dict) else "user"
+                content = m.get("content") if isinstance(m, dict) else str(m)
+                if role in ("system",):
+                    lc_msgs.append(SystemMessage(content=content))
+                elif role in ("assistant", "ai"):
+                    lc_msgs.append(AIMessage(content=content))
+                else:
+                    lc_msgs.append(HumanMessage(content=content))
+        result = self._llm.invoke(lc_msgs)
+        if hasattr(result, "content"):
+            return result.content
+        return str(result)
+
+    # ------------------------------------------------------------------
+    # 转发到 langchain ChatModel 原生接口（crewai Agent 使用）
+    # ------------------------------------------------------------------
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(object.__getattribute__(self, "_llm"), name)
+
+
 def _build_llm(preset_id: str | None = None):
     """根据用户配置动态构建 LLM（兼容 provider/model 与裸 model 格式）。
 
     - preset_id 指定时，从 model_presets.json 找到对应预设，使用其 model/api_key/base_url
     - 未指定时，回退到全局 model_config.json（顶栏激活预设的写入位置）
 
-    使用 crewai 自带的 LLM 包装（底层走 openai SDK），不依赖 langchain_community，
-    这样在精简依赖下也能工作。
+    优先使用 crewai 自带的 ``crewai.LLM`` 包装（底层走 openai SDK）；
+    若当前 crewai 版本未导出该类，则退回到基于 :mod:`langchain_openai` 的
+    :class:`_LLMCompat` 适配器，保证对 ``/api/chat`` 与 crewai Agent/Crew
+    两条调用路径都可用。
     """
-    if not HAS_CREWAI:
-        return None
     cfg = _load_model_config()
     if preset_id:
         # 优先用会话指定的预设
@@ -290,7 +388,20 @@ def _build_llm(preset_id: str | None = None):
         kwargs["base_url"] = base_url
     if api_key:
         kwargs["api_key"] = api_key
-    return LLM(**kwargs)
+
+    # 路径 1：crewai.LLM 存在（老版本 / 完整安装）
+    if LLM is not None:
+        try:
+            return LLM(**kwargs)
+        except TypeError:
+            # crewai 不同版本的构造签名可能略有差异，失败则走降级路径
+            pass
+
+    # 路径 2：crewai.LLM 缺失 -> 使用 langchain_openai 兼容层
+    try:
+        return _LLMCompat(**kwargs)
+    except Exception:
+        return None
 
 # ---------------------------------------------------------------
 # 日志采集系统
@@ -1902,7 +2013,7 @@ def switch_workspace(workspace_id: str):
 
 
 @app.get("/api/workspaces/{workspace_id}/files")
-def list_workspace_files_api(workspace_id: str, max_depth: int = Query(3, ge=1, le=5)):
+def list_workspace_files_api(workspace_id: str, max_depth: int = Query(4, ge=1, le=10), max_files: int = Query(2000, ge=1, le=20000)):
     data = _load_workspaces()
     ws = next((w for w in data.get("workspaces", []) if w.get("id") == workspace_id), None)
     if not ws:
@@ -1911,7 +2022,7 @@ def list_workspace_files_api(workspace_id: str, max_depth: int = Query(3, ge=1, 
     if not path or not Path(path).exists():
         return JSONResponse({"error": "工作空间目录不存在"}, status_code=400)
     try:
-        files = _list_workspace_files(path, max_depth=max_depth)
+        files = _list_workspace_files(path, max_depth=max_depth, max_files=max_files)
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": f"读取目录失败：{exc}"}, status_code=500)
     return {"files": files}
