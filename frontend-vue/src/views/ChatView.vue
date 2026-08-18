@@ -19,7 +19,10 @@
           <div class="chat-session-info">
             <div class="chat-session-title">{{ s.title }}</div>
             <div class="chat-session-meta">{{ formatTime(s.time) }} · {{ s.messages.length }} 条消息</div>
-            <div v-if="s.skills && s.skills.length" class="chat-session-skills">
+            <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
+              <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
+                🤖 {{ presetNameById(s.modelPresetId) }}
+              </span>
               <span v-for="sk in s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
             </div>
           </div>
@@ -42,6 +45,45 @@
           </div>
         </div>
         <div class="chat-area-head-right">
+          <div class="chat-current-model-wrap" :class="{ open: modelMenuOpen }" @click.stop="toggleModelMenu">
+            <div class="chat-current-model" :title="currentModelFull">
+              <span class="chat-current-model-dot">{{ currentModelInitial }}</span>
+              <span class="chat-current-model-text">
+                <span class="chat-current-model-name">{{ currentModelName }}</span>
+                <span class="chat-current-model-sub">{{ currentModelSub }}</span>
+              </span>
+              <span class="chat-current-model-arrow">▾</span>
+            </div>
+            <div class="chat-model-menu" @click.stop>
+              <div class="chat-model-menu-header">
+                <span>为本对话选择模型</span>
+                <button class="chat-model-menu-link" @click.stop="goPresetAdmin">管理预设 →</button>
+              </div>
+              <div v-if="modelLoading" class="chat-model-menu-empty">加载中…</div>
+              <div v-else-if="!presets.length" class="chat-model-menu-empty">
+                还没有保存的预设，请到「系统设置」中配置。
+              </div>
+              <div v-else class="chat-model-menu-list">
+                <div
+                  v-for="p in presets"
+                  :key="p.id"
+                  class="chat-model-menu-item"
+                  :class="{ active: p.id === currentSessionModelId }"
+                  @click="pickModelForSession(p)"
+                >
+                  <div class="chat-model-menu-dot">{{ (p.name || p.provider || '?').charAt(0).toUpperCase() }}</div>
+                  <div class="chat-model-menu-info">
+                    <div class="chat-model-menu-name">
+                      {{ p.name || p.provider }}
+                      <span v-if="p.id === currentSessionModelId" class="chat-model-menu-tag">本对话</span>
+                    </div>
+                    <div class="chat-model-menu-sub">{{ p.model || '(未填)' }}</div>
+                  </div>
+                  <span v-if="p.id === currentSessionModelId" class="chat-model-menu-check">✓</span>
+                </div>
+              </div>
+            </div>
+          </div>
           <button class="btn-ghost" @click="editSkills" v-if="currentSession">管理技能</button>
           <button class="btn-ghost" @click="clearCurrent">清空当前</button>
         </div>
@@ -67,6 +109,44 @@
           @keydown.enter.exact.prevent="send"
         ></textarea>
         <button class="chat-send" @click="send">➤</button>
+      </div>
+    </div>
+
+    <div class="chat-files" :class="{ collapsed: filesCollapsed }">
+      <div class="chat-files-head">
+        <div class="chat-files-title" @click="filesCollapsed = !filesCollapsed">
+          <span class="chat-files-icon">📁</span>
+          <span class="chat-files-name">工作空间文件</span>
+          <span class="chat-files-arrow">{{ filesCollapsed ? '▸' : '▾' }}</span>
+        </div>
+        <div class="chat-files-actions" v-if="!filesCollapsed">
+          <button class="chat-files-refresh" @click="loadWorkspaceFiles" :title="`刷新（${wsName || '加载中…'}）`">↻</button>
+        </div>
+      </div>
+      <div v-if="!filesCollapsed" class="chat-files-body">
+        <div v-if="filesLoading" class="chat-files-empty">加载中…</div>
+        <div v-else-if="filesError" class="chat-files-empty chat-files-error">{{ filesError }}</div>
+        <div v-else-if="!currentWorkspaceId" class="chat-files-empty">
+          还没有工作空间。<br>
+          请到顶部「📁」切换器添加一个目录。
+        </div>
+        <div v-else-if="!fileTree.length" class="chat-files-empty">空目录</div>
+        <div v-else class="chat-files-tree">
+          <div
+            v-for="row in fileTreeRows"
+            :key="row.node.rel + ':' + row.depth"
+            class="chat-files-row"
+            :class="{ dir: row.node.is_dir, file: !row.node.is_dir, expanded: expandedDirs[row.node.rel] }"
+            :style="{ paddingLeft: (8 + row.depth * 14) + 'px' }"
+            :title="row.node.rel"
+            @click="onFileRowClick(row.node)"
+          >
+            <span class="chat-files-toggle">{{ row.node.is_dir ? (expandedDirs[row.node.rel] ? '▾' : '▸') : '' }}</span>
+            <span class="chat-files-glyph">{{ fileGlyph(row.node) }}</span>
+            <span class="chat-files-label">{{ row.node.name }}</span>
+            <span class="chat-files-size" v-if="!row.node.is_dir">{{ formatSize(row.node.size) }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -104,7 +184,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue'
 
 const sessions = ref([])
 const currentId = ref(null)
@@ -194,7 +274,8 @@ function confirmSkillSelection() {
       title: '新对话',
       time: Date.now(),
       messages: [],
-      skills: [...tempSelectedSkills.value]
+      skills: [...tempSelectedSkills.value],
+      modelPresetId: globalDefaultPresetId.value || '',  // 新建会话时绑定当前默认模型
     })
     currentId.value = id
     saveSessions()
@@ -217,90 +298,169 @@ function clearCurrent() {
   saveSessions()
 }
 
-function generateReply(text, skills) {
-  const t = text.toLowerCase().trim()
+const sending = ref(false)
 
-  if (/^(你好|您好|hi|hello|嗨|hey|哈喽)/i.test(t)) {
-    return '你好！我是淘飞AI助手，有什么可以帮你的吗？\n\n你可以问我问题，或者使用 `@技能名` 来调用已安装的技能。'
+// ===== 当前会话模型（会话级，每个对话可独立切换） =====
+const presets = ref([])
+const presetsById = computed(() => {
+  const m = {}
+  for (const p of presets.value) m[p.id] = p
+  return m
+})
+const modelMenuOpen = ref(false)
+const modelLoading = ref(false)
+
+// 会话绑定模型：当前会话的 modelPresetId（未设置时回退到全局激活）
+const currentSessionModelId = computed(() => {
+  const s = currentSession.value
+  return s?.modelPresetId || globalDefaultPresetId.value || ''
+})
+
+const currentSessionPreset = computed(() => {
+  const id = currentSessionModelId.value
+  if (!id) return null
+  return presetsById.value[id] || null
+})
+
+const currentModelName = computed(() =>
+  currentSessionPreset.value?.name || currentSessionPreset.value?.provider || '未配置',
+)
+const currentModelSub = computed(() =>
+  currentSessionPreset.value?.model || '点击右上角切换',
+)
+const currentModelFull = computed(() => {
+  const p = currentSessionPreset.value
+  if (!p) return '尚未配置模型，请到顶栏或系统设置中选择'
+  return `${p.name || p.provider} · ${p.model || '(未填)'}${p.base_url ? ' · ' + p.base_url : ''}`
+})
+const currentModelInitial = computed(() => {
+  const n = currentSessionPreset.value?.name || currentSessionPreset.value?.provider || '?'
+  return (n.charAt(0) || '?').toUpperCase()
+})
+
+// 全局默认（顶栏激活预设），仅用于「新建会话时」未指定时的默认
+const globalDefaultPresetId = ref('')
+
+async function loadPresetsList() {
+  modelLoading.value = true
+  try {
+    const res = await fetch('/api/model-presets')
+    if (!res.ok) return
+    const data = await res.json()
+    presets.value = data.presets || []
+    globalDefaultPresetId.value = data.active_id || ''
+  } catch (e) { /* 静默 */ }
+  finally { modelLoading.value = false }
+}
+
+function loadActiveModel() { loadPresetsList() }
+
+function toggleModelMenu() {
+  modelMenuOpen.value = !modelMenuOpen.value
+  if (modelMenuOpen.value) loadPresetsList()
+}
+
+function pickModelForSession(p) {
+  const s = currentSession.value
+  if (!s) return
+  if (s.modelPresetId === p.id) {
+    modelMenuOpen.value = false
+    return
   }
+  s.modelPresetId = p.id
+  // 立刻反映在 UI 上
+  saveSessions()
+  modelMenuOpen.value = false
+  showMessage(`本对话已切换到「${p.name || p.provider}」`)
+}
 
-  if (/^(你是谁|介绍.*自己|你叫什么)/i.test(t)) {
-    return '我是**淘飞AI助手**，一个集成式的AI工作平台助手。\n\n我可以帮助你：\n- 回答问题和进行对话\n- 调用已安装的技能（如代码审查、天气查询等）\n- 管理和编排任务\n\n有什么需要帮忙的？'
-  }
+function goPresetAdmin() {
+  modelMenuOpen.value = false
+  window.location.hash = '#/settings'
+}
 
-  if (/天气|weather/i.test(t)) {
-    const cityMatch = t.match(/([\u4e00-\u9fa5]{2,})\s*天气/) || t.match(/天气.*?([\u4e00-\u9fa5]{2,})/)
-    const city = cityMatch ? cityMatch[1] : '北京'
-    return `如需查询天气，请前往「集成管理 → 天气查询」页面，输入城市名即可获取实时天气数据。\n\n当前查询城市：${city}\n（天气数据由 Open-Meteo API 提供）`
-  }
+function showMessage(text) {
+  // 简易提示，复用 toast 也可以，这里直接用一个临时变量
+  saveMessage.value = { type: 'ok', text }
+  setTimeout(() => { saveMessage.value = null }, 2000)
+}
+const saveMessage = ref(null)
 
-  if (/时间|几点|现在/i.test(t)) {
-    const now = new Date()
-    return `现在是 **${now.toLocaleString('zh-CN', { dateStyle: 'full', timeStyle: 'short' })}**`
-  }
+// 全局 model-changed 事件：更新全局默认（新建会话时使用）
+function onModelChanged() {
+  loadPresetsList()
+}
 
-  if (/谢谢|感谢|thx|thanks/i.test(t)) {
-    return '不客气！有问题随时问我 😊'
-  }
-
-  if (/再见|拜拜|bye/i.test(t)) {
-    return '再见！期待下次与你交流 👋'
-  }
-
-  if (/代码|code|bug|错误|报错/i.test(t)) {
-    const hasCodeSkill = skills && skills.some(s => s.name.includes('code') || s.name.includes('Code'))
-    if (hasCodeSkill) {
-      return '检测到你已启用 **code-reviewer** 技能。\n\n请将需要审查的代码粘贴到对话框中，我会帮你分析代码质量、潜在问题和改进建议。'
-    }
-    return '我可以帮你分析代码问题。请将代码粘贴到对话框中，包括错误信息（如果有）。\n\n你也可以在「集成管理 → 技能管理」中添加 **Claude Code** 或 **code-reviewer** 技能来获得更专业的代码审查能力。'
-  }
-
-  if (/技能|skill|功能/i.test(t)) {
-    const skillCount = skills ? skills.length : 0
-    if (skillCount > 0) {
-      const names = skills.map(s => `- ${s.icon || '🛠️'} ${s.name}`).join('\n')
-      return `当前会话已携带 **${skillCount}** 个技能：\n${names}\n\n你可以通过对话让我调用这些技能，或在「集成管理」中管理更多技能。`
-    }
-    return '当前会话未携带技能。\n\n你可以在新建会话时选择技能，或前往「集成管理 → 技能管理」添加和管理技能。\n\n可用的技能模板包括：Claude Code、Cursor AI、GitHub Copilot、网页搜索、图片生成、PDF 解析等。'
-  }
-
-  if (/帮助|help|怎么用|使用/i.test(t)) {
-    return '## 使用指南\n\n**1. 对话交流** — 直接输入问题，我会尽力回答\n\n**2. 技能调用** — 新建会话时选择技能，AI 会自动调用\n\n**3. 天气查询** — 在「集成管理 → 天气查询」中查天气\n\n**4. 技能管理** — 在「集成管理 → 技能管理」中添加/管理技能\n\n**5. 任务编排** — 在「任务编排」中创建自动化工作流'
-  }
-
-  if (t.includes('?') || t.includes('？') || t.includes('什么') || t.includes('怎么') || t.includes('如何')) {
-    return `关于「${text}」这个问题，我的理解是：\n\n这是一个很好的问题。目前我作为一个本地AI助手，能够处理常见的对话和任务。\n\n如果你需要更专业的能力，建议：\n- 添加相关技能（如 Claude Code 用于编程、网页搜索用于信息检索）\n- 在任务编排中创建自动化流程\n\n有什么其他问题我可以帮忙解答吗？`
-  }
-
-  const responses = [
-    `收到你的消息：「${text}」\n\n我理解你想了解更多关于这方面的信息。请告诉我更具体的需求，我会尽力帮助你。\n\n💡 提示：你可以使用「帮助」查看完整的使用指南。`,
-    `关于「${text}」，我的想法是：\n\n这取决于具体的使用场景。如果你能提供更多上下文，我可以给出更有针对性的建议。\n\n你可以尝试：\n- 输入「帮助」查看功能列表\n- 输入「技能」查看可用技能\n- 输入「天气 + 城市名」获取天气信息`,
-    `这是一个有意思的话题。目前我作为本地AI助手，主要支持：\n\n- 日常对话与问答\n- 技能管理与调用\n- 天气查询\n- 使用指南\n\n请告诉我你具体需要什么帮助，我会尽力协助你。`,
-  ]
-
-  return responses[Math.floor(Math.random() * responses.length)]
+// 点击其它位置关闭 dropdown
+function onDocClickChat(e) {
+  if (!modelMenuOpen.value) return
+  const el = e.target
+  if (el && el.closest && el.closest('.chat-current-model-wrap')) return
+  modelMenuOpen.value = false
 }
 
 async function send() {
   const text = inputText.value.trim()
-  if (!text) return
+  if (!text || sending.value) return
   const s = currentSession.value
   if (!s) { openNewSessionDialog(); return }
+
+  // 1) 推入用户消息
   s.messages.push({ role: 'user', text, time: Date.now() })
   s.title = text.slice(0, 20)
   inputText.value = ''
   await scrollToBottom()
 
-  try {
-    await new Promise(r => setTimeout(r, 600 + Math.random() * 400))
-    const reply = generateReply(text, s.skills)
-    s.messages.push({ role: 'ai', text: reply, time: Date.now() })
-    s.time = Date.now()
-  } catch (e) {
-    s.messages.push({ role: 'ai', text: '请求失败：' + e.message, time: Date.now() })
-  }
-  saveSessions()
+  // 2) 预占一条 AI 消息，等待后端返回
+  const aiMsg = { role: 'ai', text: '', time: Date.now(), pending: true }
+  s.messages.push(aiMsg)
   await scrollToBottom()
+
+  sending.value = true
+  saveSessions()
+  try {
+    // 3) 构造后端 ChatRequest 格式：{role, content}，并附会话携带的 skills（用于后端 @技能名 触发）
+    const payload = {
+      messages: s.messages
+        .filter(m => !m.pending)
+        .map(m => ({ role: m.role, content: m.text })),
+      skills: (s.skills || []).map(sk => ({ id: sk.id, name: sk.name, type: sk.type })),
+      model_preset_id: s.modelPresetId || globalDefaultPresetId.value || null,
+    }
+
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    if (!res.ok) {
+      let errMsg = `HTTP ${res.status}`
+      try {
+        const data = await res.json()
+        errMsg = data.error || data.detail || errMsg
+      } catch {}
+      aiMsg.text = `❌ 调用大模型失败：${errMsg}`
+      aiMsg.pending = false
+      aiMsg.error = true
+    } else {
+      const data = await res.json()
+      aiMsg.text = data.reply || '(大模型无返回内容)'
+      aiMsg.pending = false
+      if (data.skills_injected) {
+        aiMsg.text += '\n\n<sub>✨ 已注入技能上下文</sub>'
+      }
+      s.time = Date.now()
+    }
+  } catch (e) {
+    aiMsg.text = `❌ 网络错误：${e.message || e}\n\n请确认后端服务已启动（http://127.0.0.1:8000）且模型已配置。`
+    aiMsg.pending = false
+    aiMsg.error = true
+  } finally {
+    sending.value = false
+    saveSessions()
+    await scrollToBottom()
+  }
 }
 
 async function scrollToBottom() {
@@ -310,6 +470,12 @@ async function scrollToBottom() {
 
 function saveSessions() {
   localStorage.setItem('chatSessions', JSON.stringify(sessions.value))
+}
+
+function presetNameById(id) {
+  const p = presetsById.value[id]
+  if (!p) return ''
+  return p.name || p.provider || ''
 }
 
 function loadSessions() {
@@ -322,15 +488,179 @@ function loadSessions() {
   } catch (e) { console.error('加载会话失败', e) }
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadSessions()
   loadAvailableSkills()
+  await loadPresetsList()
+  // 回填旧会话（没有 modelPresetId 字段的）默认绑定全局激活预设
+  for (const s of sessions.value) {
+    if (!s.modelPresetId && globalDefaultPresetId.value) {
+      s.modelPresetId = globalDefaultPresetId.value
+    }
+  }
+  saveSessions()
+  window.addEventListener('taofei-model-changed', onModelChanged)
+  document.addEventListener('click', onDocClickChat)
+  loadWorkspaceFiles()
   if (!sessions.value.length) {
     openNewSessionDialog()
   }
 })
 
+onUnmounted(() => {
+  window.removeEventListener('taofei-model-changed', onModelChanged)
+  document.removeEventListener('click', onDocClickChat)
+})
+
 watch(currentId, () => scrollToBottom())
+
+// ===== 工作空间文件树（右侧面板） =====
+const currentWorkspaceId = ref('')
+const wsName = ref('')
+const wsPath = ref('')
+const fileTree = ref([])
+const expandedDirs = ref({})
+const filesLoading = ref(false)
+const filesError = ref('')
+const filesCollapsed = ref(false)
+
+// 把后端返回的扁平列表构造为嵌套树（按 '/' 拆 rel）
+function buildTreeFromFlat(items) {
+  const rootChildren = new Map()
+  for (const it of items) {
+    const parts = (it.rel || it.name || '').split('/').filter(Boolean)
+    let cursor = rootChildren
+    for (let i = 0; i < parts.length - 1; i++) {
+      const key = parts.slice(0, i + 1).join('/')
+      if (!cursor.has(parts[i])) {
+        cursor.set(parts[i], { name: parts[i], rel: key, is_dir: true, size: 0, children: new Map() })
+      }
+      cursor = cursor.get(parts[i]).children
+    }
+    const leafKey = it.rel || it.name
+    const leafName = parts[parts.length - 1] || it.name
+    cursor.set(leafName, { ...it, rel: leafKey, children: null })
+  }
+  // Map → Array，目录优先、再按字母排序
+  function sortMap(m) {
+    const arr = [...m.values()]
+    arr.sort((a, b) => (a.is_dir === b.is_dir ? a.name.localeCompare(b.name) : a.is_dir ? -1 : 1))
+    return arr
+  }
+  function materialize(m) {
+    const arr = sortMap(m)
+    for (const n of arr) {
+      if (n.children instanceof Map) n.children = materialize(n.children)
+      else if (n.is_dir) n.children = []
+    }
+    return arr
+  }
+  return materialize(rootChildren)
+}
+
+const fileTreeRows = computed(() => {
+  // 把 fileTree 扁平化（按展开状态）成带 depth 的行
+  const rows = []
+  function walk(nodes, depth) {
+    for (const n of nodes) {
+      rows.push({ node: n, depth })
+      if (n.is_dir && expandedDirs.value[n.rel] && Array.isArray(n.children) && n.children.length) {
+        walk(n.children, depth + 1)
+      }
+    }
+  }
+  walk(fileTree.value, 0)
+  return rows
+})
+
+function formatSize(bytes) {
+  if (!bytes || bytes < 0) return ''
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+  return (bytes / 1024 / 1024 / 1024).toFixed(1) + ' GB'
+}
+
+function fileGlyph(node) {
+  if (node.is_dir) return '📂'
+  const n = node.name.toLowerCase()
+  if (/\.(png|jpe?g|gif|svg|webp|bmp|ico)$/.test(n)) return '🖼'
+  if (/\.(mp4|mov|avi|mkv|webm)$/.test(n)) return '🎬'
+  if (/\.(mp3|wav|flac|ogg|m4a)$/.test(n)) return '🎵'
+  if (/\.(zip|tar|gz|7z|rar)$/.test(n)) return '📦'
+  if (/\.(pdf)$/.test(n)) return '📕'
+  if (/\.(md|markdown|txt)$/.test(n)) return '📝'
+  if (/\.(json|ya?ml|toml|ini|cfg|conf)$/.test(n)) return '⚙'
+  if (/\.(css|scss|less)$/.test(n)) return '🎨'
+  if (/\.(vue|jsx|tsx|svelte)$/.test(n)) return '🧩'
+  if (/\.(html?)$/.test(n)) return '🔖'
+  if (/\.(py|js|ts|java|c|cpp|go|rs|rb|php|sh|ps1|bat)$/.test(n)) return '📜'
+  return '📄'
+}
+
+async function loadWorkspaceFiles() {
+  filesLoading.value = true
+  filesError.value = ''
+  try {
+    if (!currentWorkspaceId.value) {
+      const resW = await fetch('/api/workspaces')
+      if (!resW.ok) throw new Error('无法获取工作空间列表')
+      const dataW = await resW.json()
+      currentWorkspaceId.value = dataW.current_id || ''
+    }
+    if (!currentWorkspaceId.value) {
+      fileTree.value = []
+      wsName.value = ''
+      wsPath.value = ''
+      return
+    }
+    const res = await fetch(`/api/workspaces/${currentWorkspaceId.value}/files?max_depth=4`)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `HTTP ${res.status}`)
+    }
+    const data = await res.json()
+    fileTree.value = buildTreeFromFlat(data.files || [])
+    // 同时拉详情拿 workspace 名字
+    const wsRes = await fetch('/api/workspaces')
+    if (wsRes.ok) {
+      const wd = await wsRes.json()
+      const ws = (wd.workspaces || []).find(w => w.id === currentWorkspaceId.value)
+      if (ws) {
+        wsName.value = ws.name
+        wsPath.value = ws.path
+      }
+    }
+  } catch (e) {
+    filesError.value = e.message || String(e)
+  } finally {
+    filesLoading.value = false
+  }
+}
+
+function onFileRowClick(node) {
+  if (node.is_dir) {
+    const next = { ...expandedDirs.value }
+    if (next[node.rel]) delete next[node.rel]
+    else next[node.rel] = true
+    expandedDirs.value = next
+  } else {
+    onFilePick(node)
+  }
+}
+
+function onFilePick(node) {
+  // 把文件相对路径附到输入框，作为给 AI 的上下文
+  const ref = '@' + node.rel
+  const cur = inputText.value.trim()
+  if (cur.includes(ref)) {
+    inputText.value = cur + '\n' + ref
+  } else {
+    inputText.value = cur ? cur + '  ' + ref : ref
+  }
+  // 简单提示
+  showMessage(`已引用：${node.rel}`)
+}
 </script>
 
 <style scoped>
@@ -414,4 +744,170 @@ watch(currentId, () => scrollToBottom())
 .chat-skill-edit:hover { opacity: 1; }
 .chat-session-skills { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
 .session-skill-chip { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(139, 92, 246, 0.1); color: var(--text-secondary); }
+
+/* ===== 对话中心 · 当前模型指示器（可点击切换） ===== */
+.chat-current-model-wrap { position: relative; }
+.chat-current-model {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 12px 4px 4px; border-radius: 24px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  cursor: pointer; user-select: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.chat-current-model:hover { border-color: var(--primary); box-shadow: 0 0 10px rgba(59, 130, 246, 0.18); }
+.chat-current-model-wrap.open .chat-current-model {
+  border-color: var(--primary); box-shadow: 0 0 12px rgba(59, 130, 246, 0.22);
+}
+.chat-current-model-dot {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 12px; flex-shrink: 0;
+}
+.chat-current-model-text { display: flex; flex-direction: column; line-height: 1.2; }
+.chat-current-model-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.chat-current-model-sub { font-size: 10.5px; color: var(--text-muted); }
+.chat-current-model-arrow { font-size: 10px; color: var(--text-muted); margin-left: 2px; transition: transform .15s; }
+.chat-current-model-wrap.open .chat-current-model-arrow { transform: rotate(180deg); }
+
+.chat-model-menu {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  min-width: 320px; max-width: 380px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.32);
+  padding: 8px; z-index: 200; display: none;
+  backdrop-filter: blur(8px);
+}
+.chat-current-model-wrap.open .chat-model-menu {
+  display: block; animation: chatModelMenuFadeIn .12s ease-out;
+}
+@keyframes chatModelMenuFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.chat-model-menu-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px 8px; font-size: 12px; color: var(--text-muted);
+  border-bottom: 1px solid var(--border); margin-bottom: 6px;
+}
+.chat-model-menu-link {
+  background: none; border: none; color: var(--primary); cursor: pointer;
+  font-size: 12px; padding: 0;
+}
+.chat-model-menu-link:hover { text-decoration: underline; }
+.chat-model-menu-empty {
+  padding: 18px 14px; text-align: center; font-size: 13px; color: var(--text-muted);
+}
+.chat-model-menu-list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; }
+.chat-model-menu-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  transition: background .12s;
+}
+.chat-model-menu-item:hover { background: rgba(59, 130, 246, 0.08); }
+.chat-model-menu-item.active { background: rgba(59, 130, 246, 0.14); }
+.chat-model-menu-dot {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 12px;
+}
+.chat-model-menu-info { flex: 1; min-width: 0; }
+.chat-model-menu-name {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--text);
+}
+.chat-model-menu-tag {
+  font-size: 10px; padding: 1px 7px; border-radius: 10px;
+  background: rgba(34, 197, 94, 0.15); color: #22c55e; font-weight: 600;
+}
+.chat-model-menu-sub {
+  font-size: 11px; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-model-menu-check { color: #22c55e; font-weight: 700; font-size: 14px; }
+
+.chat-session-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; align-items: center; }
+.chat-session-model-chip {
+  font-size: 10px; padding: 1px 7px; border-radius: 10px;
+  background: rgba(59, 130, 246, 0.1); color: var(--primary);
+  border: 1px solid rgba(59, 130, 246, 0.2); font-weight: 600;
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* ===== 右侧 · 工作空间文件面板 ===== */
+.chat-files {
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  display: flex; flex-direction: column;
+  transition: width .18s ease;
+  min-height: 0;
+}
+.chat-files.collapsed { width: 36px; }
+.chat-files-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+  flex-shrink: 0;
+}
+.chat-files.collapsed .chat-files-head { padding: 10px 8px; justify-content: center; }
+.chat-files-title {
+  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; user-select: none; flex: 1; min-width: 0;
+}
+.chat-files-icon { font-size: 14px; }
+.chat-files-name {
+  font-size: 12.5px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1; min-width: 0;
+}
+.chat-files.collapsed .chat-files-name,
+.chat-files.collapsed .chat-files-arrow { display: none; }
+.chat-files-arrow { color: var(--text-muted); font-size: 10px; }
+.chat-files-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.chat-files.collapsed .chat-files-actions { display: none; }
+.chat-files-refresh {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer;
+  width: 22px; height: 22px; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; padding: 0; line-height: 1;
+}
+.chat-files-refresh:hover { color: var(--primary); border-color: var(--primary); }
+
+.chat-files-body { flex: 1; overflow-y: auto; padding: 4px 0; min-height: 0; }
+.chat-files.collapsed .chat-files-body { display: none; }
+.chat-files-empty {
+  padding: 20px 16px; text-align: center; color: var(--text-muted);
+  font-size: 12px; line-height: 1.5;
+}
+.chat-files-error { color: #ef4444; }
+
+.chat-files-tree { display: flex; flex-direction: column; }
+.chat-files-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 8px 4px 0;
+  font-size: 12.5px; color: var(--text);
+  cursor: pointer; user-select: none;
+  white-space: nowrap;
+  transition: background .1s;
+}
+.chat-files-row:hover { background: var(--bg-soft); }
+.chat-files-row.expanded { color: var(--primary); }
+.chat-files-toggle {
+  width: 12px; flex-shrink: 0; text-align: center;
+  color: var(--text-muted); font-size: 9px; line-height: 1;
+}
+.chat-files-glyph { flex-shrink: 0; font-size: 13px; line-height: 1; }
+.chat-files-label {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-files-size {
+  flex-shrink: 0; color: var(--text-muted); font-size: 10.5px;
+  margin-left: auto; padding-left: 8px;
+}
+
 </style>
