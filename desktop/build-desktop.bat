@@ -1,41 +1,41 @@
 @echo off
 chcp 65001 >nul
 REM ============================================
-REM  淘飞AI 桌面客户端一键打包脚本
+REM  TaofeiAI Desktop Build Script
 REM
-REM  用法:
-REM    双击运行            = 全部打包（前端+后端+安装包+覆盖更新）
-REM    build-desktop.bat /b = 只打包后端（前端+PyInstaller）
-REM    build-desktop.bat /e = 只打包安装包（electron-builder）
-REM    build-desktop.bat /u = 只更新 D:\TaofeiAI（免安装覆盖）
+REM  Usage:
+REM    Double-click            = Full build (frontend + backend + installer + upgrade)
+REM    build-desktop.bat /b    = Backend only (frontend + PyInstaller)
+REM    build-desktop.bat /e    = Electron installer only
+REM    build-desktop.bat /u    = Update D:\TaofeiAI only
 REM
-REM  产物:
-REM    dist\CrewAIWorkbench.exe                   = PyInstaller 后端（onefile，含已构建的前端）
-REM    desktop\release_v3\TaofeiAI Setup 1.2.1.exe = NSIS 安装包（最终发布物）
-REM    desktop\release_v3\win-unpacked\            = 免安装版
+REM  Output:
+REM    dist\CrewAIWorkbench.exe                   = PyInstaller backend (onefile, includes frontend)
+REM    desktop\release_v3\TaofeiAI Setup 1.2.1.exe = NSIS installer (final release)
+REM    desktop\release_v3\win-unpacked\            = Portable version
 REM
-REM  前置: .venv 已创建 + Node.js 已安装
-REM  自动步骤:
-REM    [0/4] frontend-vue 执行 npm install + npm run build → 输出到 项目根\frontend\
-REM    [1/4] PyInstaller 收集 frontend\ 与 backend\ → dist\CrewAIWorkbench.exe（onefile）
-REM    [2/4] electron-builder 组合 Electron + extraResources → release_v3\
-REM    [3/4] （可选）复制 win-unpacked 到 D:\TaofeiAI
+REM  Prerequisites: .venv created + Node.js installed
+REM  Steps:
+REM    [0/4] frontend-vue npm install + npm run build -> output to project root\frontend\
+REM    [1/4] PyInstaller collects frontend\ + backend\ -> dist\CrewAIWorkbench.exe (onefile)
+REM    [2/4] electron-builder combines Electron + extraResources -> release_v3\
+REM    [3/4] (optional) copy win-unpacked to D:\TaofeiAI
 REM ============================================
 setlocal enabledelayedexpansion
 
-REM ---------- 解析参数 ----------
+REM ---------- Parse args ----------
 set "MODE=full"
 if /i "%~1"=="/b" set "MODE=backend"
 if /i "%~1"=="/e" set "MODE=electron"
 if /i "%~1"=="/u" set "MODE=upgrade"
 
-REM ---------- 国内镜像 ----------
+REM ---------- Mirrors ----------
 set "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"
 set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
 set "ELECTRON_RUN_AS_NODE="
 set "CI=false"
 
-REM ---------- 路径变量 ----------
+REM ---------- Paths ----------
 set "RELEASE_VER=release_v3"
 set "INSTALL_DIR=D:\TaofeiAI"
 
@@ -53,8 +53,8 @@ echo ========================================
 echo.
 
 REM ==========================================
-REM  Step 0: 构建前端（Vite 输出到 项目根\frontend\）
-REM  Step 1: PyInstaller 打包后端（会收集 frontend\）
+REM  Step 0: Build frontend (Vite output to project root\frontend\)
+REM  Step 1: PyInstaller backend (collects frontend\)
 REM ==========================================
 if /i "%MODE%"=="electron" goto step_electron
 if /i "%MODE%"=="upgrade" goto step_upgrade
@@ -69,7 +69,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM 首次运行需要 npm install
 if not exist "node_modules\vite\bin\vite.js" (
     echo        npm install...
     call npm install
@@ -92,6 +91,8 @@ echo       [OK] Frontend: %PROJECT_ROOT%\frontend\
 echo.
 echo [1/3] Building backend with PyInstaller...
 
+cd /d "%PROJECT_ROOT%"
+
 if not exist ".venv\Scripts\python.exe" (
     echo [ERROR] .venv not found
     echo         Run: python -m venv .venv ^&^& .venv\Scripts\pip install -r requirements.txt pyinstaller
@@ -99,12 +100,10 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-REM 绕过 WorkBuddy 注入的删除钩子（空 sitecustomize 优先加载）
 if not exist "build\_noop_site" mkdir "build\_noop_site"
 if not exist "build\_noop_site\sitecustomize.py" type nul > "build\_noop_site\sitecustomize.py"
 set "PYTHONPATH=%PROJECT_ROOT%\build\_noop_site"
 
-REM 确保 PyInstaller 已安装
 ".venv\Scripts\python.exe" -m pip show pyinstaller >nul 2>&1
 if errorlevel 1 (
     echo        Installing PyInstaller...
@@ -133,7 +132,7 @@ REM  Step 2: npm install + electron-builder
 REM ==========================================
 :step_electron
 echo.
-echo [3/4] Building desktop installer with electron-builder...
+echo [2/3] Building desktop installer with electron-builder...
 cd /d "%DESKTOP_DIR%"
 
 where npm >nul 2>nul
@@ -143,7 +142,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM 首次运行需要 npm install；node_modules 存在则跳过
 if not exist "node_modules\electron\package.json" (
     echo        npm install...
     call npm install
@@ -169,11 +167,11 @@ echo       [OK] Desktop: %DESKTOP_DIR%\%RELEASE_VER%\
 if /i "%MODE%"=="electron" goto done
 
 REM ==========================================
-REM  Step 3: 更新 D:\TaofeiAI
+REM  Step 3: Update D:\TaofeiAI
 REM ==========================================
 :step_upgrade
 echo.
-echo [4/4] Updating %INSTALL_DIR%...
+echo [3/3] Updating %INSTALL_DIR%...
 cd /d "%DESKTOP_DIR%"
 
 if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (
@@ -182,12 +180,10 @@ if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (
     exit /b 1
 )
 
-REM 杀掉可能占用文件的进程
 taskkill /F /IM TaofeiAI.exe /T >nul 2>&1
 taskkill /F /IM CrewAIWorkbench.exe /T >nul 2>&1
 timeout /t 2 /nobreak >nul 2>&1
 
-REM 清空 + 复制
 echo        Copying files...
 rd /s /q "%INSTALL_DIR%" 2>nul
 mkdir "%INSTALL_DIR%" 2>nul
