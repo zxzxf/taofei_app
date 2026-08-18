@@ -687,6 +687,28 @@ async function removeWorkspace(id) {
   } catch (e) { /* ignore */ }
 }
 
+async function _createWorkspaceFromPath(path) {
+  if (!path) return
+  const name = path.split(/[\\/]/).filter(Boolean).pop() || '新工作空间'
+  try {
+    const res = await fetch('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, path }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert('创建失败：' + (err.error || '路径无效'))
+      return
+    }
+    const data = await res.json()
+    workspaceList.value.push(data.workspace)
+    pickWorkspace(data.workspace)
+  } catch (e) {
+    alert('创建失败：' + (e.message || String(e)))
+  }
+}
+
 async function createWorkspace() {
   const name = prompt('工作空间名称：')
   if (!name) return
@@ -712,26 +734,39 @@ async function createWorkspace() {
 }
 
 async function openLocalFolder() {
-  const path = prompt('请输入本地文件夹路径：')
-  if (!path) return
-  const name = path.split(/[\\/]/).filter(Boolean).pop() || '新工作空间'
+  // 1) 优先调用后端打开系统原生目录选择对话框（体验更顺滑，且能校验目录存在）
+  let path = ''
   try {
-    const res = await fetch('/api/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, path }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      alert('创建失败：' + (err.error || '路径无效'))
-      return
+    const controller = new AbortController()
+    // 原生选择对话框可能阻塞较久；这里给 30s 宽松超时，避免用户看到请求挂起
+    const timer = setTimeout(() => controller.abort(), 30_000)
+    const res = await fetch('/api/browse-directory', { signal: controller.signal })
+    clearTimeout(timer)
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}))
+      if (data?.canceled) {
+        // 用户主动取消：直接静默返回，避免再弹 prompt 造成"被取消了还要我再输一次"的困扰
+        return
+      }
+      if (data?.path) {
+        path = String(data.path)
+      }
     }
-    const data = await res.json()
-    workspaceList.value.push(data.workspace)
-    pickWorkspace(data.workspace)
-  } catch (e) {
-    alert('创建失败：' + (e.message || String(e)))
+  } catch (_e) {
+    // 网络错误 / 后端沙箱无法弹对话框 / 用户超时：静默走 fallback
   }
+
+  // 2) 后端无法完成选择（未启用 UI 会话 / 接口出错）时，退回粘贴路径方式
+  if (!path) {
+    const input = prompt(
+      '请粘贴本地文件夹路径（例如 E:\\projects\\my-app）：',
+      'E:\\20260814\\taofei_app'
+    )
+    if (!input) return
+    path = input
+  }
+
+  return _createWorkspaceFromPath(path)
 }
 
 // 切换工作空间选择器下拉

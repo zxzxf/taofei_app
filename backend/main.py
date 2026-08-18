@@ -11,6 +11,7 @@ import json
 import logging
 import logging.handlers
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -2028,14 +2029,42 @@ def list_workspace_files_api(workspace_id: str, max_depth: int = Query(4, ge=1, 
     return {"files": files}
 
 
+def _can_show_gui_on_windows() -> bool:
+    """判断当前进程运行的 Windows 会话是否允许显示可见的 GUI 对话框。
+
+    返回 True 的条件：Windows 平台 + 运行在非 Session 0（Session 0 为服务/沙箱会话，
+    UI 仅能在「交互会话」显示，通常 SessionId >= 1）。
+    Linux/macOS 下默认返回 False，避免弹出无窗口。
+    """
+    if platform.system() != "Windows":
+        return False
+    try:
+        import ctypes
+        # ProcessIdToSessionId: kernel32 原生 API，WinXP+ 均可用
+        session_id = ctypes.c_ulong(0)
+        ok = ctypes.windll.kernel32.ProcessIdToSessionId(
+            ctypes.c_ulong(os.getpid()),
+            ctypes.byref(session_id),
+        )
+        if not ok:
+            # 取不到时保守认为不能显示，退回 prompt 粘贴路径
+            return False
+        return session_id.value > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @app.get("/api/browse-directory")
 def browse_directory():
     """弹出系统目录选择对话框，返回用户选择的目录路径。
 
-    使用 Windows 原生的 FolderBrowserDialog（PowerShell），置顶显示。
-    注意：该接口会阻塞等待用户在弹窗中完成选择；取消或超时返回 canceled=True。
-    服务进程必须能访问桌面会话（非沙箱），否则 GUI 弹窗无法显示。
+    - Windows + 交互桌面会话：用 PowerShell 调原生 FolderBrowserDialog（置顶）
+    - 其它环境：返回 ``{ unsupported: true }``，前端会退回"粘贴路径"方式，避免
+      请求阻塞在 UI 无法显示的环境里。
+    - 接口会阻塞等待用户在弹窗完成选择；取消 / 超时返回 ``{ canceled: true }``
     """
+    if not _can_show_gui_on_windows():
+        return {"unsupported": True, "canceled": False, "path": ""}
     try:
         ps_cmd = (
             "Add-Type -AssemblyName System.Windows.Forms; "
@@ -2062,13 +2091,14 @@ def browse_directory():
         )
         path = (result.stdout or "").strip()
         if not path:
-            return {"canceled": True, "path": ""}
+            return {"unsupported": False, "canceled": True, "path": ""}
         normalized = _normalize_workspace_path(path)
-        return {"canceled": False, "path": normalized}
+        return {"unsupported": False, "canceled": False, "path": normalized}
     except subprocess.TimeoutExpired:
-        return {"canceled": True, "path": ""}
+        return {"unsupported": False, "canceled": True, "path": ""}
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"error": f"打开目录选择对话框失败：{exc}"}, status_code=500)
+        # 任何异常都按"不支持原生对话框"返回，让前端走粘贴路径兜底，不向前端抛 500
+        return {"unsupported": True, "canceled": False, "path": "", "reason": str(exc)}
 
 
 class WorkspaceFileItem(BaseModel):
