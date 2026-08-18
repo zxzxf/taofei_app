@@ -12,11 +12,12 @@
  *   开发模式（electron . 未打包）：直接调 .venv/python.exe 运行 backend/main.py
  *   生产模式（安装后）：运行 resources/backend/CrewAIWorkbench.exe
  */
-const { app, BrowserWindow, Menu, dialog } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 
 // 远程桌面/虚拟化环境下 GPU 进程易崩溃，禁用硬件加速改软件渲染
 app.disableHardwareAcceleration();
@@ -328,3 +329,76 @@ if (!gotLock) {
     }
   });
 }
+
+// ---------------------------------------------------------------
+// IPC：原生目录选择（前端「浏览器打开本地目录」按钮调用）
+//   返回值 { canceled: true } 或 { canceled: false, path: 'E:\\...' }
+//
+//   关键：每次都显式传 defaultPath（经验 912091），避免依赖系统记忆机制导致
+//   默认打开位置不确定。渲染进程也可以通过 options.defaultPath 指定首选目录。
+// ---------------------------------------------------------------
+async function handleOpenDirectoryPicker(options = {}) {
+  const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const userHome = (os.homedir && fs.existsSync(os.homedir())) ? os.homedir() : process.cwd();
+  const defaultPath = (options.defaultPath && fs.existsSync(options.defaultPath))
+    ? options.defaultPath
+    : userHome;
+  const res = await dialog.showOpenDialog(owner, {
+    title: options.title || '浏览器打开本地目录 · 选择本地文件夹',
+    buttonLabel: options.buttonLabel || '选择文件夹',
+    defaultPath,
+    properties: ['openDirectory'],
+  });
+  if (res.canceled || !res.filePaths || !res.filePaths[0]) {
+    return { canceled: true, path: '' };
+  }
+  return { canceled: false, path: String(res.filePaths[0]) };
+}
+ipcMain.handle('open-directory-picker', (_event, options = {}) =>
+  handleOpenDirectoryPicker(options)
+);
+
+// ---------------------------------------------------------------
+// 自动化测试钩子：设置 TAOFEI_TEST_PICKER=1 启动 electron 时，
+// 主窗口加载完成后会主动触发一次「选择文件夹」对话框，并把结果写入
+// %TEMP%\\taofei_picker_result.json，用于脚本侧验证。
+//
+// 判定规则：
+//   - JSON.timedOut === true        → 系统原生模态对话框真实弹出（等用户交互） ✓ PASS
+//   - JSON.canceled / JSON.path     → 用户提前点了按钮 / 接口异常（非预期）
+// ---------------------------------------------------------------
+function installPickerTestHook() {
+  if (process.env.TAOFEI_TEST_PICKER !== '1') return;
+  const outFile = path.join(os.tmpdir ? os.tmpdir() : process.cwd(), 'taofei_picker_result.json');
+  try { fs.unlinkSync(outFile); } catch (_) { /* noop */ }
+  const writeResult = (obj) => {
+    try { fs.writeFileSync(outFile, JSON.stringify({ ts: Date.now(), ...obj }), 'utf-8'); }
+    catch (_) { /* noop */ }
+  };
+  app.on('browser-window-created', (_, win) => {
+    const doRun = async () => {
+      try {
+        await win.webContents.executeJavaScript('true'); // 等 webContents 初始化
+      } catch (_) { /* noop */ }
+      // 主窗 ready-to-show 后再等一小会，让页面+上下文就位
+      const timedRace = new Promise((resolve) => {
+        setTimeout(() => resolve({ timedOut: true }), 5000);
+      });
+      const pickResult = handleOpenDirectoryPicker({
+        title: '[测试] 浏览器打开本地目录 · 请 5s 内点取消/选择文件夹',
+        defaultPath: process.cwd(),
+      }).then((r) => ({ settled: true, canceled: r.canceled, path: r.path }))
+        .catch((e) => ({ settled: true, error: String(e && e.message || e) }));
+      const result = await Promise.race([timedRace, pickResult]);
+      writeResult(result);
+      // 写结果后 1s 自动退出 electron，避免挂着对话框挡用户
+      setTimeout(() => {
+        try { app.quit(); } catch (_) { process.exit(0); }
+      }, 1000);
+    };
+    if (win === mainWindow) {
+      win.once('ready-to-show', () => { setTimeout(doRun, 800); });
+    }
+  });
+}
+installPickerTestHook();

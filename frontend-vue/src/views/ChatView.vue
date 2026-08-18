@@ -174,8 +174,16 @@
                             stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
                           <path d="M9 11h6M12 8v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span>打开工作空间</span>
+                        <span>浏览器打开本地目录</span>
                       </button>
+                      <input
+                        ref="workspaceDirInput"
+                        type="file"
+                        webkitdirectory
+                        directory
+                        style="display:none"
+                        @change="onWorkspaceDirSelected"
+                      />
                     </div>
                   </div>
                 </div>
@@ -258,6 +266,7 @@ const showSkillPicker = ref(false)
 const availableSkills = ref([])
 const tempSelectedSkills = ref([])
 const editingSessionId = ref(null)
+const workspaceDirInput = ref(null)
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
 const currentMessages = computed(() => currentSession.value?.messages || [])
@@ -723,13 +732,71 @@ async function removeWorkspace(id) {
 }
 
 async function createWorkspace() {
-  // 「打开工作空间」= 浏览并选择本地目录：
-  // 先弹原生路径输入框（保证点击按钮一定有响应），路径末段自动作为名称。
-  const input = prompt(
-    '请粘贴或输入要打开的本地文件夹路径：\n（例如 E:\\projects\\my-app）',
-    'E:\\20260814\\taofei_app'
-  )
-  const trimmed = String(input || '').trim()
+  // 「浏览器打开本地目录」= 浏览本地目录 → 选一个本地文件夹作为工作空间。
+  // 优先级：
+  //   1) 浏览器原生目录选择（webkitdirectory input）：真正让用户在浏览器里浏览本地文件夹，
+  //      然后把文件上传到后端创建临时工作空间。这是浏览器环境下最可靠的方式。
+  //   2) Electron 桌面端：window.desktop.openDirectoryPicker()
+  //      → 调用主进程 dialog.showOpenDialog，弹系统原生「选择文件夹」对话框。
+  //   3) 后端 PowerShell FolderBrowserDialog：仅当后端运行在交互桌面会话时才有效，
+  //      沙箱/服务环境通常弹不出来，作为次选兜底。
+  //   4) 以上都不可用 / 用户取消：prompt 粘贴路径兜底。
+  // 用户在任何一级真正点了取消 → 静默 return，不再二次骚扰弹 prompt。
+
+  const desktopApi = window.desktop
+  const isElectron = typeof desktopApi === 'object' && desktopApi && typeof desktopApi.openDirectoryPicker === 'function'
+
+  // --- 路径 1：浏览器用 <input webkitdirectory> 选目录并上传 ---
+  if (!isElectron && workspaceDirInput.value) {
+    workspaceDirInput.value.click()
+    return
+  }
+
+  let path = ''
+
+  // --- 路径 2：Electron 桌面端原生对话框 ---
+  if (isElectron) {
+    try {
+      const pick = await desktopApi.openDirectoryPicker()
+      if (pick && pick.canceled) return
+      if (pick && pick.path) path = String(pick.path)
+    } catch (_e) {
+      // IPC 异常：往下走 /api/browse-directory 或 prompt 兜底
+    }
+  }
+
+  // --- 路径 3：后端弹原生 FolderBrowserDialog（开发 / 浏览器打开时可用）---
+  if (!path) {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 30_000)
+      const res = await fetch('/api/browse-directory', { signal: controller.signal })
+      clearTimeout(timer)
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}))
+        if (data?.canceled) return
+        if (data?.path) path = String(data.path)
+      }
+    } catch (_e) {
+      // 网络错误 / 后端沙箱无法弹对话框 / 用户超时：静默走 fallback
+    }
+  }
+
+  // --- 路径 4：兜底 prompt 粘贴路径（服务器环境 / 远程会话）---
+  if (!path) {
+    const input = prompt(
+      '请粘贴或输入要打开的本地文件夹路径：\n（例如 E:\\projects\\my-app）',
+      'E:\\20260814\\taofei_app'
+    )
+    if (!input) return
+    path = input
+  }
+
+  await openWorkspaceByPath(path)
+}
+
+async function openWorkspaceByPath(path) {
+  const trimmed = String(path).trim()
   if (!trimmed) return
   const name = trimmed.split(/[\\/]/).filter(Boolean).pop() || '新工作空间'
 
@@ -749,6 +816,55 @@ async function createWorkspace() {
     pickWorkspace(data.workspace)
   } catch (e) {
     alert('打开失败：' + (e.message || String(e)))
+  }
+}
+
+async function onWorkspaceDirSelected(event) {
+  const files = event?.target?.files
+  if (!files || files.length === 0) return
+
+  const firstPath = files[0].webkitRelativePath || files[0].name || ''
+  const dirName = firstPath.split('/')[0] || 'workspace'
+
+  const items = []
+  for (const file of files) {
+    try {
+      const content = await file.text()
+      const rel = file.webkitRelativePath || file.name
+      if (!rel) continue
+      items.push({ path: rel, content })
+    } catch (_e) {
+      // 二进制文件跳过文本读取
+    }
+  }
+
+  if (items.length === 0) {
+    alert('未读取到可上传的文件，请重新选择目录。')
+    return
+  }
+
+  try {
+    const res = await fetch('/api/workspaces/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: items, directory_name: dirName }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert('上传目录失败：' + (err.error || '请重试'))
+      return
+    }
+    const data = await res.json()
+    if (data.path) {
+      await openWorkspaceByPath(data.path)
+    } else {
+      alert('上传目录失败：后端未返回路径')
+    }
+  } catch (e) {
+    alert('上传目录失败：' + (e.message || String(e)))
+  } finally {
+    // 允许重复选择同一目录
+    if (workspaceDirInput.value) workspaceDirInput.value.value = ''
   }
 }
 
