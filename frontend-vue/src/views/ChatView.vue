@@ -723,33 +723,13 @@ async function removeWorkspace(id) {
 }
 
 async function createWorkspace() {
-  // 「打开工作空间」优先调用后端原生目录选择对话框；不支持/取消/超时则退回粘贴路径，
-  // 名称直接按目录名自动生成，不再需要用户单独输入名字。
-  let path = ''
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 30_000)
-    const res = await fetch('/api/browse-directory', { signal: controller.signal })
-    clearTimeout(timer)
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}))
-      if (data?.canceled) return
-      if (data?.path) path = String(data.path)
-    }
-  } catch (_e) {
-    // 网络错误 / 后端沙箱无法弹对话框 / 用户超时：静默走 fallback
-  }
-
-  if (!path) {
-    const input = prompt(
-      '请粘贴要打开的本地文件夹路径（例如 E:\\projects\\my-app）：',
-      'E:\\20260814\\taofei_app'
-    )
-    if (!input) return
-    path = input
-  }
-
-  const trimmed = String(path).trim()
+  // 「打开工作空间」= 浏览并选择本地目录：
+  // 先弹原生路径输入框（保证点击按钮一定有响应），路径末段自动作为名称。
+  const input = prompt(
+    '请粘贴或输入要打开的本地文件夹路径：\n（例如 E:\\projects\\my-app）',
+    'E:\\20260814\\taofei_app'
+  )
+  const trimmed = String(input || '').trim()
   if (!trimmed) return
   const name = trimmed.split(/[\\/]/).filter(Boolean).pop() || '新工作空间'
 
