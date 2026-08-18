@@ -2074,7 +2074,9 @@ def browse_directory():
         if not os.path.isfile(ps_exe):
             return {"unsupported": True, "canceled": False, "path": "", "reason": "powershell.exe not found"}
 
-        script_path = Path(__file__).resolve().parent / "browse_directory.ps1"
+        # 开发模式 BASE_DIR=项目根，脚本在 backend/ 下；打包模式 BASE_DIR=_MEIPASS，
+        # 脚本由 spec 打包到 _MEIPASS/backend/ 下，两种模式路径一致。
+        script_path = BASE_DIR / "backend" / "browse_directory.ps1"
         if not script_path.exists():
             return {"unsupported": True, "canceled": False, "path": "", "reason": "browse_directory.ps1 not found"}
 

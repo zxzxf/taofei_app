@@ -22,7 +22,11 @@ a = Analysis(
     [os.path.join(PROJECT_ROOT, "backend", "main.py")],
     pathex=[PROJECT_ROOT],
     binaries=[],
-    datas=crewai_datas + [(frontend_dir, "frontend")],
+    datas=crewai_datas + [
+        (frontend_dir, "frontend"),
+        # browse_directory.ps1 打包到 _MEIPASS/backend/，与 main.py 同级（BASE_DIR/backend/）
+        (os.path.join(PROJECT_ROOT, "backend", "browse_directory.ps1"), "backend"),
+    ],
     hiddenimports=[
         "uvicorn.logging",
         "uvicorn.loops",

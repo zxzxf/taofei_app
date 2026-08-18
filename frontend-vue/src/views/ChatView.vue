@@ -164,7 +164,7 @@
                       <div v-if="!workspaceList.length" class="ws-picker-empty">
                         <span style="font-size:20px;">🗂️</span>
                         <div style="margin-top:6px;">暂无工作空间</div>
-                        <div style="font-size:11px;opacity:.8;">点击下方「打开」添加一个本地目录</div>
+                        <div style="font-size:11px;opacity:.8;">点击下方按钮添加一个本地目录</div>
                       </div>
                     </div>
                     <div class="ws-picker-actions">
@@ -199,7 +199,7 @@
         <div v-else-if="filesError" class="chat-files-empty chat-files-error">{{ filesError }}</div>
         <div v-else-if="!currentWorkspaceId" class="chat-files-empty">
           还没有工作空间。<br>
-          请到顶部「📁」切换器添加一个目录。
+          请到顶部「📁」选择工作空间 →「打开本地目录」添加一个目录。
         </div>
         <div v-else-if="!fileTree.length" class="chat-files-empty">空目录</div>
         <div v-else class="chat-files-tree">
