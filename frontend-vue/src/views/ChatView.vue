@@ -121,28 +121,62 @@
           <div class="chat-files-title">
             <span class="chat-files-icon" @click="filesCollapsed = !filesCollapsed" style="cursor:pointer">📁</span>
             <div class="ws-picker" :class="{ open: wsPickerOpen }">
-              <div class="ws-picker-trigger" @click.stop="onWsPickerToggle">
-                <span class="ws-picker-name">{{ wsName || '选择工作空间' }}</span>
-              </div>
-              <div class="ws-picker-dropdown" v-if="wsPickerOpen">
-                <div class="ws-picker-list">
-                  <div
-                    v-for="ws in workspaceList"
-                    :key="ws.id"
-                    class="ws-picker-item"
-                    :class="{ selected: ws.id === currentWorkspaceId }"
-                    @click.stop="pickWorkspace(ws)"
-                  >
-                    <span class="ws-picker-item-name">{{ ws.name }}</span>
-                    <button class="ws-picker-item-del" @click.stop="removeWorkspace(ws.id)" title="删除">🗑</button>
+                  <div class="ws-picker-trigger" @click.stop="onWsPickerToggle">
+                    <svg class="ws-picker-trigger-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"
+                        :fill="wsPickerOpen ? 'var(--accent)' : 'rgba(139,92,246,.8)'"/>
+                    </svg>
+                    <span class="ws-picker-name">{{ wsName || '选择工作空间' }}</span>
+                    <svg class="ws-picker-arrow" width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                    </svg>
                   </div>
-                  <div v-if="!workspaceList.length" class="ws-picker-empty">暂无工作空间</div>
+                  <div class="ws-picker-dropdown" v-if="wsPickerOpen">
+                    <div class="ws-picker-header">
+                      <span class="ws-picker-header-icon">📁</span>
+                      <div class="ws-picker-header-text">
+                        <div class="ws-picker-header-title">工作空间</div>
+                        <div class="ws-picker-header-sub">共 {{ workspaceList.length }} 个</div>
+                      </div>
+                    </div>
+                    <div class="ws-picker-list">
+                      <div
+                        v-for="ws in workspaceList"
+                        :key="ws.id"
+                        class="ws-picker-item"
+                        :class="{ selected: ws.id === currentWorkspaceId }"
+                        @click.stop="pickWorkspace(ws)"
+                      >
+                        <div class="ws-picker-item-left">
+                          <svg v-if="ws.id === currentWorkspaceId" class="ws-picker-item-check" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M5 12l4 4L19 7" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                          </svg>
+                          <span class="ws-picker-item-icon">📂</span>
+                          <span class="ws-picker-item-name">{{ ws.name }}</span>
+                        </div>
+                        <button class="ws-picker-item-del" @click.stop="removeWorkspace(ws.id)" title="删除工作空间">
+                          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6"
+                              stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                          </svg>
+                        </button>
+                      </div>
+                      <div v-if="!workspaceList.length" class="ws-picker-empty">
+                        <span style="font-size:20px;">🗂️</span>
+                        <div style="margin-top:6px;">暂无工作空间</div>
+                        <div style="font-size:11px;opacity:.8;">点击下方「新建」添加一个本地目录</div>
+                      </div>
+                    </div>
+                    <div class="ws-picker-actions">
+                      <button class="ws-picker-btn-create" @click.stop="createWorkspace">
+                        <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" style="flex-shrink:0;">
+                          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                        </svg>
+                        <span>新建工作空间</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div class="ws-picker-actions">
-                  <button @click.stop="createWorkspace">+ 新建</button>
-                </div>
-              </div>
-            </div>
             <span class="chat-files-arrow" @click="filesCollapsed = !filesCollapsed" style="cursor:pointer">{{ filesCollapsed ? '▸' : '▾' }}</span>
           </div>
           <div class="chat-files-actions" v-if="!filesCollapsed">
@@ -1110,88 +1144,205 @@ function onFilePick(node) {
   position: relative;
   display: inline-flex;
   overflow: visible;
+  font-family: inherit;
 }
 .ws-picker-trigger {
-  display: flex; align-items: center; gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg);
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px 5px 8px;
+  border: 1px solid var(--border, rgba(100, 116, 139, .25));
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,0)) , var(--bg);
   cursor: pointer;
-  max-width: 120px;
-  transition: border-color 0.15s;
+  max-width: 220px;
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease, transform .12s ease;
+  user-select: none;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
 }
-.ws-picker-trigger:hover { border-color: var(--accent); }
+.ws-picker-trigger:hover {
+  border-color: color-mix(in srgb, var(--accent, #8b5cf6) 55%, var(--border));
+  background: var(--bg-soft);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, .12);
+}
+.ws-picker-trigger:active { transform: translateY(1px); }
+.ws-picker-trigger-icon {
+  flex-shrink: 0;
+  width: 14px; height: 14px;
+  filter: drop-shadow(0 1px 0 rgba(255,255,255,.4));
+}
 .ws-picker-name {
-  font-size: 11.5px; font-weight: 500; color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text, #0f172a);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 90px;
+  max-width: 150px;
+  line-height: 1;
+  letter-spacing: .1px;
 }
-.ws-picker-arrow { font-size: 9px; color: var(--text-muted); flex-shrink: 0; }
-.ws-picker.open .ws-picker-trigger { border-color: var(--accent); }
+.ws-picker-arrow {
+  flex-shrink: 0;
+  color: var(--text-muted, #64748b);
+  transition: transform .2s ease, color .2s ease;
+}
+.ws-picker.open .ws-picker-trigger {
+  border-color: var(--accent, #8b5cf6);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent),
+              0 2px 8px rgba(139, 92, 246, .18);
+}
+.ws-picker.open .ws-picker-arrow {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
 .ws-picker-dropdown {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 8px);
   right: 0;
-  z-index: 200;
-  min-width: 180px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+  z-index: 999;
+  min-width: 230px;
+  max-width: 280px;
+  background: var(--bg, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, var(--accent) 15%);
+  border-radius: 14px;
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, .08),
+    0 20px 48px rgba(15, 23, 42, .10),
+    0 0 0 1px rgba(255, 255, 255, .2) inset;
   overflow: hidden;
+  backdrop-filter: blur(10px);
+  animation: wsPop .18s cubic-bezier(.2,.9,.3,1.1);
+  transform-origin: top right;
+}
+@keyframes wsPop {
+  from { opacity: 0; transform: translateY(-4px) scale(.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+.ws-picker-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px 9px;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent, #8b5cf6) 10%, transparent),
+      transparent 70%);
+  border-bottom: 1px solid var(--border);
+}
+.ws-picker-header-icon {
+  width: 28px; height: 28px; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--accent, #8b5cf6) 14%, transparent);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.ws-picker-header-text { min-width: 0; }
+.ws-picker-header-title {
+  font-size: 12.5px; font-weight: 700; color: var(--text);
+  line-height: 1.15;
+  letter-spacing: .2px;
+}
+.ws-picker-header-sub {
+  font-size: 10.5px; color: var(--text-muted, #64748b);
+  line-height: 1.3; margin-top: 2px;
 }
 .ws-picker-list {
-  max-height: 200px;
+  max-height: 220px;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: 6px;
+}
+.ws-picker-list::-webkit-scrollbar { width: 6px; }
+.ws-picker-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border) 90%, var(--text-muted));
+  border-radius: 3px;
+}
+.ws-picker-list::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 .ws-picker-item {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 10px;
+  padding: 8px 9px;
+  margin: 1px 0;
+  border-radius: 9px;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--text);
-  transition: background 0.1s;
+  color: var(--text, #0f172a);
+  transition: background .12s ease, color .12s ease, transform .08s ease;
 }
-.ws-picker-item:hover { background: var(--bg-soft); }
+.ws-picker-item:hover {
+  background: var(--bg-soft, #f1f5f9);
+}
+.ws-picker-item:active { transform: scale(.992); }
 .ws-picker-item.selected {
-  background: var(--accent-soft, rgba(107,76,138,0.12));
-  color: var(--accent, #6B4C8A);
-  font-weight: 600;
+  background: color-mix(in srgb, var(--accent, #8b5cf6) 14%, transparent);
+  color: var(--accent, #7c3aed);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.ws-picker-item-left {
+  display: flex; align-items: center; gap: 7px;
+  min-width: 0;
+}
+.ws-picker-item-check {
+  flex-shrink: 0;
+  color: var(--accent, #7c3aed);
+}
+.ws-picker-item-icon {
+  font-size: 12.5px; flex-shrink: 0;
+  filter: saturate(.9);
 }
 .ws-picker-item-name {
+  font-size: 12.5px;
+  font-weight: 500;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 130px;
+  max-width: 150px;
+  line-height: 1;
 }
+.ws-picker-item.selected .ws-picker-item-name { font-weight: 600; }
 .ws-picker-item-del {
-  background: none; border: none; cursor: pointer;
-  font-size: 11px; color: var(--text-muted);
-  padding: 2px 4px; opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted, #94a3b8);
+  cursor: pointer;
+  padding: 4px 5px;
+  border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transform: translateX(2px);
+  transition: opacity .15s ease, color .15s ease, background .15s ease, border-color .15s ease, transform .15s ease;
 }
-.ws-picker-item:hover .ws-picker-item-del { opacity: 1; }
-.ws-picker-item-del:hover { color: #e74c3c; }
+.ws-picker-item:hover .ws-picker-item-del,
+.ws-picker-item.selected .ws-picker-item-del { opacity: 1; transform: translateX(0); }
+.ws-picker-item-del:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, .09);
+  border-color: rgba(239, 68, 68, .25);
+}
 .ws-picker-empty {
-  padding: 12px; text-align: center;
-  font-size: 12px; color: var(--text-muted);
+  padding: 18px 16px 20px;
+  text-align: center;
+  color: var(--text-muted, #64748b);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .ws-picker-actions {
-  display: flex; border-top: 1px solid var(--border);
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(0deg, var(--bg-soft, #f8fafc), transparent);
 }
-.ws-picker-actions button {
-  flex: 1;
-  padding: 7px 8px;
-  background: transparent; border: none;
-  font-size: 12px; cursor: pointer;
-  color: var(--text-muted);
-  transition: color 0.15s, background 0.15s;
+.ws-picker-btn-create {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--accent, #8b5cf6) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent, #8b5cf6) 6%, transparent);
+  color: var(--accent, #7c3aed);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, transform .1s ease;
 }
-.ws-picker-actions button:hover {
-  color: var(--accent);
-  background: var(--bg-soft);
+.ws-picker-btn-create:hover {
+  background: color-mix(in srgb, var(--accent, #8b5cf6) 12%, transparent);
+  border-color: var(--accent);
+  border-style: solid;
 }
-.ws-picker-actions button + button { border-left: 1px solid var(--border); }
+.ws-picker-btn-create:active { transform: scale(.99); }
 .chat-files-refresh:hover { color: var(--primary); border-color: var(--primary); }
 
 .chat-files-body { flex: 1; overflow-y: auto; padding: 4px 0; min-height: 0; }
