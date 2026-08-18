@@ -164,15 +164,17 @@
                       <div v-if="!workspaceList.length" class="ws-picker-empty">
                         <span style="font-size:20px;">🗂️</span>
                         <div style="margin-top:6px;">暂无工作空间</div>
-                        <div style="font-size:11px;opacity:.8;">点击下方「新建」添加一个本地目录</div>
+                        <div style="font-size:11px;opacity:.8;">点击下方「打开」添加一个本地目录</div>
                       </div>
                     </div>
                     <div class="ws-picker-actions">
                       <button class="ws-picker-btn-create" @click.stop="createWorkspace">
                         <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" style="flex-shrink:0;">
-                          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                          <path d="M5 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"
+                            stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                          <path d="M9 11h6M12 8v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span>新建工作空间</span>
+                        <span>打开工作空间</span>
                       </button>
                     </div>
                   </div>
@@ -721,26 +723,52 @@ async function removeWorkspace(id) {
 }
 
 async function createWorkspace() {
-  const name = prompt('工作空间名称：')
-  if (!name) return
-  const path = prompt('工作空间路径：', 'E:\\20260814\\taofei_app')
-  if (!path) return
+  // 「打开工作空间」优先调用后端原生目录选择对话框；不支持/取消/超时则退回粘贴路径，
+  // 名称直接按目录名自动生成，不再需要用户单独输入名字。
+  let path = ''
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 30_000)
+    const res = await fetch('/api/browse-directory', { signal: controller.signal })
+    clearTimeout(timer)
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}))
+      if (data?.canceled) return
+      if (data?.path) path = String(data.path)
+    }
+  } catch (_e) {
+    // 网络错误 / 后端沙箱无法弹对话框 / 用户超时：静默走 fallback
+  }
+
+  if (!path) {
+    const input = prompt(
+      '请粘贴要打开的本地文件夹路径（例如 E:\\projects\\my-app）：',
+      'E:\\20260814\\taofei_app'
+    )
+    if (!input) return
+    path = input
+  }
+
+  const trimmed = String(path).trim()
+  if (!trimmed) return
+  const name = trimmed.split(/[\\/]/).filter(Boolean).pop() || '新工作空间'
+
   try {
     const res = await fetch('/api/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, path }),
+      body: JSON.stringify({ name, path: trimmed }),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      alert('创建失败：' + (err.error || '路径无效'))
+      alert('打开失败：' + (err.error || '路径无效'))
       return
     }
     const data = await res.json()
     workspaceList.value.push(data.workspace)
     pickWorkspace(data.workspace)
   } catch (e) {
-    alert('创建失败：' + (e.message || String(e)))
+    alert('打开失败：' + (e.message || String(e)))
   }
 }
 
