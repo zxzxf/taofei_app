@@ -179,7 +179,7 @@
                     </div>
                   </div>
                 </div>
-            <span class="chat-files-arrow" @click="filesCollapsed = !filesCollapsed" style="cursor:pointer">{{ filesCollapsed ? '▸' : '▾' }}</span>
+            <span class="chat-files-arrow" @click="filesCollapsed = !filesCollapsed" style="cursor:pointer; display:none;">{{ filesCollapsed ? '▸' : '▾' }}</span>
           </div>
           <div class="chat-files-actions" v-if="!filesCollapsed">
             <button class="chat-files-refresh" @click="loadWorkspaceFiles" :title="`刷新（${wsName || '加载中…'}）`">↻</button>
