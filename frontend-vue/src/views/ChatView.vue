@@ -696,10 +696,6 @@ async function send() {
       const data = await res.json()
       aiMsg.text = data.reply || '(大模型无返回内容)'
       aiMsg.pending = false
-      const tags = []
-      if (data.workspace_injected) tags.push('📁 已注入工作空间上下文')
-      if (data.skills_injected) tags.push('✨ 已注入技能上下文')
-      if (tags.length) aiMsg.text += '\n\n<sub>' + tags.join('  ') + '</sub>'
       s.time = Date.now()
     }
   } catch (e) {
