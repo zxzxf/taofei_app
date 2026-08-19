@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 from agent_tools import TOOLS, execute_tool
 
-MAX_STEPS = 10
+MAX_STEPS = 25
 
 
 REACT_SYSTEM_PROMPT = """你是一个能调用工具完成复杂任务的 Agent。请严格按以下 ReAct 格式思考并行动。
@@ -59,10 +59,11 @@ Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结
 3. 不要写 Observation，Observation 由系统在工具执行后自动填入。
 4. 禁止使用 <tool_call>、<think>、<tool_response> 等 XML 标签，只输出纯文本 ReAct 格式。
 5. 不要输出 ``` 代码块包裹 JSON。
-6. 如果用户请求涉及项目文件，优先使用 list_directory 和 read_file 查看文件。
-7. 如需创建或修改文件，使用 write_file。
+6. 如果用户请求涉及项目文件，优先使用 list_directory 和 read_file 查看文件，但不要反复查看同一目录。
+7. 如需创建或修改文件，使用 write_file，修改后必须输出 Final Answer 报告完成情况。
 8. 如需计算或运行脚本，使用 run_python_code。
 9. 如果需要模型帮你总结、改写、分析，使用 ask_llm。
+10. 功能开发/代码修改类任务：完成文件修改并验证思路正确后，立即输出 Final Answer，不要继续探索。
 """
 
 
@@ -232,13 +233,19 @@ def _build_partial_report(steps: list[dict], user_request: str, status: str = "r
     duration = "进行中"
     if steps:
         try:
+            from datetime import datetime, timedelta
+
             first = steps[0].get("time", "")
             last = steps[-1].get("time", "")
             if first and last:
                 fmt = "%H:%M:%S"
-                t1 = time.strptime(first, fmt)
-                t2 = time.strptime(last, fmt)
-                secs = (time.mktime(t2) - time.mktime(t1))
+                t1 = datetime.strptime(first, fmt)
+                t2 = datetime.strptime(last, fmt)
+                delta: timedelta = t2 - t1
+                # 如果跨午夜，把差值修正为正数
+                secs = delta.total_seconds()
+                if secs < 0:
+                    secs += 24 * 60 * 60
                 duration = f"{int(secs // 60)}m{int(secs % 60)}s"
         except Exception:
             pass
@@ -297,10 +304,19 @@ def run_agent_task(
     ]
 
     final_answer = ""
+    near_limit_warned = False
     try:
         for step_idx in range(MAX_STEPS):
             update(current_step=f"思考第 {step_idx + 1} 步")
             emit_log("INFO", f"Agent 第 {step_idx + 1} 次调用模型", task_id)
+
+            # 接近步数上限时提醒模型直接总结，避免无意义地继续调用工具
+            if step_idx >= MAX_STEPS - 3 and not near_limit_warned:
+                messages.append({
+                    "role": "user",
+                    "content": "注意：你已接近最大步数限制，请根据已执行的工具调用和观察结果，直接输出 Final Answer 总结当前进展，不要再调用新工具。",
+                })
+                near_limit_warned = True
 
             reply = llm_call(messages)
             add_step({
@@ -386,17 +402,36 @@ def run_agent_task(
             messages.append({"role": "user", "content": f"Observation: {observation_text}"})
 
         else:
-            final_answer = "任务步数已达上限，未能完成。请尝试把需求拆小或增加步数限制。"
+            # 步数耗尽但模型未主动输出 Final Answer：强制让模型基于已有对话生成总结报告
+            emit_log("WARNING", "Agent 步数耗尽，强制生成总结报告", task_id)
+            summary_messages = messages + [
+                {
+                    "role": "user",
+                    "content": "任务步数即将耗尽。请基于以上所有 Thought、Action 和 Observation，直接输出 Final Answer 总结你已完成的工作、当前状态和后续建议。",
+                }
+            ]
+            try:
+                summary_reply = llm_call(summary_messages)
+                if _has_final_answer(summary_reply):
+                    final_answer = _extract_final_answer(summary_reply)
+                else:
+                    final_answer = summary_reply
+            except Exception as exc:
+                final_answer = f"任务步数已达上限，且生成总结时出错：{exc}。请尝试把需求拆小或增加步数限制。"
 
         # 最终阶段把 result 标记为 completed，并统一包装为 report dict，
         # 防止前端残留 running 状态的部分报告导致 badge 一直显示“进行中”。
         steps = task_store[task_id].get("steps", [])
+        computed_report = _build_partial_report(steps, user_request, status="completed")
         if isinstance(final_answer, dict) and final_answer.get("type") == "report":
             final_answer["status"] = "completed"
             final_answer["steps"] = steps
+            # 模型自己生成的 report 可能没有 duration 或带占位符，统一用计算值覆盖
+            if not final_answer.get("duration") or final_answer.get("duration") == "进行中":
+                final_answer["duration"] = computed_report.get("duration", "进行中")
             update(status="completed", result=final_answer, current_step="完成")
         else:
-            final_report = _build_partial_report(steps, user_request, status="completed")
+            final_report = computed_report
             final_report["title"] = f"已完成：{user_request[:30]}…"
             final_report["summary"] = str(final_answer) if final_answer else "Agent 已完成任务。"
             update(status="completed", result=final_report, current_step="完成")

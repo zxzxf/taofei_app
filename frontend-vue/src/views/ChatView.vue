@@ -109,28 +109,6 @@
               </div>
               <div class="chat-report-title">{{ msg.report.title }}</div>
               <div class="chat-report-summary">{{ msg.report.summary }}</div>
-              <!-- 可折叠执行步骤 -->
-              <div v-if="msg.report.steps && msg.report.steps.length" class="chat-report-section">
-                <div class="chat-report-section-title">执行步骤</div>
-                <div class="chat-report-steps">
-                  <div
-                    v-for="step in msg.report.steps"
-                    :key="step.id"
-                    class="chat-report-step"
-                    :class="step.status"
-                  >
-                    <div class="chat-report-step-header" @click="toggleReportStep(msg, step.id)">
-                      <span class="chat-report-step-icon">{{ step.icon }}</span>
-                      <span class="chat-report-step-name">{{ step.name }}</span>
-                      <span v-if="step.time" class="chat-report-step-time">{{ step.time }}</span>
-                      <span class="chat-report-step-toggle">{{ (msg.reportExpanded && msg.reportExpanded[step.id]) ? '▾' : '▸' }}</span>
-                    </div>
-                    <div v-if="msg.reportExpanded && msg.reportExpanded[step.id]" class="chat-report-step-body">
-                      <pre>{{ step.output || '（无详细输出）' }}</pre>
-                    </div>
-                  </div>
-                </div>
-              </div>
               <!-- 其他章节（兼容旧报告/模型生成的章节） -->
               <div v-for="(sec, si) in msg.report.sections" :key="si" class="chat-report-section">
                 <div class="chat-report-section-title">{{ sec.heading }}</div>
@@ -181,6 +159,7 @@
             rows="1"
             :placeholder="agentMode ? 'Agent 模式：描述任务，Agent 会自动分析、调用工具、连续执行…' : '输入问题，例如：帮我生成一份行业调研报告…'"
             @keydown.enter.exact.prevent="send"
+            @paste="handlePaste"
           ></textarea>
           <button class="chat-send" @click="send" :class="{ 'agent-active': agentMode }">➤</button>
         </div>
@@ -609,6 +588,34 @@ function compressImage(file) {
     img.onerror = (e) => { URL.revokeObjectURL(url); reject(e) }
     img.src = url
   })
+}
+
+// 处理粘贴图片
+function handlePaste(event) {
+  const items = (event.clipboardData || event.originalEvent.clipboardData).items
+  if (!items) return
+  
+  for (const item of items) {
+    if (item.type.indexOf('image') !== -1) {
+      event.preventDefault()
+      const file = item.getAsFile()
+      if (!file) continue
+      
+      const MAX = 4
+      if (pendingImages.value.length >= MAX) {
+        showMessage(`最多上传 ${MAX} 张图片`)
+        break
+      }
+      
+      compressImage(file)
+        .then(dataUrl => {
+          pendingImages.value.push({ name: `粘贴图片${Date.now()}.jpg`, dataUrl })
+          showMessage('图片已粘贴')
+        })
+        .catch(() => showMessage('图片读取失败'))
+      return
+    }
+  }
 }
 
 function removePendingImage(i) {
