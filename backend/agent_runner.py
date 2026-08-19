@@ -133,21 +133,26 @@ def run_agent_task(
     emit_log: Callable[..., Any],
     task_store: dict[str, dict],
     task_lock: threading.Lock,
+    notify_update: Callable[[], None] | None = None,
 ) -> None:
     """在后台线程中执行 ReAct Agent。"""
 
     def update(**kwargs):
         with task_lock:
             task_store[task_id].update(kwargs)
+        if notify_update:
+            notify_update()
 
     def add_step(step: dict):
         with task_lock:
             task_store[task_id].setdefault("steps", []).append(step)
             task_store[task_id]["current_step"] = step["name"]
-            # 每完成一步都刷新部分报告，前端轮询时能看到逐步成形
+            # 每完成一步都刷新部分报告，前端轮询/SSE 时能看到逐步成形
             task_store[task_id]["result"] = _build_partial_report(
                 task_store[task_id]["steps"], user_request, status="running"
             )
+        if notify_update:
+            notify_update()
 
     update(status="running")
     emit_log("INFO", f"Agent 任务开始：{user_request[:80]}...", task_id)

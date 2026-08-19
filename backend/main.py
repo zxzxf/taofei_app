@@ -716,6 +716,16 @@ def _capture_stdio(task_id: str):
 # ---------------------------------------------------------------
 _tasks: dict[str, dict] = {}
 _tasks_lock = threading.Lock()
+# SSE 流式推送用：每个 task_id 对应一个 Event，任务更新时 set()
+_task_events: dict[str, threading.Event] = {}
+
+
+def _notify_task_update(task_id: str) -> None:
+    """通知正在监听该任务的所有 SSE 连接有新数据可用。"""
+    with _tasks_lock:
+        event = _task_events.get(task_id)
+        if event is not None:
+            event.set()
 
 
 def _read_workspace_context(workspace_path: str | None, max_chars: int = 30000) -> str:
@@ -1902,6 +1912,39 @@ def task_status(task_id: str):
     return task
 
 
+@app.get("/api/agent/stream/{task_id}")
+def agent_stream(task_id: str):
+    """Server-Sent Events：实时推送 Agent 任务更新，取代轮询。"""
+
+    def event_generator():
+        last_result = None
+        while True:
+            with _tasks_lock:
+                event = _task_events.setdefault(task_id, threading.Event())
+                event.clear()
+                task = _tasks.get(task_id)
+            if not task:
+                yield f"event: error\ndata: {json.dumps({'error': '任务不存在'}, ensure_ascii=False)}\n\n"
+                break
+            current_result = task.get("result")
+            status = task.get("status")
+            # 运行中且报告有变化时推送增量更新
+            if current_result != last_result and status == "running":
+                last_result = current_result
+                yield f"data: {json.dumps(task, ensure_ascii=False)}\n\n"
+            if status in ("completed", "failed"):
+                yield f"event: done\ndata: {json.dumps(task, ensure_ascii=False)}\n\n"
+                break
+            # 等待下一次更新（最长 5 秒唤醒一次，避免连接僵死）
+            event.wait(timeout=5.0)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
 # ---------------------------------------------------------------
 # Agent（ReAct 循环）
 # ---------------------------------------------------------------
@@ -1931,6 +1974,9 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
         def emit_log(level: str, message: str, tid: str):
             log_buffer.emit(level, "agent", message, tid)
 
+        def notify_update():
+            _notify_task_update(task_id)
+
         run_agent_task(
             task_id=task_id,
             user_request=user_request,
@@ -1939,6 +1985,7 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             emit_log=emit_log,
             task_store=_tasks,
             task_lock=_tasks_lock,
+            notify_update=notify_update,
         )
     except Exception as exc:
         err_msg = str(exc)

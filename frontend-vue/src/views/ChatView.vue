@@ -686,6 +686,48 @@ async function send() {
 }
 
 // ===== Agent 模式：ReAct 循环 =====
+
+// SSE 异常时的兜底轮询
+function fallbackPoll(task_id, aiMsg, s) {
+  const pollInterval = setInterval(async () => {
+    try {
+      const sr = await fetch(`/api/status/${task_id}`)
+      if (!sr.ok) return
+      const task = await sr.json()
+      aiMsg.agentSteps = (task.steps || []).map(st => ({
+        name: st.name,
+        status: st.status,
+        time: st.time || '',
+      }))
+      const result = task.result
+      if (result && typeof result === 'object' && result.type === 'report') {
+        aiMsg.report = result
+        aiMsg.text = ''
+      }
+      if (task.status === 'running' && !aiMsg.report) {
+        aiMsg.text = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+      } else if (task.status === 'completed') {
+        if (!aiMsg.report) aiMsg.text = task.result || '(Agent 无返回结果)'
+        aiMsg.pending = false
+        clearInterval(pollInterval)
+        agentPolling.value = false
+        sending.value = false
+        s.time = Date.now()
+        saveSessions()
+      } else if (task.status === 'failed') {
+        aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
+        aiMsg.pending = false
+        aiMsg.error = true
+        clearInterval(pollInterval)
+        agentPolling.value = false
+        sending.value = false
+        saveSessions()
+      }
+      scrollToBottom()
+    } catch { /* 忽略轮询错误 */ }
+  }, 1500)
+}
+
 async function sendAgent(s, text) {
   // 1) 推入用户消息
   s.messages.push({ role: 'user', text, time: Date.now() })
@@ -722,53 +764,72 @@ async function sendAgent(s, text) {
     }
     const { task_id } = await startRes.json()
 
-    // 4) 轮询 /api/status/{task_id}
+    // 4) 通过 SSE 实时接收任务更新（Level 2 真流式）
     agentPolling.value = true
-    const pollInterval = setInterval(async () => {
+    const es = new EventSource(`/api/agent/stream/${task_id}`)
+
+    function applyTaskUpdate(task) {
+      // 更新步骤
+      aiMsg.agentSteps = (task.steps || []).map(st => ({
+        name: st.name,
+        status: st.status,
+        time: st.time || '',
+      }))
+      // 优先以报告形式展示
+      const result = task.result
+      if (result && typeof result === 'object' && result.type === 'report') {
+        aiMsg.report = result
+        aiMsg.text = ''
+      }
+      // 运行中状态文本
+      if (task.status === 'running' && !aiMsg.report) {
+        aiMsg.text = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+      }
+      saveSessions()
+      scrollToBottom()
+    }
+
+    function finalizeTask(task) {
+      if (task.status === 'completed') {
+        if (!aiMsg.report) {
+          aiMsg.text = task.result || '(Agent 无返回结果)'
+        }
+        aiMsg.pending = false
+      } else if (task.status === 'failed') {
+        aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
+        aiMsg.pending = false
+        aiMsg.error = true
+      }
+      agentPolling.value = false
+      sending.value = false
+      s.time = Date.now()
+      saveSessions()
+      scrollToBottom()
+    }
+
+    es.onmessage = (e) => {
       try {
-        const sr = await fetch(`/api/status/${task_id}`)
-        if (!sr.ok) return
-        const task = await sr.json()
-        // 更新步骤
-        aiMsg.agentSteps = (task.steps || []).map(st => ({
-          name: st.name,
-          status: st.status,
-          time: st.time || '',
-        }))
-        // 优先以报告形式展示（伪流式）
-        const result = task.result
-        if (result && typeof result === 'object' && result.type === 'report') {
-          aiMsg.report = result
-          aiMsg.text = ''
-        }
-        // 更新状态文本
-        if (task.status === 'running') {
-          if (!aiMsg.report) {
-            aiMsg.text = `⏳ ${task.current_step || 'Agent 正在执行…'}`
-          }
-        } else if (task.status === 'completed') {
-          if (!aiMsg.report) {
-            aiMsg.text = task.result || '(Agent 无返回结果)'
-          }
-          aiMsg.pending = false
-          clearInterval(pollInterval)
-          agentPolling.value = false
-          sending.value = false
-          s.time = Date.now()
-          saveSessions()
-        } else if (task.status === 'failed') {
-          aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
-          aiMsg.pending = false
-          aiMsg.error = true
-          clearInterval(pollInterval)
-          agentPolling.value = false
-          sending.value = false
-          saveSessions()
-        }
-        saveSessions()
-        scrollToBottom()
-      } catch { /* 忽略轮询错误 */ }
-    }, 1500)
+        const task = JSON.parse(e.data)
+        applyTaskUpdate(task)
+      } catch { /* 忽略解析错误 */ }
+    }
+    es.addEventListener('done', (e) => {
+      try {
+        const task = JSON.parse(e.data)
+        applyTaskUpdate(task)
+        finalizeTask(task)
+      } catch { /* 忽略解析错误 */ }
+      es.close()
+    })
+    es.addEventListener('error', (e) => {
+      // 任务不存在或 SSE 异常：兜底切回轮询
+      es.close()
+      if (aiMsg.pending) fallbackPoll(task_id, aiMsg, s)
+    })
+    es.onerror = () => {
+      es.close()
+      if (aiMsg.pending) fallbackPoll(task_id, aiMsg, s)
+    }
   } catch (e) {
     aiMsg.text = `❌ 网络错误：${e.message || e}`
     aiMsg.pending = false
