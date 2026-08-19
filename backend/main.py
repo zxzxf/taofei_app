@@ -863,6 +863,12 @@ class ChatRequest(BaseModel):
     workspace_id: str | None = None  # 当前工作空间 ID，用于注入上下文
 
 
+class AgentRunRequest(BaseModel):
+    request: str  # 用户的 Agent 任务描述
+    model_preset_id: str | None = None
+    workspace_id: str | None = None
+
+
 @app.get("/api/health")
 def health():
     cfg = _load_model_config()
@@ -1702,6 +1708,14 @@ except ImportError:
     convert_dify_dsl = None  # type: ignore
     HAS_WF_ENGINE = False
 
+try:
+    from agent_runner import create_agent_task_id, run_agent_task  # noqa: E402
+    HAS_AGENT_RUNNER = True
+except ImportError:
+    create_agent_task_id = None  # type: ignore
+    run_agent_task = None  # type: ignore
+    HAS_AGENT_RUNNER = False
+
 
 def _load_workflows() -> list[dict]:
     try:
@@ -1886,6 +1900,84 @@ def task_status(task_id: str):
     if not task:
         return JSONResponse({"error": "任务不存在"}, status_code=404)
     return task
+
+
+# ---------------------------------------------------------------
+# Agent（ReAct 循环）
+# ---------------------------------------------------------------
+def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None):
+    """后台线程执行 ReAct Agent。"""
+    try:
+        with _tasks_lock:
+            _tasks[task_id]["status"] = "running"
+        log_buffer.emit("INFO", "system", f"Agent 任务开始：{user_request[:80]}", task_id)
+
+        if not HAS_AGENT_RUNNER:
+            raise RuntimeError("agent_runner 未安装")
+        if not HAS_CREWAI:
+            raise RuntimeError("LLM 功能不可用：crewai/langchain 未安装")
+
+        llm = _build_llm(model_preset_id)
+        if llm is None:
+            raise RuntimeError("LLM 初始化失败，请检查模型配置")
+
+        def llm_call(messages: list[dict]) -> str:
+            try:
+                result = llm.call(messages)
+            except TypeError:
+                result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
+            return result if isinstance(result, str) else str(result)
+
+        def emit_log(level: str, message: str, tid: str):
+            log_buffer.emit(level, "agent", message, tid)
+
+        run_agent_task(
+            task_id=task_id,
+            user_request=user_request,
+            llm_call=llm_call,
+            workspace_path=workspace_path,
+            emit_log=emit_log,
+            task_store=_tasks,
+            task_lock=_tasks_lock,
+        )
+    except Exception as exc:
+        err_msg = str(exc)
+        log_buffer.emit("ERROR", "system", f"Agent 任务失败：{err_msg}", task_id)
+        with _tasks_lock:
+            _tasks[task_id].update(status="failed", error=err_msg)
+
+
+@app.post("/api/agent/run")
+def agent_run(req: AgentRunRequest):
+    """启动一个 ReAct Agent 任务，返回 task_id 供前端轮询。"""
+    if not req.request.strip():
+        return JSONResponse({"error": "任务描述不能为空"}, status_code=400)
+    if not HAS_AGENT_RUNNER:
+        return JSONResponse({"error": "Agent 功能不可用：agent_runner 未安装"}, status_code=503)
+    if not HAS_CREWAI:
+        return JSONResponse({"error": "LLM 功能不可用：crewai/langchain 未安装"}, status_code=503)
+
+    task_id = create_agent_task_id()
+    workspace_path = _workspace_path_by_id(req.workspace_id) if req.workspace_id else None
+    with _tasks_lock:
+        _tasks[task_id] = {
+            "id": task_id,
+            "topic": req.request[:60],
+            "status": "queued",
+            "workspace_id": req.workspace_id or "",
+            "result": None,
+            "error": None,
+            "steps": [],
+            "current_step": "",
+            "type": "agent",
+        }
+    log_buffer.emit("INFO", "system", f"收到 Agent 任务：{req.request[:60]}", task_id)
+    threading.Thread(
+        target=_run_agent_async,
+        args=(task_id, req.request, workspace_path, req.model_preset_id),
+        daemon=True,
+    ).start()
+    return {"task_id": task_id}
 
 
 @app.get("/api/tasks")

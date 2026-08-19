@@ -103,6 +103,19 @@
               >
             </div>
             <div class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
+            <div v-if="msg.agentSteps && msg.agentSteps.length" class="chat-agent-steps">
+              <div class="chat-agent-steps-title">⚙️ 执行步骤</div>
+              <div
+                v-for="(step, si) in msg.agentSteps"
+                :key="si"
+                class="chat-agent-step"
+                :class="step.status"
+              >
+                <span class="chat-agent-step-icon">{{ step.status === 'error' ? '❌' : step.status === 'running' ? '⏳' : '✅' }}</span>
+                <span class="chat-agent-step-name">{{ step.name }}</span>
+                <span class="chat-agent-step-time">{{ step.time }}</span>
+              </div>
+            </div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
           </div>
         </div>
@@ -120,13 +133,19 @@
         </div>
         <div class="chat-input-row">
           <button class="chat-upload" @click="triggerImageUpload" title="上传图片">🖼️</button>
+          <button
+            class="chat-agent-toggle"
+            :class="{ active: agentMode }"
+            @click="agentMode = !agentMode"
+            :title="agentMode ? 'Agent 模式已开启：输入需求后 Agent 会自动拆分任务、调用工具连续执行' : '点击开启 Agent 模式'"
+          >🤖</button>
           <textarea
             v-model="inputText"
             rows="1"
-            placeholder="输入问题，例如：帮我生成一份行业调研报告…"
+            :placeholder="agentMode ? 'Agent 模式：描述任务，Agent 会自动分析、调用工具、连续执行…' : '输入问题，例如：帮我生成一份行业调研报告…'"
             @keydown.enter.exact.prevent="send"
           ></textarea>
-          <button class="chat-send" @click="send">➤</button>
+          <button class="chat-send" @click="send" :class="{ 'agent-active': agentMode }">➤</button>
         </div>
         <input
           ref="imageInput"
@@ -399,6 +418,8 @@ function clearCurrent() {
 }
 
 const sending = ref(false)
+const agentMode = ref(false)
+const agentPolling = ref(false)
 
 // ===== 当前会话模型（会话级，每个对话可独立切换） =====
 const presets = ref([])
@@ -584,6 +605,11 @@ async function send() {
   const s = currentSession.value
   if (!s) { openNewSessionDialog(); return }
 
+  // Agent 模式走独立流程
+  if (agentMode.value && !hasImages) {
+    return sendAgent(s, text)
+  }
+
   // 1) 推入用户消息
   s.messages.push({ role: 'user', text, time: Date.now(), images: pendingImages.value.map(i => i.dataUrl) })
   s.title = (text || '图片消息').slice(0, 20)
@@ -639,6 +665,90 @@ async function send() {
     aiMsg.pending = false
     aiMsg.error = true
   } finally {
+    sending.value = false
+    saveSessions()
+    await scrollToBottom()
+  }
+}
+
+// ===== Agent 模式：ReAct 循环 =====
+async function sendAgent(s, text) {
+  // 1) 推入用户消息
+  s.messages.push({ role: 'user', text, time: Date.now() })
+  s.title = text.slice(0, 20)
+  inputText.value = ''
+  await scrollToBottom()
+
+  // 2) 预占一条 AI 消息（含 agentSteps）
+  const aiMsg = { role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [] }
+  s.messages.push(aiMsg)
+  await scrollToBottom()
+
+  sending.value = true
+  saveSessions()
+
+  try {
+    // 3) 启动 Agent 任务
+    const startRes = await fetch('/api/agent/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request: text,
+        model_preset_id: s.modelPresetId || globalDefaultPresetId.value || null,
+        workspace_id: currentWorkspaceId.value || null,
+      }),
+    })
+    if (!startRes.ok) {
+      let errMsg = `HTTP ${startRes.status}`
+      try { const d = await startRes.json(); errMsg = d.error || errMsg } catch {}
+      aiMsg.text = `❌ Agent 启动失败：${errMsg}`
+      aiMsg.pending = false
+      aiMsg.error = true
+      return
+    }
+    const { task_id } = await startRes.json()
+
+    // 4) 轮询 /api/status/{task_id}
+    agentPolling.value = true
+    const pollInterval = setInterval(async () => {
+      try {
+        const sr = await fetch(`/api/status/${task_id}`)
+        if (!sr.ok) return
+        const task = await sr.json()
+        // 更新步骤
+        aiMsg.agentSteps = (task.steps || []).map(st => ({
+          name: st.name,
+          status: st.status,
+          time: st.time || '',
+        }))
+        // 更新状态文本
+        if (task.status === 'running') {
+          aiMsg.text = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+        } else if (task.status === 'completed') {
+          aiMsg.text = task.result || '(Agent 无返回结果)'
+          aiMsg.pending = false
+          clearInterval(pollInterval)
+          agentPolling.value = false
+          sending.value = false
+          s.time = Date.now()
+          saveSessions()
+        } else if (task.status === 'failed') {
+          aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
+          aiMsg.pending = false
+          aiMsg.error = true
+          clearInterval(pollInterval)
+          agentPolling.value = false
+          sending.value = false
+          saveSessions()
+        }
+        saveSessions()
+        scrollToBottom()
+      } catch { /* 忽略轮询错误 */ }
+    }, 1500)
+  } catch (e) {
+    aiMsg.text = `❌ 网络错误：${e.message || e}`
+    aiMsg.pending = false
+    aiMsg.error = true
     sending.value = false
     saveSessions()
     await scrollToBottom()
@@ -1679,5 +1789,42 @@ function onFilePick(node) {
   border: 1px solid var(--border);
   cursor: zoom-in;
 }
+
+/* ===== Agent 模式 ===== */
+.chat-agent-toggle {
+  background: none; border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 8px; font-size: 18px;
+  cursor: pointer; color: var(--text-muted); transition: all .15s;
+  flex-shrink: 0;
+}
+.chat-agent-toggle:hover { background: var(--bg-soft); }
+.chat-agent-toggle.active {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #8b5cf6;
+}
+.chat-send.agent-active {
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9) !important;
+}
+
+.chat-agent-steps {
+  margin-top: 8px; padding: 8px 10px;
+  background: rgba(139, 92, 246, 0.06);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  border-radius: 8px;
+}
+.chat-agent-steps-title {
+  font-size: 11px; font-weight: 600; color: #8b5cf6;
+  margin-bottom: 6px;
+}
+.chat-agent-step {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; padding: 3px 0; color: var(--text-secondary);
+}
+.chat-agent-step .chat-agent-step-icon { font-size: 12px; }
+.chat-agent-step-name { flex: 1; }
+.chat-agent-step-time { color: var(--text-muted); font-size: 10px; }
+.chat-agent-step.running .chat-agent-step-name { color: var(--primary); }
+.chat-agent-step.error .chat-agent-step-name { color: #ef4444; }
 
 </style>
