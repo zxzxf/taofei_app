@@ -93,6 +93,15 @@
         <div v-for="(msg, i) in currentMessages" :key="i" class="chat-msg" :class="msg.role">
           <div class="chat-avatar" :class="msg.role">{{ msg.role === 'user' ? '我' : 'AI' }}</div>
           <div class="chat-bubble-wrap">
+            <div v-if="msg.images && msg.images.length" class="chat-msg-images">
+              <img
+                v-for="(img, idx) in msg.images"
+                :key="idx"
+                :src="img"
+                class="chat-msg-image"
+                @click="previewImage(img)"
+              >
+            </div>
             <div class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
           </div>
@@ -103,13 +112,30 @@
         </div>
       </div>
       <div class="chat-input-area">
-        <textarea
-          v-model="inputText"
-          rows="1"
-          placeholder="输入问题，例如：帮我生成一份行业调研报告…"
-          @keydown.enter.exact.prevent="send"
-        ></textarea>
-        <button class="chat-send" @click="send">➤</button>
+        <div v-if="pendingImages.length" class="chat-input-images">
+          <div v-for="(img, i) in pendingImages" :key="i" class="chat-input-image-item">
+            <img :src="img.dataUrl" :alt="img.name">
+            <button class="chat-input-image-del" @click="removePendingImage(i)" title="移除">✕</button>
+          </div>
+        </div>
+        <div class="chat-input-row">
+          <button class="chat-upload" @click="triggerImageUpload" title="上传图片">🖼️</button>
+          <textarea
+            v-model="inputText"
+            rows="1"
+            placeholder="输入问题，例如：帮我生成一份行业调研报告…"
+            @keydown.enter.exact.prevent="send"
+          ></textarea>
+          <button class="chat-send" @click="send">➤</button>
+        </div>
+        <input
+          ref="imageInput"
+          type="file"
+          accept="image/*"
+          multiple
+          style="display:none"
+          @change="onImageSelected"
+        >
       </div>
     </div>
 
@@ -267,6 +293,8 @@ const availableSkills = ref([])
 const tempSelectedSkills = ref([])
 const editingSessionId = ref(null)
 const workspaceDirInput = ref(null)
+const imageInput = ref(null)
+const pendingImages = ref([])
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
 const currentMessages = computed(() => currentSession.value?.messages || [])
@@ -471,16 +499,96 @@ function onDocClickChat(e) {
   modelMenuOpen.value = false
 }
 
+function triggerImageUpload() {
+  if (imageInput.value) imageInput.value.click()
+}
+
+function onImageSelected(event) {
+  const files = Array.from(event.target.files || [])
+  if (!files.length) return
+  const MAX = 4
+  for (const file of files) {
+    if (pendingImages.value.length >= MAX) {
+      showMessage(`最多上传 ${MAX} 张图片`)
+      break
+    }
+    if (!file.type || !file.type.startsWith('image/')) continue
+    compressImage(file)
+      .then(dataUrl => { pendingImages.value.push({ name: file.name, dataUrl }) })
+      .catch(() => showMessage('图片读取失败：' + file.name))
+  }
+  if (imageInput.value) imageInput.value.value = ''
+}
+
+// 压缩图片到最长边 1024px 的 JPEG，避免 base64 撑爆 localStorage（聊天记录存储于此）
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const MAX = 1024
+        const scale = Math.min(1, MAX / Math.max(img.width, img.height))
+        const width = Math.max(1, Math.round(img.width * scale))
+        const height = Math.max(1, Math.round(img.height * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, width, height)
+        resolve(canvas.toDataURL('image/jpeg', 0.85))
+      } catch (e) {
+        reject(e)
+      } finally {
+        URL.revokeObjectURL(url)
+      }
+    }
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e) }
+    img.src = url
+  })
+}
+
+function removePendingImage(i) {
+  pendingImages.value.splice(i, 1)
+}
+
+function previewImage(dataUrl) {
+  window.open(dataUrl, '_blank')
+}
+
+function parseDataUrl(dataUrl) {
+  const m = /^data:([^;]+);base64,(.+)$/.exec(dataUrl)
+  if (!m) return null
+  return { mediaType: m[1], base64: m[2] }
+}
+
+// 将消息构造为后端多模态 content：有图时返回 Anthropic vision content blocks，否则返回纯文本
+function buildMessageContent(m) {
+  const images = m.images || []
+  if (!images.length) return m.text || ''
+  const blocks = []
+  for (const img of images) {
+    const parsed = parseDataUrl(img)
+    if (parsed) {
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: parsed.mediaType, data: parsed.base64 } })
+    }
+  }
+  if (m.text) blocks.push({ type: 'text', text: m.text })
+  return blocks
+}
+
 async function send() {
   const text = inputText.value.trim()
-  if (!text || sending.value) return
+  const hasImages = pendingImages.value.length > 0
+  if ((!text && !hasImages) || sending.value) return
   const s = currentSession.value
   if (!s) { openNewSessionDialog(); return }
 
   // 1) 推入用户消息
-  s.messages.push({ role: 'user', text, time: Date.now() })
-  s.title = text.slice(0, 20)
+  s.messages.push({ role: 'user', text, time: Date.now(), images: pendingImages.value.map(i => i.dataUrl) })
+  s.title = (text || '图片消息').slice(0, 20)
   inputText.value = ''
+  pendingImages.value = []
   await scrollToBottom()
 
   // 2) 预占一条 AI 消息，等待后端返回
@@ -495,7 +603,7 @@ async function send() {
     const payload = {
       messages: s.messages
         .filter(m => !m.pending)
-        .map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: m.text })),
+        .map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: buildMessageContent(m) })),
       skills: (s.skills || []).map(sk => ({ id: sk.id, name: sk.name, type: sk.type })),
       model_preset_id: s.modelPresetId || globalDefaultPresetId.value || null,
       workspace_id: currentWorkspaceId.value || null,
@@ -1500,6 +1608,76 @@ function onFilePick(node) {
 .chat-files-size {
   flex-shrink: 0; color: var(--text-muted); font-size: 10.5px;
   margin-left: auto; padding-left: 8px;
+}
+
+/* ===== 图片上传 ===== */
+.chat-input-area {
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.chat-upload {
+  flex-shrink: 0;
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.chat-upload:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.08);
+}
+.chat-input-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chat-input-image-item {
+  position: relative;
+}
+.chat-input-image-item img {
+  width: 56px; height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: block;
+}
+.chat-input-image-del {
+  position: absolute;
+  top: -6px; right: -6px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(15, 23, 42, 0.85);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.chat-msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.chat-msg-image {
+  max-width: 180px;
+  max-height: 180px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: zoom-in;
 }
 
 </style>

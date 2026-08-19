@@ -852,7 +852,8 @@ class RunRequest(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    # content 支持纯文本或多模态 content blocks（Anthropic / OpenAI vision 格式）
+    content: str | list[dict] = ""
 
 
 class ChatRequest(BaseModel):
