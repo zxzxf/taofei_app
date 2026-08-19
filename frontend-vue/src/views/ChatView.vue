@@ -109,6 +109,29 @@
               </div>
               <div class="chat-report-title">{{ msg.report.title }}</div>
               <div class="chat-report-summary">{{ msg.report.summary }}</div>
+              <!-- 可折叠执行步骤 -->
+              <div v-if="msg.report.steps && msg.report.steps.length" class="chat-report-section">
+                <div class="chat-report-section-title">执行步骤</div>
+                <div class="chat-report-steps">
+                  <div
+                    v-for="step in msg.report.steps"
+                    :key="step.id"
+                    class="chat-report-step"
+                    :class="step.status"
+                  >
+                    <div class="chat-report-step-header" @click="toggleReportStep(msg, step.id)">
+                      <span class="chat-report-step-icon">{{ step.icon }}</span>
+                      <span class="chat-report-step-name">{{ step.name }}</span>
+                      <span v-if="step.time" class="chat-report-step-time">{{ step.time }}</span>
+                      <span class="chat-report-step-toggle">{{ (msg.reportExpanded && msg.reportExpanded[step.id]) ? '▾' : '▸' }}</span>
+                    </div>
+                    <div v-if="msg.reportExpanded && msg.reportExpanded[step.id]" class="chat-report-step-body">
+                      <pre>{{ step.output || '（无详细输出）' }}</pre>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <!-- 其他章节（兼容旧报告/模型生成的章节） -->
               <div v-for="(sec, si) in msg.report.sections" :key="si" class="chat-report-section">
                 <div class="chat-report-section-title">{{ sec.heading }}</div>
                 <ul class="chat-report-list">
@@ -354,6 +377,11 @@ function renderMarkdown(text) {
     .replace(/^# (.+)$/gm, '<h1>$1</h1>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\n/g, '<br>')
+}
+
+function toggleReportStep(msg, stepId) {
+  if (!msg.reportExpanded) msg.reportExpanded = {}
+  msg.reportExpanded[stepId] = !msg.reportExpanded[stepId]
 }
 
 function loadAvailableSkills() {
@@ -1971,6 +1999,59 @@ function onFilePick(node) {
 .chat-report-list li :deep(code) {
   background: rgba(139, 92, 246, 0.08); padding: 1px 4px; border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ===== 报告卡片 · 可折叠执行步骤 ===== */
+.chat-report-steps {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.chat-report-step {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+.chat-report-step.running {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.05);
+}
+.chat-report-step.error {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.04);
+}
+.chat-report-step-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s;
+}
+.chat-report-step-header:hover { background: rgba(139, 92, 246, 0.06); }
+.chat-report-step-icon { font-size: 13px; flex-shrink: 0; }
+.chat-report-step-name {
+  flex: 1; min-width: 0;
+  font-size: 12px; font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-report-step-time {
+  font-size: 10px; color: var(--text-muted); flex-shrink: 0;
+}
+.chat-report-step-toggle {
+  font-size: 11px; color: var(--text-muted); flex-shrink: 0;
+  width: 14px; text-align: center;
+}
+.chat-report-step-body {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.chat-report-step-body pre {
+  margin: 0;
+  font-size: 11px; line-height: 1.45;
+  color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  max-height: 240px; overflow-y: auto;
 }
 
 </style>

@@ -89,10 +89,19 @@ def _extract_final_answer(text: str) -> str:
 def _build_partial_report(steps: list[dict], user_request: str, status: str = "running") -> dict:
     """根据当前步骤生成部分报告，供前端伪流式展示。"""
     items = []
+    structured_steps = []
     for st in steps:
         icon = "⏳" if st.get("status") == "running" else "✅" if st.get("status") == "done" else "❌"
         name = st.get("name", "")
-        # 跳过中间思考细节，只展示动作和结果
+        structured_steps.append({
+            "id": st.get("id", ""),
+            "name": name,
+            "status": st.get("status", ""),
+            "output": st.get("output", ""),
+            "time": st.get("time", ""),
+            "icon": icon,
+        })
+        # 简洁列表仍保留，用于兼容旧版/无 steps 字段的渲染
         if "思考" in name and not name.endswith("步"):
             continue
         items.append(f"{icon} {name}")
@@ -118,6 +127,7 @@ def _build_partial_report(steps: list[dict], user_request: str, status: str = "r
         "sections": [
             {"heading": "执行步骤", "items": items or ["准备开始…"]},
         ],
+        "steps": structured_steps,
     }
 
 
@@ -246,6 +256,7 @@ def run_agent_task(
         # 最终阶段把 result 标记为 completed
         if isinstance(final_answer, dict) and final_answer.get("type") == "report":
             final_answer["status"] = "completed"
+            final_answer["steps"] = task_store[task_id].get("steps", [])
             update(status="completed", result=final_answer, current_step="完成")
         else:
             update(status="completed", result=final_answer, current_step="完成")
