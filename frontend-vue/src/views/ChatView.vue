@@ -102,8 +102,22 @@
                 @click="previewImage(img)"
               >
             </div>
-            <div class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
-            <div v-if="msg.agentSteps && msg.agentSteps.length" class="chat-agent-steps">
+            <div v-if="msg.report && msg.report.type === 'report'" class="chat-report-card">
+              <div class="chat-report-header">
+                <span class="chat-report-badge" :class="msg.report.status">{{ msg.report.status === 'completed' ? '已完成' : '进行中' }}</span>
+                <span class="chat-report-duration">{{ msg.report.duration }}</span>
+              </div>
+              <div class="chat-report-title">{{ msg.report.title }}</div>
+              <div class="chat-report-summary">{{ msg.report.summary }}</div>
+              <div v-for="(sec, si) in msg.report.sections" :key="si" class="chat-report-section">
+                <div class="chat-report-section-title">{{ sec.heading }}</div>
+                <ul class="chat-report-list">
+                  <li v-for="(item, ii) in sec.items" :key="ii" v-html="item"></li>
+                </ul>
+              </div>
+            </div>
+            <div v-else class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
+            <div v-if="msg.agentSteps && msg.agentSteps.length && !(msg.report && msg.report.type === 'report')" class="chat-agent-steps">
               <div class="chat-agent-steps-title">⚙️ 执行步骤</div>
               <div
                 v-for="(step, si) in msg.agentSteps"
@@ -721,11 +735,21 @@ async function sendAgent(s, text) {
           status: st.status,
           time: st.time || '',
         }))
+        // 优先以报告形式展示（伪流式）
+        const result = task.result
+        if (result && typeof result === 'object' && result.type === 'report') {
+          aiMsg.report = result
+          aiMsg.text = ''
+        }
         // 更新状态文本
         if (task.status === 'running') {
-          aiMsg.text = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+          if (!aiMsg.report) {
+            aiMsg.text = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+          }
         } else if (task.status === 'completed') {
-          aiMsg.text = task.result || '(Agent 无返回结果)'
+          if (!aiMsg.report) {
+            aiMsg.text = task.result || '(Agent 无返回结果)'
+          }
           aiMsg.pending = false
           clearInterval(pollInterval)
           agentPolling.value = false
@@ -1826,5 +1850,66 @@ function onFilePick(node) {
 .chat-agent-step-time { color: var(--text-muted); font-size: 10px; }
 .chat-agent-step.running .chat-agent-step-name { color: var(--primary); }
 .chat-agent-step.error .chat-agent-step-name { color: #ef4444; }
+
+/* ===== Agent 伪流式报告卡片 ===== */
+.chat-report-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  max-width: 560px;
+  animation: reportCardIn .25s ease-out;
+}
+@keyframes reportCardIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-report-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.chat-report-badge {
+  font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px;
+}
+.chat-report-badge.running {
+  background: rgba(59, 130, 246, 0.12); color: var(--primary);
+}
+.chat-report-badge.completed {
+  background: rgba(34, 197, 94, 0.12); color: #22c55e;
+}
+.chat-report-duration {
+  font-size: 11px; color: var(--text-muted);
+}
+.chat-report-title {
+  font-size: 15px; font-weight: 700; color: var(--text);
+  margin-bottom: 8px; line-height: 1.35;
+}
+.chat-report-summary {
+  font-size: 12.5px; color: var(--text-secondary); line-height: 1.5;
+  margin-bottom: 12px;
+}
+.chat-report-section {
+  margin-top: 10px;
+}
+.chat-report-section-title {
+  font-size: 12px; font-weight: 700; color: var(--text);
+  margin-bottom: 6px;
+}
+.chat-report-list {
+  margin: 0; padding: 0; list-style: none;
+}
+.chat-report-list li {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.6;
+  padding: 3px 0; padding-left: 14px; position: relative;
+}
+.chat-report-list li::before {
+  content: '·'; position: absolute; left: 2px; top: 2px;
+  color: var(--text-muted); font-weight: 700;
+}
+.chat-report-list li :deep(code) {
+  background: rgba(139, 92, 246, 0.08); padding: 1px 4px; border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 
 </style>

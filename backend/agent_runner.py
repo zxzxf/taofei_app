@@ -30,7 +30,17 @@ Action Input: <JSON 对象，参数按工具定义填写>
 Observation: <工具执行结果会自动填入，你不需要写>
 
 当任务完成时，输出：
-Final Answer: 给用户的最终答案
+Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结类任务，Final Answer 请使用如下 JSON 报告格式（不要加 markdown 代码块，直接输出 JSON 字符串）：
+{{
+  "type": "report",
+  "title": "问题找到了：...",
+  "status": "completed",
+  "summary": "排查结果...",
+  "sections": [
+    {{"heading": "我已做的处理", "items": ["步骤1...", "步骤2..."]}},
+    {{"heading": "验证结果", "items": ["/api/health ✓", "/api/chat ✓"]}}
+  ]
+}}
 
 规则：
 1. 每次回复只能包含一轮 Thought + Action + Action Input，或最终的 Final Answer。
@@ -76,6 +86,45 @@ def _extract_final_answer(text: str) -> str:
     return match.group(1).strip() if match else text.strip()
 
 
+def _build_partial_report(steps: list[dict], user_request: str, status: str = "running") -> dict:
+    """根据当前步骤生成部分报告，供前端伪流式展示。"""
+    items = []
+    for st in steps:
+        icon = "⏳" if st.get("status") == "running" else "✅" if st.get("status") == "done" else "❌"
+        name = st.get("name", "")
+        # 跳过中间思考细节，只展示动作和结果
+        if "思考" in name and not name.endswith("步"):
+            continue
+        items.append(f"{icon} {name}")
+    duration = "进行中"
+    if steps:
+        try:
+            first = steps[0].get("time", "")
+            last = steps[-1].get("time", "")
+            if first and last:
+                fmt = "%H:%M:%S"
+                t1 = time.strptime(first, fmt)
+                t2 = time.strptime(last, fmt)
+                secs = (time.mktime(t2) - time.mktime(t1))
+                duration = f"{int(secs // 60)}m{int(secs % 60)}s"
+        except Exception:
+            pass
+    return {
+        "type": "report",
+        "title": f"正在处理：{user_request[:30]}…",
+        "status": status,
+        "duration": duration,
+        "summary": f"已执行 {len(steps)} 步，最新动作：{steps[-1].get('name', '') if steps else '准备中'}。",
+        "sections": [
+            {"heading": "执行步骤", "items": items or ["准备开始…"]},
+        ],
+    }
+
+
+def _is_report_json(text: str) -> bool:
+    return text.strip().startswith("{") and '"type"' in text and '"report"' in text
+
+
 def run_agent_task(
     task_id: str,
     user_request: str,
@@ -95,6 +144,10 @@ def run_agent_task(
         with task_lock:
             task_store[task_id].setdefault("steps", []).append(step)
             task_store[task_id]["current_step"] = step["name"]
+            # 每完成一步都刷新部分报告，前端轮询时能看到逐步成形
+            task_store[task_id]["result"] = _build_partial_report(
+                task_store[task_id]["steps"], user_request, status="running"
+            )
 
     update(status="running")
     emit_log("INFO", f"Agent 任务开始：{user_request[:80]}...", task_id)
@@ -121,6 +174,12 @@ def run_agent_task(
 
             if _has_final_answer(reply):
                 final_answer = _extract_final_answer(reply)
+                # 如果最终答案是 JSON 报告，直接作为结构化结果；否则用普通文本
+                if _is_report_json(final_answer):
+                    try:
+                        final_answer = json.loads(final_answer)
+                    except Exception:
+                        pass
                 break
 
             parsed = _parse_action(reply)
@@ -179,7 +238,12 @@ def run_agent_task(
         else:
             final_answer = "任务步数已达上限，未能完成。请尝试把需求拆小或增加步数限制。"
 
-        update(status="completed", result=final_answer, current_step="完成")
+        # 最终阶段把 result 标记为 completed
+        if isinstance(final_answer, dict) and final_answer.get("type") == "report":
+            final_answer["status"] = "completed"
+            update(status="completed", result=final_answer, current_step="完成")
+        else:
+            update(status="completed", result=final_answer, current_step="完成")
         emit_log("INFO", "Agent 任务完成", task_id)
     except Exception as exc:
         err = str(exc)
