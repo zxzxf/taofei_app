@@ -351,6 +351,116 @@ class _LLMCompat:
         return getattr(object.__getattribute__(self, "_llm"), name)
 
 
+class _AnthropicLLM:
+    """Anthropic Messages API 兼容 LLM 适配器（httpx 原生调用）。
+
+    用于 base_url 含 "anthropic" 的端点（如阿里云 MaaS token-plan 的
+    /apps/anthropic 兼容端点、DeepSeek 的 /anthropic 端点等）。
+    crewai.LLM 会把这类端点误判为 OpenAI 兼容，去请求不存在的
+    /chat/completions，从而得到 404 "Model not found"。
+    """
+
+    __slots__ = ("model", "base_url", "api_key", "timeout")
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        base_url: str,
+        api_key: str,
+        timeout: float = 180.0,
+        **extra,
+    ) -> None:
+        self.model = model
+        self.base_url = str(base_url).rstrip("/")
+        self.api_key = api_key
+        self.timeout = timeout
+
+    def _messages_url(self) -> str:
+        if self.base_url.endswith("/v1/messages"):
+            return self.base_url
+        return self.base_url + "/v1/messages"
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "x-api-key": self.api_key,
+            "Authorization": f"Bearer {self.api_key}",
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+
+    # ------------------------------------------------------------------
+    # crewai.LLM 兼容 API（/api/chat 与工作流引擎调用）
+    # ------------------------------------------------------------------
+    def call(self, messages):
+        import httpx
+
+        system: list[str] = []
+        msgs: list[dict] = []
+        if isinstance(messages, str):
+            msgs = [{"role": "user", "content": messages}]
+        else:
+            for m in messages:
+                if isinstance(m, dict):
+                    role = str(m.get("role", "user"))
+                    content = m.get("content", "")
+                else:
+                    # langchain BaseMessage 兼容
+                    role = getattr(m, "type", "user")
+                    content = getattr(m, "content", str(m))
+                if role in ("system", "developer"):
+                    system.append(content if isinstance(content, str) else str(content))
+                elif role in ("assistant", "ai", "tool"):
+                    msgs.append({"role": "assistant", "content": content})
+                else:
+                    msgs.append({"role": "user", "content": content})
+
+        payload: dict[str, object] = {"model": self.model, "max_tokens": 8192, "messages": msgs}
+        if system:
+            payload["system"] = "\n\n".join(system)
+
+        resp = httpx.post(
+            self._messages_url(),
+            json=payload,
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        if resp.status_code != 200:
+            err = resp.text[:300]
+            raise ValueError(f"HTTP {resp.status_code}: {err}")
+
+        data = resp.json()
+        text_parts: list[str] = []
+        fallback = ""
+        for block in data.get("content") or []:
+            if isinstance(block, str):
+                text_parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "text":
+                text_parts.append(block.get("text", ""))
+            elif btype == "thinking" and block.get("thinking"):
+                fallback = fallback or block.get("thinking", "")
+            # tool_use 等块忽略（当前对话流不使用工具）
+        text = "".join(text_parts).strip()
+        if not text and fallback:
+            text = fallback.strip()
+        return text
+
+    # langchain / crewai 风格别名
+    def invoke(self, messages, **kwargs):
+        return self.call(messages)
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        raise AttributeError(
+            f"_AnthropicLLM 不支持属性 {name}；如需 crewai Agent 全特性请安装 langchain-anthropic"
+        )
+
+
 def _build_llm(preset_id: str | None = None):
     """根据用户配置动态构建 LLM（兼容 provider/model 与裸 model 格式）。
 
@@ -382,8 +492,16 @@ def _build_llm(preset_id: str | None = None):
         except Exception:
             pass
     model = cfg.get("model") or DEFAULT_MODEL_CONFIG["model"]
-    api_key = cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "")
+    api_key = cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "") \
+        or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
     base_url = (cfg.get("base_url") or "").strip() or None
+
+    # Anthropic 兼容端点（如阿里云 MaaS /apps/anthropic、DeepSeek /anthropic）：
+    # crewai.LLM 会误判为 OpenAI 兼容去请求 /chat/completions → 404。
+    # 这里直接走 Anthropic Messages API（httpx 原生调用）。
+    if base_url and "anthropic" in base_url.lower():
+        return _AnthropicLLM(model, base_url=base_url, api_key=api_key)
+
     kwargs: dict[str, Any] = {"model": model}
     if base_url:
         kwargs["base_url"] = base_url
