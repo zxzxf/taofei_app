@@ -18,16 +18,27 @@ from agent_tools import TOOLS, execute_tool
 MAX_STEPS = 10
 
 
-REACT_SYSTEM_PROMPT = """你是一个能调用工具完成复杂任务的 Agent。请严格按以下 ReAct 格式思考并行动：
+REACT_SYSTEM_PROMPT = """你是一个能调用工具完成复杂任务的 Agent。请严格按以下 ReAct 格式思考并行动。
 
 可用工具：
 {tools_desc}
 
-输出格式要求（必须严格遵循）：
+输出格式要求（必须严格遵循，不要加 markdown 代码块）：
 Thought: 你对当前任务的分析和下一步计划
 Action: 工具名称（必须是上面列出的工具之一）
-Action Input: <JSON 对象，参数按工具定义填写>
-Observation: <工具执行结果会自动填入，你不需要写>
+Action Input: {{"参数名": "参数值"}}
+
+注意：Observation 是工具执行后的结果，由系统自动填入，你不需要写 Observation。
+
+正确示例：
+Thought: 我需要先查看当前目录结构
+Action: list_directory
+Action Input: {{"path": ""}}
+
+错误示例（不要这样做）：
+Thought: 我需要先查看当前目录结构
+Action: list_directory
+Action Input: ```json\n{{"path": ""}}\n```
 
 当任务完成时，输出：
 Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结类任务，Final Answer 请使用如下 JSON 报告格式（不要加 markdown 代码块，直接输出 JSON 字符串）：
@@ -44,11 +55,12 @@ Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结
 
 规则：
 1. 每次回复只能包含一轮 Thought + Action + Action Input，或最终的 Final Answer。
-2. Action Input 必须是合法 JSON，不要加 markdown 代码块。
-3. 如果用户请求涉及项目文件，优先使用 list_directory 和 read_file 查看文件。
-4. 如需创建或修改文件，使用 write_file。
-5. 如需计算或运行脚本，使用 run_python_code。
-6. 如果需要模型帮你总结、改写、分析，使用 ask_llm。
+2. Action Input 必须是合法 JSON，不要加 markdown 代码块，不要在 JSON 前后写解释文字。
+3. 不要写 Observation，Observation 由系统在工具执行后自动填入。
+4. 如果用户请求涉及项目文件，优先使用 list_directory 和 read_file 查看文件。
+5. 如需创建或修改文件，使用 write_file。
+6. 如需计算或运行脚本，使用 run_python_code。
+7. 如果需要模型帮你总结、改写、分析，使用 ask_llm。
 """
 
 
@@ -61,19 +73,44 @@ def _format_tools() -> str:
 
 
 def _parse_action(text: str) -> tuple[str, dict] | None:
-    """从模型输出中解析 Action 和 Action Input。"""
+    """从模型输出中解析 Action 和 Action Input。兼容 markdown 代码块、解释文字等。"""
     action_match = re.search(r"Action:\s*(\S+)", text)
     if not action_match:
         return None
     action_name = action_match.group(1).strip()
+
+    args: dict = {}
+
+    # 1) 优先尝试 ```json {...} ``` 代码块
+    code_block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if code_block_match:
+        try:
+            args = json.loads(code_block_match.group(1))
+            return action_name, args
+        except Exception:
+            pass
+
+    # 2) 标准 Action Input: {...}
     input_match = re.search(r"Action Input:\s*(\{.*?\})\s*(?:Observation:|$)", text, re.DOTALL)
     if input_match:
         try:
             args = json.loads(input_match.group(1))
+            return action_name, args
         except Exception:
-            args = {}
-    else:
-        args = {}
+            pass
+
+    # 3) 兜底：Action Input 后任意位置找第一个完整 JSON 对象
+    section_match = re.search(r"Action Input:\s*(.*?)(?:Observation:|$)", text, re.DOTALL)
+    if section_match:
+        section = section_match.group(1)
+        json_match = re.search(r"(\{.*\})", section, re.DOTALL)
+        if json_match:
+            try:
+                args = json.loads(json_match.group(1))
+                return action_name, args
+            except Exception:
+                pass
+
     return action_name, args
 
 
@@ -201,9 +238,14 @@ def run_agent_task(
             if not parsed:
                 # 让模型重试一次
                 retry_msg = (
-                    "你刚才的输出格式不正确。请严格按以下格式输出：\n"
-                    "Thought: ...\nAction: ...\nAction Input: {...}\n"
-                    "如果已完成任务，请输出 Final Answer: ..."
+                    "你刚才的输出格式不正确。请严格按以下 ReAct 格式输出，不要加 markdown 代码块，不要写 Observation：\n\n"
+                    "正确示例：\n"
+                    "Thought: 我需要先查看当前目录结构\n"
+                    "Action: list_directory\n"
+                    'Action Input: {"path": ""}\n\n'
+                    "如果已完成任务，请输出：\n"
+                    "Final Answer: 给用户的最终答案\n\n"
+                    "注意：Action Input 必须是合法 JSON，且每次只能输出一轮 Thought + Action + Action Input。"
                 )
                 messages.append({"role": "assistant", "content": reply})
                 messages.append({"role": "user", "content": retry_msg})
