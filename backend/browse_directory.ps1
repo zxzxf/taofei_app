@@ -55,7 +55,9 @@ if ($fgThreadId -ne 0 -and $fgThreadId -ne $myThreadId) {
 }
 
 $dlg = New-Object System.Windows.Forms.OpenFileDialog
-$dlg.Title = '选择工作目录'
+# Windows 下 .NET OpenFileDialog 的 Title 传中文会出现 GBK/UTF-8 解码错误导致乱码，
+# 因此这里统一用英文。FileName placeholder 也保持英文避免乱码。
+$dlg.Title = 'Select Workspace Folder'
 $dlg.ValidateNames = $false
 $dlg.CheckFileExists = $false
 $dlg.CheckPathExists = $false

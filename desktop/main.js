@@ -344,7 +344,9 @@ async function handleOpenDirectoryPicker(options = {}) {
     ? options.defaultPath
     : userHome;
   const res = await dialog.showOpenDialog(owner, {
-    title: options.title || '浏览器打开本地目录 · 选择本地文件夹',
+    // Windows 下 Electron dialog 标题如果直接用中文，某些系统会出现 GBK/UTF-8 解码错误导致乱码，
+    // 因此默认 title 使用英文；调用方可通过 options.title 自行覆盖。
+    title: options.title || 'Browser Open Local Directory · Select Folder',
     buttonLabel: options.buttonLabel || '选择文件夹',
     defaultPath,
     properties: ['openDirectory'],
@@ -385,7 +387,7 @@ function installPickerTestHook() {
         setTimeout(() => resolve({ timedOut: true }), 5000);
       });
       const pickResult = handleOpenDirectoryPicker({
-        title: '[测试] 浏览器打开本地目录 · 请 5s 内点取消/选择文件夹',
+        title: '[Test] Browser Open Local Directory · Pick a folder within 5s',
         defaultPath: process.cwd(),
       }).then((r) => ({ settled: true, canceled: r.canceled, path: r.path }))
         .catch((e) => ({ settled: true, error: String(e && e.message || e) }));
