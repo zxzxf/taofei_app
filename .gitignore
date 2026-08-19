@@ -46,5 +46,6 @@ logs/
 temp_workspaces/
 workspaces.json
 model_config.json
+model_presets.json
 skills.json
 workflows.json
