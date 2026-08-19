@@ -23,7 +23,7 @@ REACT_SYSTEM_PROMPT = """你是一个能调用工具完成复杂任务的 Agent�
 可用工具：
 {tools_desc}
 
-输出格式要求（必须严格遵循，不要加 markdown 代码块）：
+输出格式要求（必须严格遵循）：
 Thought: 你对当前任务的分析和下一步计划
 Action: 工具名称（必须是上面列出的工具之一）
 Action Input: {{"参数名": "参数值"}}
@@ -57,10 +57,12 @@ Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结
 1. 每次回复只能包含一轮 Thought + Action + Action Input，或最终的 Final Answer。
 2. Action Input 必须是合法 JSON，不要加 markdown 代码块，不要在 JSON 前后写解释文字。
 3. 不要写 Observation，Observation 由系统在工具执行后自动填入。
-4. 如果用户请求涉及项目文件，优先使用 list_directory 和 read_file 查看文件。
-5. 如需创建或修改文件，使用 write_file。
-6. 如需计算或运行脚本，使用 run_python_code。
-7. 如果需要模型帮你总结、改写、分析，使用 ask_llm。
+4. 禁止使用 <tool_call>、<think>、<tool_response> 等 XML 标签，只输出纯文本 ReAct 格式。
+5. 不要输出 ``` 代码块包裹 JSON。
+6. 如果用户请求涉及项目文件，优先使用 list_directory 和 read_file 查看文件。
+7. 如需创建或修改文件，使用 write_file。
+8. 如需计算或运行脚本，使用 run_python_code。
+9. 如果需要模型帮你总结、改写、分析，使用 ask_llm。
 """
 
 
@@ -72,53 +74,138 @@ def _format_tools() -> str:
     return "\n".join(lines)
 
 
+def _sanitize_model_output(text: str) -> str:
+    """去除 Qwen 等模型可能输出的 <tool_call>/<think> 等 XML 包装标签。"""
+    # 移除成对的 XML 标签但保留标签内文本
+    text = re.sub(r"</?tool_call>\s*", "", text)
+    text = re.sub(r"</?tool_response>\s*", "", text)
+    text = re.sub(r"</?think>\s*", "", text)
+    return text.strip()
+
+
+def _extract_json_objects(text: str) -> list[str]:
+    """从文本中提取所有顶层 JSON 对象字符串（支持嵌套）。"""
+    candidates: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "{":
+            depth = 0
+            in_string = False
+            escape = False
+            for j in range(i, len(text)):
+                ch = text[j]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"' and not in_string:
+                    in_string = True
+                elif ch == '"' and in_string:
+                    in_string = False
+                elif not in_string:
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            candidates.append(text[i : j + 1])
+                            i = j
+                            break
+        i += 1
+    return candidates
+
+
 def _parse_action(text: str) -> tuple[str, dict] | None:
-    """从模型输出中解析 Action 和 Action Input。兼容 markdown 代码块、解释文字等。"""
+    """从模型输出中解析 Action 和 Action Input。兼容 markdown 代码块、XML 包装、解释文字、tool_call JSON 等。"""
+    text = _sanitize_model_output(text)
+
     action_match = re.search(r"Action:\s*(\S+)", text)
-    if not action_match:
-        return None
-    action_name = action_match.group(1).strip()
+    if action_match:
+        action_name = action_match.group(1).strip()
 
-    args: dict = {}
+        args: dict = {}
 
-    # 1) 优先尝试 ```json {...} ``` 代码块
-    code_block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if code_block_match:
-        try:
-            args = json.loads(code_block_match.group(1))
-            return action_name, args
-        except Exception:
-            pass
-
-    # 2) 标准 Action Input: {...}
-    input_match = re.search(r"Action Input:\s*(\{.*?\})\s*(?:Observation:|$)", text, re.DOTALL)
-    if input_match:
-        try:
-            args = json.loads(input_match.group(1))
-            return action_name, args
-        except Exception:
-            pass
-
-    # 3) 兜底：Action Input 后任意位置找第一个完整 JSON 对象
-    section_match = re.search(r"Action Input:\s*(.*?)(?:Observation:|$)", text, re.DOTALL)
-    if section_match:
-        section = section_match.group(1)
-        json_match = re.search(r"(\{.*\})", section, re.DOTALL)
-        if json_match:
+        # 1) 优先尝试 ```json {...} ``` 代码块
+        code_block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if code_block_match:
             try:
-                args = json.loads(json_match.group(1))
+                args = json.loads(code_block_match.group(1))
                 return action_name, args
             except Exception:
                 pass
 
-    return action_name, args
+        # 2) 标准 Action Input: {...}（紧跟在 Action Input 后的第一个 JSON）
+        section_match = re.search(r"Action Input:\s*(.*?)(?:Observation:|$)", text, re.DOTALL)
+        if section_match:
+            section = section_match.group(1)
+            for candidate in _extract_json_objects(section):
+                try:
+                    args = json.loads(candidate)
+                    return action_name, args
+                except Exception:
+                    continue
+
+        # 3) 兜底：全文中任意位置找第一个合法 JSON 对象
+        for candidate in _extract_json_objects(text):
+            try:
+                args = json.loads(candidate)
+                return action_name, args
+            except Exception:
+                continue
+
+        return action_name, args
+
+    # 4) 兼容 Qwen 等模型直接输出 tool_call JSON（没有 Thought/Action 标签）
+    for candidate in _extract_json_objects(text):
+        try:
+            data = json.loads(candidate)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+
+        # 格式 A: {"name": "tool", "arguments": {...}}
+        if "name" in data and "arguments" in data:
+            name = str(data["name"]).strip()
+            args = data["arguments"]
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    args = {}
+            if isinstance(args, dict):
+                return name, dict(args)
+
+        # 格式 B: {"function": {"name": "tool", "arguments": {...}}}
+        if "function" in data and isinstance(data["function"], dict):
+            fn = data["function"]
+            name = str(fn.get("name", "")).strip()
+            args = fn.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    args = {}
+            if name and isinstance(args, dict):
+                return name, dict(args)
+
+        # 格式 C: {"tool_name": {...}}
+        for tool in TOOLS:
+            tname = tool["name"]
+            if tname in data and isinstance(data[tname], dict):
+                return tname, dict(data[tname])
+
+    return None
 
 
 def _has_final_answer(text: str) -> bool:
-    return "Final Answer:" in text
+    return "Final Answer:" in _sanitize_model_output(text)
 
 
 def _extract_final_answer(text: str) -> str:
+    text = _sanitize_model_output(text)
     match = re.search(r"Final Answer:\s*(.*)", text, re.DOTALL)
     return match.group(1).strip() if match else text.strip()
 
@@ -236,16 +323,22 @@ def run_agent_task(
 
             parsed = _parse_action(reply)
             if not parsed:
+                emit_log("WARNING", f"模型输出未能解析为 ReAct 格式，原始输出：\n{reply}", task_id)
                 # 让模型重试一次
                 retry_msg = (
-                    "你刚才的输出格式不正确。请严格按以下 ReAct 格式输出，不要加 markdown 代码块，不要写 Observation：\n\n"
+                    "你刚才的输出格式不正确。请严格按以下 ReAct 格式输出：\n\n"
                     "正确示例：\n"
                     "Thought: 我需要先查看当前目录结构\n"
                     "Action: list_directory\n"
                     'Action Input: {"path": ""}\n\n'
                     "如果已完成任务，请输出：\n"
                     "Final Answer: 给用户的最终答案\n\n"
-                    "注意：Action Input 必须是合法 JSON，且每次只能输出一轮 Thought + Action + Action Input。"
+                    "注意：\n"
+                    "- 不要加 markdown 代码块\n"
+                    "- 不要写 Observation\n"
+                    "- 禁止使用 <tool_call>、<think>、<tool_response> 等 XML 标签\n"
+                    "- Action Input 必须是合法 JSON\n"
+                    "- 每次只能输出一轮 Thought + Action + Action Input"
                 )
                 messages.append({"role": "assistant", "content": reply})
                 messages.append({"role": "user", "content": retry_msg})
@@ -253,7 +346,7 @@ def run_agent_task(
                     "id": f"step-{step_idx + 1}-retry",
                     "name": "格式重试",
                     "status": "done",
-                    "output": "模型未按 ReAct 格式输出，已提示重试",
+                    "output": f"模型未按 ReAct 格式输出，已提示重试。原始输出：\n{reply[:500]}",
                     "time": time.strftime("%H:%M:%S"),
                 })
                 continue
@@ -295,13 +388,18 @@ def run_agent_task(
         else:
             final_answer = "任务步数已达上限，未能完成。请尝试把需求拆小或增加步数限制。"
 
-        # 最终阶段把 result 标记为 completed
+        # 最终阶段把 result 标记为 completed，并统一包装为 report dict，
+        # 防止前端残留 running 状态的部分报告导致 badge 一直显示“进行中”。
+        steps = task_store[task_id].get("steps", [])
         if isinstance(final_answer, dict) and final_answer.get("type") == "report":
             final_answer["status"] = "completed"
-            final_answer["steps"] = task_store[task_id].get("steps", [])
+            final_answer["steps"] = steps
             update(status="completed", result=final_answer, current_step="完成")
         else:
-            update(status="completed", result=final_answer, current_step="完成")
+            final_report = _build_partial_report(steps, user_request, status="completed")
+            final_report["title"] = f"已完成：{user_request[:30]}…"
+            final_report["summary"] = str(final_answer) if final_answer else "Agent 已完成任务。"
+            update(status="completed", result=final_report, current_step="完成")
         emit_log("INFO", "Agent 任务完成", task_id)
     except Exception as exc:
         err = str(exc)
