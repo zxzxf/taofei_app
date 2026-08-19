@@ -808,6 +808,15 @@ async function sendAgent(s, text) {
       if (result && typeof result === 'object' && result.type === 'report') {
         aiMsg.report = result
         aiMsg.text = ''
+        // 默认展开所有步骤；新出现的步骤自动展开，已手动折叠的步骤保持折叠
+        if (!aiMsg.reportExpanded) aiMsg.reportExpanded = {}
+        if (result.steps) {
+          for (const st of result.steps) {
+            if (!(st.id in aiMsg.reportExpanded)) {
+              aiMsg.reportExpanded[st.id] = true
+            }
+          }
+        }
       }
       // 运行中状态文本
       if (task.status === 'running' && !aiMsg.report) {
