@@ -567,6 +567,9 @@ class _LogBuffer:
                     f.write(f"[{record.time}] [{record.level}] [{record.source}] {record.task_id or '-'} {record.message}\n")
             except Exception:
                 pass
+        # 把 Agent 执行步骤和错误日志同时输出到控制台，方便调试
+        if source == "agent" or record.level in ("ERROR", "WARNING"):
+            print(f"[{record.time}] [{record.level}] [{record.source}] {record.task_id or '-'} {record.message}", flush=True)
         return record
 
     def query(
