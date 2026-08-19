@@ -1952,7 +1952,7 @@ function onFilePick(node) {
   border-radius: 12px;
   padding: 14px 16px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  max-width: 560px;
+  max-width: 100%;
   animation: reportCardIn .25s ease-out;
 }
 @keyframes reportCardIn {
