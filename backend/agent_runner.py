@@ -269,6 +269,28 @@ def _is_report_json(text: str) -> bool:
     return text.strip().startswith("{") and '"type"' in text and '"report"' in text
 
 
+def _build_user_content(user_request: str, images: list[str]):
+    """构造首条用户消息内容：无图返回纯文本，有图返回 Anthropic 多模态 blocks。"""
+    if not images:
+        return user_request
+    blocks: list[dict] = []
+    for img in images:
+        img = (img or "").strip()
+        if not img:
+            continue
+        m = re.match(r"^data:([^;]+);base64,(.+)$", img)
+        if m:
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": m.group(1), "data": m.group(2)},
+            })
+        elif img.startswith("http://") or img.startswith("https://"):
+            blocks.append({"type": "image", "source": {"type": "url", "url": img}})
+    if user_request:
+        blocks.append({"type": "text", "text": user_request})
+    return blocks if blocks else user_request
+
+
 def run_agent_task(
     task_id: str,
     user_request: str,
@@ -278,8 +300,12 @@ def run_agent_task(
     task_store: dict[str, dict],
     task_lock: threading.Lock,
     notify_update: Callable[[], None] | None = None,
+    images: list[str] | None = None,
 ) -> None:
-    """在后台线程中执行 ReAct Agent。"""
+    """在后台线程中执行 ReAct Agent。
+
+    images: 首条用户消息附带的多模态图片（data URL 或 URL 列表）。
+    """
 
     def update(**kwargs):
         with task_lock:
@@ -303,7 +329,7 @@ def run_agent_task(
 
     messages: list[dict] = [
         {"role": "system", "content": REACT_SYSTEM_PROMPT.format(tools_desc=_format_tools())},
-        {"role": "user", "content": user_request},
+        {"role": "user", "content": _build_user_content(user_request, images or [])},
     ]
 
     final_answer = ""
@@ -330,7 +356,30 @@ def run_agent_task(
                 })
                 near_limit_warned = True
 
-            reply = llm_call(messages)
+            reply = None
+            try:
+                reply = llm_call(messages)
+            except Exception as exc:
+                # 当前模型不支持图片时自动降级：去掉首条消息中的图片后重试一次
+                first_user = messages[1] if len(messages) > 1 else None
+                has_image_blocks = (
+                    isinstance(first_user, dict)
+                    and isinstance(first_user.get("content"), list)
+                    and any(isinstance(b, dict) and b.get("type") == "image" for b in first_user["content"])
+                )
+                if images and has_image_blocks:
+                    emit_log("WARNING", f"当前模型不支持图片，已降级为纯文本重试：{exc}", task_id)
+                    text_blocks = [
+                        b for b in first_user["content"]
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    ]
+                    note = "\n\n（注意：当前模型不支持图片，已忽略用户附带的图片，请基于文字描述继续完成任务。）"
+                    new_content = (text_blocks[0]["text"] if text_blocks else user_request) + note
+                    messages[1] = {"role": "user", "content": new_content}
+                    reply = llm_call(messages)
+                else:
+                    raise
+
             add_step({
                 "id": f"step-{step_idx + 1}",
                 "name": f"思考第 {step_idx + 1} 步",

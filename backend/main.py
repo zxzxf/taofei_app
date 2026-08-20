@@ -318,6 +318,25 @@ class _LLMCompat:
     # ------------------------------------------------------------------
     # crewai.LLM 兼容 API
     # ------------------------------------------------------------------
+    @staticmethod
+    def _to_openai_content(content):
+        """把 Anthropic 多模态 blocks 转换为 OpenAI vision 格式（image_url）。"""
+        if not isinstance(content, list):
+            return content
+        out = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "image":
+                src = block.get("source") or {}
+                if src.get("type") == "base64":
+                    media = src.get("media_type", "image/png")
+                    data = src.get("data", "")
+                    out.append({"type": "image_url", "image_url": {"url": f"data:{media};base64,{data}"}})
+                else:
+                    out.append({"type": "image_url", "image_url": {"url": src.get("url", "")}})
+            else:
+                out.append(block)
+        return out
+
     def call(self, messages):
         from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -330,7 +349,7 @@ class _LLMCompat:
                     lc_msgs.append(m)
                     continue
                 role = m.get("role") if isinstance(m, dict) else "user"
-                content = m.get("content") if isinstance(m, dict) else str(m)
+                content = self._to_openai_content(m.get("content")) if isinstance(m, dict) else str(m)
                 if role in ("system",):
                     lc_msgs.append(SystemMessage(content=content))
                 elif role in ("assistant", "ai"):
@@ -880,6 +899,7 @@ class AgentRunRequest(BaseModel):
     request: str  # 用户的 Agent 任务描述
     model_preset_id: str | None = None
     workspace_id: str | None = None
+    images: list[str] = []  # 多模态图片（data URL 或 URL），传给首条用户消息
 
 
 class GitCommitRequest(BaseModel):
@@ -1969,7 +1989,7 @@ def agent_stream(task_id: str):
 # ---------------------------------------------------------------
 # Agent（ReAct 循环）
 # ---------------------------------------------------------------
-def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None):
+def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None):
     """后台线程执行 ReAct Agent。"""
     try:
         with _tasks_lock:
@@ -2007,6 +2027,7 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             task_store=_tasks,
             task_lock=_tasks_lock,
             notify_update=notify_update,
+            images=images or [],
         )
     except Exception as exc:
         err_msg = str(exc)
@@ -2042,7 +2063,7 @@ def agent_run(req: AgentRunRequest):
     log_buffer.emit("INFO", "system", f"收到 Agent 任务：{req.request[:60]}", task_id)
     threading.Thread(
         target=_run_agent_async,
-        args=(task_id, req.request, workspace_path, req.model_preset_id),
+        args=(task_id, req.request, workspace_path, req.model_preset_id, req.images or []),
         daemon=True,
     ).start()
     return {"task_id": task_id}

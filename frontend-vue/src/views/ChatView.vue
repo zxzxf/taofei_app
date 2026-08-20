@@ -756,27 +756,6 @@ function previewImage(dataUrl) {
   window.open(dataUrl, '_blank')
 }
 
-function parseDataUrl(dataUrl) {
-  const m = /^data:([^;]+);base64,(.+)$/.exec(dataUrl)
-  if (!m) return null
-  return { mediaType: m[1], base64: m[2] }
-}
-
-// 将消息构造为后端多模态 content：有图时返回 Anthropic vision content blocks，否则返回纯文本
-function buildMessageContent(m) {
-  const images = m.images || []
-  if (!images.length) return m.text || ''
-  const blocks = []
-  for (const img of images) {
-    const parsed = parseDataUrl(img)
-    if (parsed) {
-      blocks.push({ type: 'image', source: { type: 'base64', media_type: parsed.mediaType, data: parsed.base64 } })
-    }
-  }
-  if (m.text) blocks.push({ type: 'text', text: m.text })
-  return blocks
-}
-
 async function send() {
   const text = inputText.value.trim()
   const hasImages = pendingImages.value.length > 0
@@ -791,66 +770,8 @@ async function send() {
     return sendGitCommit(s, text, commitMessage)
   }
 
-  // 文本消息一律走 Agent 模式（Agent 暂不支持图片，图片消息走普通对话）
-  if (!hasImages && text) {
-    return sendAgent(s, text)
-  }
-
-  // 1) 推入用户消息
-  s.messages.push({ role: 'user', text, time: Date.now(), images: pendingImages.value.map(i => i.dataUrl) })
-  s.title = (text || '图片消息').slice(0, 20)
-  inputText.value = ''
-  pendingImages.value = []
-  await scrollToBottom()
-
-  // 2) 预占一条 AI 消息，等待后端返回
-  const aiMsg = { role: 'ai', text: '', time: Date.now(), pending: true, showReportSteps: false, stepExpanded: {} }
-  s.messages.push(aiMsg)
-  await scrollToBottom()
-
-  sending.value = true
-  saveSessions()
-  try {
-    // 3) 构造后端 ChatRequest 格式：{role, content}，并附会话携带的 skills（用于后端 @技能名 触发）
-    const payload = {
-      messages: s.messages
-        .filter(m => !m.pending)
-        .map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: buildMessageContent(m) })),
-      skills: (s.skills || []).map(sk => ({ id: sk.id, name: sk.name, type: sk.type })),
-      model_preset_id: s.modelPresetId || globalDefaultPresetId.value || null,
-      workspace_id: currentWorkspaceId.value || null,
-    }
-
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-
-    if (!res.ok) {
-      let errMsg = `HTTP ${res.status}`
-      try {
-        const data = await res.json()
-        errMsg = data.error || data.detail || errMsg
-      } catch {}
-      aiMsg.text = `❌ 调用大模型失败：${errMsg}`
-      aiMsg.pending = false
-      aiMsg.error = true
-    } else {
-      const data = await res.json()
-      aiMsg.text = data.reply || '(大模型无返回内容)'
-      aiMsg.pending = false
-      s.time = Date.now()
-    }
-  } catch (e) {
-    aiMsg.text = `❌ 网络错误：${e.message || e}\n\n请确认后端服务已启动（http://127.0.0.1:8000）且模型已配置。`
-    aiMsg.pending = false
-    aiMsg.error = true
-  } finally {
-    sending.value = false
-    saveSessions()
-    await scrollToBottom()
-  }
+  // 所有消息一律走 Agent 模式（含图片）
+  return sendAgent(s, text, pendingImages.value)
 }
 
 // ===== 快捷指令：提交代码到 GitHub =====
@@ -968,11 +889,12 @@ function fallbackPoll(task_id, aiMsg, s) {
   }, 1500)
 }
 
-async function sendAgent(s, text) {
-  // 1) 推入用户消息
-  s.messages.push({ role: 'user', text, time: Date.now() })
-  s.title = text.slice(0, 20)
+async function sendAgent(s, text, images = []) {
+  // 1) 推入用户消息（含图片）
+  s.messages.push({ role: 'user', text, time: Date.now(), images: images.map(i => i.dataUrl) })
+  s.title = (text || '图片消息').slice(0, 20)
   inputText.value = ''
+  pendingImages.value = []
   await scrollToBottom()
 
   // 2) 预占一条 AI 消息（含 agentSteps / reportSteps 展开状态）
@@ -984,7 +906,7 @@ async function sendAgent(s, text) {
   saveSessions()
 
   try {
-    // 3) 启动 Agent 任务
+    // 3) 启动 Agent 任务（附带多模态图片）
     const startRes = await fetch('/api/agent/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -992,6 +914,7 @@ async function sendAgent(s, text) {
         request: text,
         model_preset_id: s.modelPresetId || globalDefaultPresetId.value || null,
         workspace_id: currentWorkspaceId.value || null,
+        images: images.map(i => i.dataUrl),
       }),
     })
     if (!startRes.ok) {
