@@ -701,7 +701,7 @@ async function commitToGitHub() {
     const data = await res.json()
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
     githubResult.value = { type: 'success', msg: `提交成功：${data.commit || data.output || '已推送至 GitHub'}` }
-    setTimeout(() => { showGitHubModal.value = false }, 1500)
+    setTimeout(() => { showGitHubModal.value = false }, 1200)
   } catch (e) {
     githubResult.value = { type: 'error', msg: `提交失败：${e.message}` }
   } finally {
