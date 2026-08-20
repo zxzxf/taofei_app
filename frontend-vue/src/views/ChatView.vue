@@ -863,22 +863,27 @@ async function sendGitCommit(s, userText, commitMessage) {
   await scrollToBottom()
 
   // 2) 预占 AI 消息
-  const aiMsg = { role: 'ai', text: '⏳ 正在提交代码…', time: Date.now(), pending: true }
-  s.messages.push(aiMsg)
+  s.messages.push({ role: 'ai', text: '⏳ 正在提交代码…', time: Date.now(), pending: true })
   await scrollToBottom()
 
   sending.value = true
   saveSessions()
+
+  function updateAiMsg(patch) {
+    const last = s.messages[s.messages.length - 1]
+    if (last && last.role === 'ai') {
+      Object.assign(last, patch)
+    }
+  }
 
   try {
     // 先查询工作区状态，无变更则不调用提交
     const statusRes = await fetch('/api/git/status')
     const statusData = await statusRes.json()
     if (!statusRes.ok) {
-      aiMsg.text = `❌ 状态检查失败：${statusData.error || `HTTP ${statusRes.status}`}`
-      aiMsg.error = true
+      updateAiMsg({ text: `❌ 状态检查失败：${statusData.error || `HTTP ${statusRes.status}`}`, error: true, pending: false })
     } else if (statusData.clean) {
-      aiMsg.text = 'ℹ️ 当前没有可提交的变更，无需提交代码。'
+      updateAiMsg({ text: 'ℹ️ 当前没有可提交的变更，无需提交代码。', pending: false })
     } else {
       const res = await fetch('/api/git/commit', {
         method: 'POST',
@@ -891,18 +896,18 @@ async function sendGitCommit(s, userText, commitMessage) {
       })
       const data = await res.json()
       if (!res.ok) {
-        aiMsg.text = `❌ 提交失败：${data.error || `HTTP ${res.status}`}`
-        aiMsg.error = true
+        updateAiMsg({ text: `❌ 提交失败：${data.error || `HTTP ${res.status}`}`, error: true, pending: false })
       } else {
-        aiMsg.text = `✅ 代码已提交并推送至 GitHub\n\n- 分支：${data.branch || 'main'}\n- 提交：${(data.commit || '').split(' ')[1] || data.commit || '-'}\n- 消息：${commitMessage}`
+        updateAiMsg({
+          text: `✅ 代码已提交并推送至 GitHub\n\n- 分支：${data.branch || 'main'}\n- 提交：${(data.commit || '').split(' ')[1] || data.commit || '-'}\n- 消息：${commitMessage}`,
+          pending: false,
+        })
         s.time = Date.now()
       }
     }
   } catch (e) {
-    aiMsg.text = `❌ 提交异常：${e.message || e}\n\n请确认后端服务已启动。`
-    aiMsg.error = true
+    updateAiMsg({ text: `❌ 提交异常：${e.message || e}\n\n请确认后端服务已启动。`, error: true, pending: false })
   } finally {
-    aiMsg.pending = false
     sending.value = false
     saveSessions()
     await scrollToBottom()
