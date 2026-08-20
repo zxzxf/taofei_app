@@ -865,10 +865,21 @@ function fallbackPoll(task_id, aiMsg, s) {
         aiMsg.report = result
         aiMsg.text = ''
       }
-      if (task.status === 'running' && !aiMsg.report) {
-        aiMsg.text = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+      if (task.status === 'running') {
+        const stepText = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+        if (aiMsg.report) {
+          aiMsg.report.summary = stepText
+        } else {
+          aiMsg.text = stepText
+        }
       } else if (task.status === 'completed') {
-        if (!aiMsg.report) aiMsg.text = task.result || '(Agent 无返回结果)'
+        const finalResult = task.result
+        if (finalResult && typeof finalResult === 'object' && finalResult.type === 'report') {
+          aiMsg.report = finalResult
+          aiMsg.text = ''
+        } else if (!aiMsg.report) {
+          aiMsg.text = finalResult || '(Agent 无返回结果)'
+        }
         aiMsg.pending = false
         clearInterval(pollInterval)
         agentPolling.value = false
@@ -952,8 +963,14 @@ async function sendAgent(s, text) {
         }
       }
       // 运行中状态文本
-      if (task.status === 'running' && !aiMsg.report) {
-        aiMsg.text = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+      if (task.status === 'running') {
+        const stepText = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+        if (aiMsg.report) {
+          // 报告卡片模式下，把 summary 实时替换为当前步骤，让用户看到思考过程
+          aiMsg.report.summary = stepText
+        } else {
+          aiMsg.text = stepText
+        }
       }
       saveSessions()
       scrollToBottom()
@@ -961,8 +978,12 @@ async function sendAgent(s, text) {
 
     function finalizeTask(task) {
       if (task.status === 'completed') {
-        if (!aiMsg.report) {
-          aiMsg.text = task.result || '(Agent 无返回结果)'
+        const result = task.result
+        if (result && typeof result === 'object' && result.type === 'report') {
+          aiMsg.report = result
+          aiMsg.text = ''
+        } else if (!aiMsg.report) {
+          aiMsg.text = result || '(Agent 无返回结果)'
         }
         aiMsg.pending = false
       } else if (task.status === 'failed') {
