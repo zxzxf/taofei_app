@@ -2242,8 +2242,10 @@ function onFilePick(node) {
   border-radius: 12px;
   padding: 14px 16px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  width: 100%;
   max-width: 100%;
   animation: reportCardIn .25s ease-out;
+  box-sizing: border-box;
 }
 @keyframes reportCardIn {
   from { opacity: 0; transform: translateY(6px); }
