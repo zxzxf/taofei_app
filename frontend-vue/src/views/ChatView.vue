@@ -791,8 +791,8 @@ async function send() {
     return sendGitCommit(s, text, commitMessage)
   }
 
-  // Agent 模式走独立流程
-  if (agentMode.value && !hasImages) {
+  // 文本消息一律走 Agent 模式（Agent 暂不支持图片，图片消息走普通对话）
+  if (!hasImages && text) {
     return sendAgent(s, text)
   }
 
