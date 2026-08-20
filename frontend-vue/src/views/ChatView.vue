@@ -871,22 +871,32 @@ async function sendGitCommit(s, userText, commitMessage) {
   saveSessions()
 
   try {
-    const res = await fetch('/api/git/commit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        repo: 'https://github.com/zxzxf/taofei_app.git',
-        branch: 'main',
-        message: commitMessage,
-      }),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      aiMsg.text = `❌ 提交失败：${data.error || `HTTP ${res.status}`}`
+    // 先查询工作区状态，无变更则不调用提交
+    const statusRes = await fetch('/api/git/status')
+    const statusData = await statusRes.json()
+    if (!statusRes.ok) {
+      aiMsg.text = `❌ 状态检查失败：${statusData.error || `HTTP ${statusRes.status}`}`
       aiMsg.error = true
+    } else if (statusData.clean) {
+      aiMsg.text = 'ℹ️ 当前没有可提交的变更，无需提交代码。'
     } else {
-      aiMsg.text = `✅ 代码已提交并推送至 GitHub\n\n- 分支：${data.branch || 'main'}\n- 提交：${(data.commit || '').split(' ')[1] || data.commit || '-'}\n- 消息：${commitMessage}`
-      s.time = Date.now()
+      const res = await fetch('/api/git/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo: 'https://github.com/zxzxf/taofei_app.git',
+          branch: 'main',
+          message: commitMessage,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        aiMsg.text = `❌ 提交失败：${data.error || `HTTP ${res.status}`}`
+        aiMsg.error = true
+      } else {
+        aiMsg.text = `✅ 代码已提交并推送至 GitHub\n\n- 分支：${data.branch || 'main'}\n- 提交：${(data.commit || '').split(' ')[1] || data.commit || '-'}\n- 消息：${commitMessage}`
+        s.time = Date.now()
+      }
     }
   } catch (e) {
     aiMsg.text = `❌ 提交异常：${e.message || e}\n\n请确认后端服务已启动。`

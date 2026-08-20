@@ -2048,6 +2048,28 @@ def agent_run(req: AgentRunRequest):
     return {"task_id": task_id}
 
 
+@app.get("/api/git/status")
+def git_status():
+    """查询当前 Git 工作区是否有可提交的变更。"""
+    import subprocess
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode != 0:
+            return JSONResponse({"error": f"git status 失败：{res.stderr}"}, status_code=500)
+        changes = [line for line in res.stdout.strip().splitlines() if line.strip()]
+        return {"clean": len(changes) == 0, "changes": changes}
+    except Exception as exc:
+        return JSONResponse({"error": f"查询状态失败：{str(exc)}"}, status_code=500)
+
+
 @app.post("/api/git/commit")
 def git_commit(req: GitCommitRequest):
     """将当前工作目录的变更提交并推送到 GitHub。"""
