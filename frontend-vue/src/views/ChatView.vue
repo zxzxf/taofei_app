@@ -784,8 +784,8 @@ async function send() {
   const s = currentSession.value
   if (!s) { openNewSessionDialog(); return }
 
-  // 对话中心快捷指令：提交代码
-  if (text.startsWith('提交代码') && !hasImages && !agentMode.value) {
+  // 对话中心快捷指令：提交代码（任何模式下都优先拦截）
+  if (text.startsWith('提交代码') && !hasImages) {
     const customMsg = text.slice(4).trim()
     const commitMessage = customMsg || 'chore: 通过对话中心提交代码'
     return sendGitCommit(s, text, commitMessage)
