@@ -610,7 +610,11 @@ class _LogBuffer:
                 pass
         # 把 Agent 执行步骤和错误日志同时输出到控制台，方便调试
         if source == "agent" or record.level in ("ERROR", "WARNING"):
-            print(f"[{record.time}] [{record.level}] [{record.source}] {record.task_id or '-'} {record.message}", flush=True)
+            try:
+                print(f"[{record.time}] [{record.level}] [{record.source}] {record.task_id or '-'} {record.message}", flush=True)
+            except Exception:
+                # 控制台编码问题（如 GBK 无法编码 emoji）不能影响任务本身，静默跳过
+                pass
         return record
 
     def query(
@@ -2721,6 +2725,16 @@ async def spa_fallback(full_path: str):
 def main():
     import socket
     import webbrowser
+
+    # Windows 下 stdout/stderr 默认 GBK，打印含 emoji 的日志（如 📁）会抛
+    # UnicodeEncodeError 导致 Agent 任务失败。强制改为 UTF-8 + errors=replace 根治。
+    for stream_name in ("stdout", "stderr"):
+        try:
+            stream = getattr(sys, stream_name)
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
     # --no-browser: Electron 模式下不自动打开浏览器
     no_browser = "--no-browser" in sys.argv
