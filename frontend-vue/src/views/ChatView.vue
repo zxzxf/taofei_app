@@ -224,20 +224,14 @@
         </div>
         <div class="chat-input-row">
           <button class="chat-upload" @click="triggerImageUpload" title="上传图片">🖼️</button>
-          <button
-            class="chat-agent-toggle"
-            :class="{ active: agentMode }"
-            @click="agentMode = !agentMode"
-            :title="agentMode ? 'Agent 模式已开启：输入需求后 Agent 会自动拆分任务、调用工具连续执行' : '点击开启 Agent 模式'"
-          >🤖</button>
           <textarea
             v-model="inputText"
             rows="1"
-            :placeholder="agentMode ? 'Agent 模式：描述任务，Agent 会自动分析、调用工具、连续执行…' : '输入问题，例如：帮我生成一份行业调研报告…'"
+            placeholder="Agent 模式：描述任务，Agent 会自动分析、调用工具、连续执行…"
             @keydown.enter.exact.prevent="send"
             @paste="handlePaste"
           ></textarea>
-          <button class="chat-send" @click="send" :class="{ 'agent-active': agentMode }">➤</button>
+          <button class="chat-send agent-active" @click="send">➤</button>
         </div>
         <input
           ref="imageInput"
@@ -529,7 +523,6 @@ function clearCurrent() {
 }
 
 const sending = ref(false)
-const agentMode = ref(false)
 const agentPolling = ref(false)
 
 // ===== 当前会话模型（会话级，每个对话可独立切换） =====
@@ -2190,18 +2183,6 @@ function onFilePick(node) {
 }
 
 /* ===== Agent 模式 ===== */
-.chat-agent-toggle {
-  background: none; border: 1px solid var(--border);
-  border-radius: 8px; padding: 4px 8px; font-size: 18px;
-  cursor: pointer; color: var(--text-muted); transition: all .15s;
-  flex-shrink: 0;
-}
-.chat-agent-toggle:hover { background: var(--bg-soft); }
-.chat-agent-toggle.active {
-  background: rgba(139, 92, 246, 0.12);
-  border-color: rgba(139, 92, 246, 0.4);
-  color: #8b5cf6;
-}
 .chat-send.agent-active {
   background: linear-gradient(135deg, #8b5cf6, #6d28d9) !important;
 }
