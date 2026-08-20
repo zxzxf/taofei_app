@@ -227,8 +227,8 @@ def _build_partial_report(steps: list[dict], user_request: str, status: str = "r
             "icon": icon,
         })
         # 简洁列表仍保留，用于兼容旧版/无 steps 字段的渲染
-        # 过滤纯内部状态步骤：思考第 N 步 / 格式重试
-        if name.startswith("思考第") or name == "格式重试":
+        # 过滤纯内部状态步骤：格式重试（思考第 N 步保留，让用户能看到思考过程）
+        if name == "格式重试":
             continue
         items.append(f"{icon} {name}")
     duration = "进行中"
@@ -310,7 +310,16 @@ def run_agent_task(
     near_limit_warned = False
     try:
         for step_idx in range(MAX_STEPS):
-            update(current_step=f"思考第 {step_idx + 1} 步")
+            # 更新当前步骤；若已有步骤则刷新部分报告摘要，让前端能看到"正在思考第 N 步"
+            with task_lock:
+                task_store[task_id]["current_step"] = f"思考第 {step_idx + 1} 步"
+                _steps = task_store[task_id].get("steps", [])
+                if _steps:
+                    _rpt = _build_partial_report(_steps, user_request, status="running")
+                    _rpt["summary"] = f"⏳ 正在思考第 {step_idx + 1} 步…"
+                    task_store[task_id]["result"] = _rpt
+            if notify_update:
+                notify_update()
             emit_log("INFO", f"Agent 第 {step_idx + 1} 次调用模型", task_id)
 
             # 接近步数上限时提醒模型直接总结，避免无意义地继续调用工具

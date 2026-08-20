@@ -1920,7 +1920,7 @@ def agent_stream(task_id: str):
     """Server-Sent Events：实时推送 Agent 任务更新，取代轮询。"""
 
     def event_generator():
-        last_result = None
+        last_snapshot = None
         while True:
             with _tasks_lock:
                 event = _task_events.setdefault(task_id, threading.Event())
@@ -1929,22 +1929,34 @@ def agent_stream(task_id: str):
             if not task:
                 yield f"event: error\ndata: {json.dumps({'error': '任务不存在'}, ensure_ascii=False)}\n\n"
                 break
-            current_result = task.get("result")
             status = task.get("status")
-            # 运行中且报告有变化时推送增量更新
-            if current_result != last_result and status == "running":
-                last_result = current_result
+            # 快照关键字段：状态、当前步骤、结果、步数；任一变化即推送，
+            # 确保前端能看到"思考第 N 步"等中间过程，而非只在 result 变化时才更新
+            snapshot = (
+                status,
+                task.get("current_step"),
+                task.get("result"),
+                len(task.get("steps") or []),
+            )
+            if snapshot != last_snapshot:
+                last_snapshot = snapshot
+                if status in ("completed", "failed"):
+                    yield f"event: done\ndata: {json.dumps(task, ensure_ascii=False)}\n\n"
+                    break
                 yield f"data: {json.dumps(task, ensure_ascii=False)}\n\n"
-            if status in ("completed", "failed"):
+            elif status in ("completed", "failed"):
                 yield f"event: done\ndata: {json.dumps(task, ensure_ascii=False)}\n\n"
                 break
             # 等待下一次更新（最长 5 秒唤醒一次，避免连接僵死）
-            event.wait(timeout=5.0)
+            timed_out = not event.wait(timeout=5.0)
+            if timed_out:
+                # 心跳：保持连接存活，防止代理/浏览器因空闲断开
+                yield ": heartbeat\n\n"
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 
