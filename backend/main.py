@@ -2253,7 +2253,8 @@ def git_status(workspace_id: str | None = Query(None)):
 
 def _resolve_repo_root(workspace_id: str | None) -> str | JSONResponse:
     """根据 workspace_id 解析 Git 仓库根目录；失败返回 JSONResponse 错误。"""
-    default_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # 默认回退路径：开发模式用项目根目录，打包模式用 exe 所在目录
+    default_root = str(EXE_DIR if PACKAGED else Path(__file__).resolve().parent.parent)
     if not workspace_id:
         return default_root
     ws = None
