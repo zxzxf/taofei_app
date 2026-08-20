@@ -7,7 +7,7 @@
 
     <nav class="nav-section">
       <button class="nav-item" :class="{ active: route.name === 'chat' }" @click="router.push('/chat')">
-        <span class="icon">💬</span> 对话中心 <span class="nav-badge">新</span>
+        <span class="icon">💬</span> 会话中心 <span class="nav-badge">新</span>
       </button>
       <button class="nav-item" :class="{ active: route.name === 'dashboard' }" @click="router.push('/dashboard')">
         <span class="icon">🏠</span> 工作台

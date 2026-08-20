@@ -36,7 +36,7 @@
           <div class="card-head">
             <div>
               <div class="card-title">🛠️ 技能管理</div>
-              <div class="card-sub" style="margin-top:4px">对话中心可用「@技能名」调用</div>
+              <div class="card-sub" style="margin-top:4px">会话中心可用「@技能名」调用</div>
             </div>
             <div style="display:flex;gap:8px;">
               <button class="btn-ghost" @click="showUploadModal = true">📤 上传技能</button>

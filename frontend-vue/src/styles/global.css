@@ -538,7 +538,7 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .page-num.active { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
 .page-num.ellipsis { border: none; cursor: default; color: var(--text-muted); }
 
-/* ===== 对话中心 ===== */
+/* ===== 会话中心 ===== */
 .chat-view { display: flex; height: calc(100vh - 140px); min-height: 520px; }
 .chat-sessions { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; overflow: hidden; }
 .chat-resizer { width: 8px; cursor: col-resize; background: transparent; flex-shrink: 0; position: relative; }

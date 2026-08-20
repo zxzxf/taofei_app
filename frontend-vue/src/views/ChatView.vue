@@ -784,10 +784,10 @@ async function send() {
   const s = currentSession.value
   if (!s) { openNewSessionDialog(); return }
 
-  // 对话中心快捷指令：提交代码（任何模式下都优先拦截）
+  // 会话中心快捷指令：提交代码（任何模式下都优先拦截）
   if (text.startsWith('提交代码') && !hasImages) {
     const customMsg = text.slice(4).trim()
-    const commitMessage = customMsg || 'chore: 通过对话中心提交代码'
+    const commitMessage = customMsg || 'chore: 通过会话中心提交代码'
     return sendGitCommit(s, text, commitMessage)
   }
 
@@ -1817,7 +1817,7 @@ function onFilePick(node) {
 .chat-session-skills { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
 .session-skill-chip { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(139, 92, 246, 0.1); color: var(--text-secondary); }
 
-/* ===== 对话中心 · 当前模型指示器（可点击切换） ===== */
+/* ===== 会话中心 · 当前模型指示器（可点击切换） ===== */
 .chat-current-model-wrap { position: relative; }
 .chat-current-model {
   display: inline-flex; align-items: center; gap: 8px;
