@@ -935,6 +935,7 @@ class GitCommitRequest(BaseModel):
     repo: str = ""  # 仓库地址，为空则使用当前目录 origin
     branch: str = "main"
     message: str
+    workspace_id: str | None = None  # 工作空间 ID，为空则使用 taofei_app 自身目录
 
 
 @app.get("/api/health")
@@ -2227,11 +2228,13 @@ def agent_cancel(task_id: str):
 
 
 @app.get("/api/git/status")
-def git_status():
+def git_status(workspace_id: str | None = Query(None)):
     """查询当前 Git 工作区是否有可提交的变更。"""
     import subprocess
 
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = _resolve_repo_root(workspace_id)
+    if isinstance(repo_root, JSONResponse):
+        return repo_root
     try:
         res = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -2243,9 +2246,30 @@ def git_status():
         if res.returncode != 0:
             return JSONResponse({"error": f"git status 失败：{res.stderr}"}, status_code=500)
         changes = [line for line in res.stdout.strip().splitlines() if line.strip()]
-        return {"clean": len(changes) == 0, "changes": changes}
+        return {"clean": len(changes) == 0, "changes": changes, "repo_root": str(repo_root)}
     except Exception as exc:
         return JSONResponse({"error": f"查询状态失败：{str(exc)}"}, status_code=500)
+
+
+def _resolve_repo_root(workspace_id: str | None) -> str | JSONResponse:
+    """根据 workspace_id 解析 Git 仓库根目录；失败返回 JSONResponse 错误。"""
+    default_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not workspace_id:
+        return default_root
+    ws = None
+    for w in _load_workspaces().get("workspaces", []):
+        if w.get("id") == workspace_id:
+            ws = w
+            break
+    if ws is None:
+        return JSONResponse({"error": f"工作空间不存在：{workspace_id}"}, status_code=400)
+    path = ws.get("path")
+    if not path or not os.path.isdir(path):
+        return JSONResponse({"error": f"工作空间路径无效：{path}"}, status_code=400)
+    # 验证是否为 Git 仓库
+    if not os.path.isdir(os.path.join(path, ".git")):
+        return JSONResponse({"error": f"该目录不是 Git 仓库：{path}"}, status_code=400)
+    return path
 
 
 @app.post("/api/git/commit")
@@ -2253,7 +2277,9 @@ def git_commit(req: GitCommitRequest):
     """将当前工作目录的变更提交并推送到 GitHub。"""
     import subprocess
 
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = _resolve_repo_root(req.workspace_id)
+    if isinstance(repo_root, JSONResponse):
+        return repo_root
     message = req.message.strip()
     if not message:
         return JSONResponse({"error": "提交信息不能为空"}, status_code=400)

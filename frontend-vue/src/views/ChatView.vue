@@ -831,7 +831,8 @@ async function sendGitCommit(s, userText, commitMessage) {
 
   try {
     // 先查询工作区状态，无变更则不调用提交
-    const statusRes = await fetch('/api/git/status')
+    const wsParam = currentWorkspaceId.value ? `?workspace_id=${encodeURIComponent(currentWorkspaceId.value)}` : ''
+    const statusRes = await fetch(`/api/git/status${wsParam}`)
     const statusData = await statusRes.json()
     if (!statusRes.ok) {
       updateAiMsg({ text: `❌ 状态检查失败：${statusData.error || `HTTP ${statusRes.status}`}`, error: true, pending: false })
@@ -845,6 +846,7 @@ async function sendGitCommit(s, userText, commitMessage) {
           repo: 'https://github.com/zxzxf/taofei_app.git',
           branch: 'main',
           message: commitMessage,
+          workspace_id: currentWorkspaceId.value || undefined,
         }),
       })
       const data = await res.json()
