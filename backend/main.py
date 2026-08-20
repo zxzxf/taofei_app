@@ -76,6 +76,9 @@ MODEL_CONFIG_FILE = EXE_DIR / "model_config.json"
 WORKSPACES_FILE = EXE_DIR / "workspaces.json"
 MODEL_PRESETS_FILE = EXE_DIR / "model_presets.json"
 
+# 实际监听端口（main() 启动时写入），用于 Agent 自调用后端集成端点
+SERVER_PORT: int = 8000
+
 DEFAULT_MODEL_CONFIG: dict[str, str] = {
     "provider": "deepseek",
     "model": "deepseek-chat",
@@ -2021,13 +2024,34 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
 
         # 会话绑定技能：按 skill_ids 过滤技能管理列表中的启用技能
         bound_skills: list[dict] = []
+        all_skills = _load_skills()
         if skill_ids:
-            all_skills = _load_skills()
             wanted = set(skill_ids)
             bound_skills = [
                 s for s in all_skills
                 if s.get("id") in wanted and s.get("enabled", True)
             ]
+
+        # 天气意图自动启用：消息涉及天气时，若未绑定天气技能则自动补上，
+        # 并把 URL 指向后端天气集成端点（支持城市名），确保 Agent 可直接调用。
+        _weather_keywords = (
+            "天气", "气温", "温度", "降雨", "下雨", "下雪", "降雪", "预报",
+            "晴天", "阴天", "多云", "台风", "湿度", "风力",
+            "weather", "temperature", "rain", "snow", "forecast", "humidity", "wind",
+        )
+        _is_weather_skill = lambda s: any(
+            k in f"{s.get('name','')} {s.get('url','')}".lower()
+            for k in ("天气", "weather", "open-meteo", "open_meteo")
+        )
+        if any(k in user_request.lower() for k in _weather_keywords) and \
+                not any(_is_weather_skill(s) for s in bound_skills):
+            for s in all_skills:
+                if _is_weather_skill(s) and s.get("enabled", True):
+                    s = dict(s)
+                    s["url"] = f"http://127.0.0.1:{SERVER_PORT}/api/integrations/weather?city={{{{input}}}}"
+                    bound_skills.append(s)
+                    emit_log("INFO", f"检测到天气意图，已自动启用技能「{s.get('name')}」", task_id)
+                    break
 
         run_agent_task(
             task_id=task_id,
@@ -2580,6 +2604,9 @@ def main():
 
     # Electron 通过 stdout 解析此行获取端口
     print(f"__BACKEND_PORT__:{port}", flush=True)
+
+    global SERVER_PORT
+    SERVER_PORT = port
 
     if not no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
