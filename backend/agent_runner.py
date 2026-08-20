@@ -227,7 +227,8 @@ def _build_partial_report(steps: list[dict], user_request: str, status: str = "r
             "icon": icon,
         })
         # 简洁列表仍保留，用于兼容旧版/无 steps 字段的渲染
-        if "思考" in name and not name.endswith("步"):
+        # 过滤纯内部状态步骤：思考第 N 步 / 格式重试
+        if name.startswith("思考第") or name == "格式重试":
             continue
         items.append(f"{icon} {name}")
     duration = "进行中"
@@ -249,15 +250,17 @@ def _build_partial_report(steps: list[dict], user_request: str, status: str = "r
                 duration = f"{int(secs // 60)}m{int(secs % 60)}s"
         except Exception:
             pass
+    sections = []
+    if items:
+        sections.append({"heading": "执行步骤", "items": items})
+
     return {
         "type": "report",
         "title": f"正在处理：{user_request[:30]}…",
         "status": status,
         "duration": duration,
         "summary": f"已执行 {len(steps)} 步，最新动作：{steps[-1].get('name', '') if steps else '准备中'}。",
-        "sections": [
-            {"heading": "执行步骤", "items": items or ["准备开始…"]},
-        ],
+        "sections": sections,
         "steps": structured_steps,
     }
 
