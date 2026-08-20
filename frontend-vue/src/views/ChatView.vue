@@ -1,14 +1,23 @@
 <template>
   <div class="chat-view">
-    <div class="chat-sessions" :style="{ width: sessionsWidth + 'px', flexShrink: 0 }">
+    <div class="chat-sessions" :class="{ collapsed: sidebarCollapsed }" :style="sidebarCollapsed ? {} : { width: sessionsWidth + 'px', flexShrink: 0 }">
       <div class="chat-sessions-head">
-        <h3>会话列表</h3>
-        <button class="chat-new-btn" @click="openNewSessionDialog">+ 新对话</button>
+        <div class="chat-sessions-head-left">
+          <button class="chat-collapse-btn" @click="toggleSidebar" :title="sidebarCollapsed ? '展开会话列表' : '收起会话列表'">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+          <h3 v-if="!sidebarCollapsed">会话列表</h3>
+        </div>
+        <button v-if="!sidebarCollapsed" class="chat-new-btn" @click="openNewSessionDialog">+ 新对话</button>
       </div>
-      <div class="chat-search">
+      <div v-if="!sidebarCollapsed" class="chat-search">
         <input v-model="searchTerm" type="text" placeholder="搜索会话">
       </div>
-      <div class="chat-session-list">
+      <div v-if="!sidebarCollapsed" class="chat-session-list">
         <div
           v-for="s in filteredSessions"
           :key="s.id"
@@ -33,7 +42,7 @@
         </div>
       </div>
     </div>
-    <div class="chat-resizer" :class="{ active: resizing }" @mousedown="startResize"></div>
+    <div v-if="!sidebarCollapsed" class="chat-resizer" :class="{ active: resizing }" @mousedown="startResize"></div>
     <div class="chat-area">
       <div class="chat-area-head">
         <div class="chat-area-head-left">
@@ -139,7 +148,17 @@
       </div>
       <div class="chat-messages" ref="messagesEl">
         <div v-for="(msg, i) in currentMessages" :key="i" class="chat-msg" :class="msg.role">
-          <div class="chat-avatar" :class="msg.role">{{ msg.role === 'user' ? '我' : 'AI' }}</div>
+          <div class="chat-avatar" :class="msg.role">
+            <span v-if="msg.role === 'user'">我</span>
+            <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="7" width="16" height="12" rx="2.5"/>
+              <line x1="12" y1="3" x2="12" y2="7"/>
+              <circle cx="12" cy="2.5" r="1.2" fill="currentColor" stroke="none"/>
+              <circle cx="9" cy="13" r="1.5" fill="currentColor" stroke="none"/>
+              <circle cx="15" cy="13" r="1.5" fill="currentColor" stroke="none"/>
+              <path d="M9.5 16.5h5"/>
+            </svg>
+          </div>
           <div class="chat-bubble-wrap">
             <div v-if="msg.images && msg.images.length" class="chat-msg-images">
               <img
@@ -1205,6 +1224,12 @@ function onDeleteWorkspace(id) {
 // 左侧会话列表宽度拖拽
 const sessionsWidth = ref(parseInt(localStorage.getItem('chatSessionsWidth') || '260'))
 const resizing = ref(false)
+const sidebarCollapsed = ref(localStorage.getItem('chatSidebarCollapsed') === 'true')
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('chatSidebarCollapsed', String(sidebarCollapsed.value))
+}
 let resizeStartX = 0
 let resizeStartWidth = 0
 

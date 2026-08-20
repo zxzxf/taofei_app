@@ -546,7 +546,12 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .chat-resizer:hover::before, .chat-resizer.active::before { width: 3px; background: var(--primary); box-shadow: 0 0 6px rgba(59, 130, 246, 0.3); }
 .chat-resizer:hover, .chat-resizer.active { cursor: col-resize; }
 .chat-sessions-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.chat-sessions-head-left { display: flex; align-items: center; gap: 10px; }
 .chat-sessions-head h3 { font-size: 14px; font-weight: 700; }
+.chat-collapse-btn { width: 28px; height: 28px; border-radius: 6px; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; flex-shrink: 0; }
+.chat-collapse-btn:hover { background: rgba(59, 130, 246, 0.12); color: var(--primary); }
+.chat-sessions.collapsed { width: 48px; min-width: 48px; }
+.chat-sessions.collapsed .chat-sessions-head { justify-content: center; padding: 14px 0; border-bottom: none; }
 .chat-new-btn { background: rgba(59, 130, 246, 0.1); color: var(--primary); border: none; border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
 .chat-search { padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .chat-search input { width: 100%; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; color: var(--text); font-size: 13px; outline: none; }
@@ -567,7 +572,7 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .chat-msg { display: flex; gap: 10px; }
 .chat-msg.user { flex-direction: row-reverse; }
 .chat-avatar { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; }
-.chat-avatar.ai { background: linear-gradient(135deg, var(--primary), var(--purple)); color: #fff; }
+.chat-avatar.ai { background: linear-gradient(135deg, #0f766e, #06b6d4); color: #fff; }
 .chat-avatar.user { background: #1e293b; color: var(--text-secondary); border: 1px solid var(--border); }
 .chat-bubble-wrap { max-width: 100%; flex: 1; min-width: 0; }
 .chat-msg.user .chat-bubble-wrap { max-width: 80%; flex: 0 1 auto; display: flex; justify-content: flex-end; }
