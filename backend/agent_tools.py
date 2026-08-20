@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -128,6 +129,8 @@ def http_request(workspace_path: str | None, url: str, method: str = "GET", head
             if isinstance(parsed, dict):
                 req_headers = {str(k): str(v) for k, v in parsed.items()}
         req_headers.setdefault("User-Agent", "Mozilla/5.0 (taofei-agent)")
+        # 中文等非 ASCII 字符需 URL 编码
+        url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=%")
         data_bytes = body.encode("utf-8") if body and method.upper() in ("POST", "PUT", "PATCH") else None
         req = urllib.request.Request(url, data=data_bytes, headers=req_headers, method=method.upper())
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -154,6 +157,62 @@ def ask_llm(llm_call: Callable[[list[dict]], str], prompt: str) -> dict:
         return {"observation": _short(reply)}
     except Exception as e:
         return {"observation": "", "error": f"ask_llm 失败：{e}"}
+
+
+def call_skill(skill: dict, args: dict) -> dict:
+    """调用技能管理里配置的 HTTP 技能（支持 {{input}} 占位替换）。
+
+    skill 字段：id/name/url/method/headers(JSON)/body/description
+    """
+    try:
+        name = skill.get("name") or skill.get("id") or "未命名技能"
+        if skill.get("type") != "http":
+            return {"observation": "", "error": f"技能「{name}」不是 HTTP 技能，无法直接调用"}
+        inp = str(args.get("input", ""))
+        url = str(skill.get("url", "")).replace("{{input}}", inp).strip()
+        if not url:
+            return {"observation": "", "error": f"HTTP 技能「{name}」未配置 URL"}
+        # 中文等非 ASCII 字符需 URL 编码，否则 urllib 报 ascii 编码错误
+        url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=%")
+
+        method = str(skill.get("method", "GET")).upper()
+        headers: dict[str, str] = {}
+        raw_headers = str(skill.get("headers") or "").strip()
+        if raw_headers:
+            try:
+                parsed = json.loads(raw_headers)
+                if isinstance(parsed, dict):
+                    headers = {str(k): str(v) for k, v in parsed.items() if str(v) != ""}
+            except Exception:
+                pass
+        headers.setdefault("User-Agent", "Mozilla/5.0 (taofei-agent)")
+
+        body = str(skill.get("body") or "").strip()
+        data_bytes = None
+        if method in ("POST", "PUT", "PATCH") and body:
+            rendered = body.replace("{{input}}", inp)
+            try:
+                data_bytes = json.dumps(json.loads(rendered), ensure_ascii=False).encode("utf-8")
+                headers.setdefault("Content-Type", "application/json")
+            except Exception:
+                data_bytes = rendered.encode("utf-8")
+
+        req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                status = resp.status
+                raw = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            status = e.code
+            raw = e.read().decode("utf-8", errors="replace")
+        try:
+            parsed_body = json.loads(raw)
+            body_out = json.dumps(parsed_body, ensure_ascii=False, indent=2)
+        except Exception:
+            body_out = raw
+        return {"observation": f"技能「{name}」响应 HTTP {status}\n{_short(body_out)}"}
+    except Exception as e:
+        return {"observation": "", "error": f"call_skill 失败：{e}"}
 
 
 # ------------------------------------------------------------------
@@ -232,8 +291,36 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list[dict]], str], args: dict) -> dict:
-    """根据工具名分发执行。"""
+def build_skill_tools(skills: list[dict]) -> list[dict]:
+    """把启用的 HTTP 技能转换为 Agent 可调用工具描述（call_skill_<id>）。"""
+    tools: list[dict] = []
+    for sk in skills or []:
+        if sk.get("type") != "http" or not sk.get("enabled", True):
+            continue
+        sid = str(sk.get("id", ""))
+        if not sid:
+            continue
+        name = sk.get("name") or sid
+        desc = str(sk.get("description") or "").strip()
+        url = str(sk.get("url") or "").strip()
+        tools.append({
+            "name": f"call_skill_{sid}",
+            "description": (
+                f"调用技能「{name}」：{desc}".strip()
+                + (f"。请求方式 {str(sk.get('method', 'GET')).upper()}，URL：{url}" if url else "")
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input": {"type": "string", "description": f"传给技能「{name}」的输入/查询参数（可空）"},
+                },
+            },
+        })
+    return tools
+
+
+def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list[dict]], str], args: dict, skills: list[dict] | None = None) -> dict:
+    """根据工具名分发执行。skills 提供动态注册的 HTTP 技能（call_skill_<id>）。"""
     if name == "read_file":
         return read_file(workspace_path, args.get("path", ""))
     if name == "write_file":
@@ -252,4 +339,10 @@ def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list
         )
     if name == "ask_llm":
         return ask_llm(llm_call, args.get("prompt", ""))
+    if name.startswith("call_skill_") and skills:
+        sid = name[len("call_skill_"):]
+        for sk in skills:
+            if str(sk.get("id", "")) == sid:
+                return call_skill(sk, args)
+        return {"observation": "", "error": f"技能不存在：{sid}"}
     return {"observation": "", "error": f"未知工具：{name}"}

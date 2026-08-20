@@ -900,6 +900,7 @@ class AgentRunRequest(BaseModel):
     model_preset_id: str | None = None
     workspace_id: str | None = None
     images: list[str] = []  # 多模态图片（data URL 或 URL），传给首条用户消息
+    skill_ids: list[str] = []  # 会话绑定的技能 id（来自技能管理列表）
 
 
 class GitCommitRequest(BaseModel):
@@ -1989,7 +1990,7 @@ def agent_stream(task_id: str):
 # ---------------------------------------------------------------
 # Agent（ReAct 循环）
 # ---------------------------------------------------------------
-def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None):
+def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None):
     """后台线程执行 ReAct Agent。"""
     try:
         with _tasks_lock:
@@ -2018,6 +2019,16 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
         def notify_update():
             _notify_task_update(task_id)
 
+        # 会话绑定技能：按 skill_ids 过滤技能管理列表中的启用技能
+        bound_skills: list[dict] = []
+        if skill_ids:
+            all_skills = _load_skills()
+            wanted = set(skill_ids)
+            bound_skills = [
+                s for s in all_skills
+                if s.get("id") in wanted and s.get("enabled", True)
+            ]
+
         run_agent_task(
             task_id=task_id,
             user_request=user_request,
@@ -2028,6 +2039,7 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             task_lock=_tasks_lock,
             notify_update=notify_update,
             images=images or [],
+            skills=bound_skills,
         )
     except Exception as exc:
         err_msg = str(exc)
@@ -2063,7 +2075,7 @@ def agent_run(req: AgentRunRequest):
     log_buffer.emit("INFO", "system", f"收到 Agent 任务：{req.request[:60]}", task_id)
     threading.Thread(
         target=_run_agent_async,
-        args=(task_id, req.request, workspace_path, req.model_preset_id, req.images or []),
+        args=(task_id, req.request, workspace_path, req.model_preset_id, req.images or [], req.skill_ids or []),
         daemon=True,
     ).start()
     return {"task_id": task_id}

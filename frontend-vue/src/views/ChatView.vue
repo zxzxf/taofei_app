@@ -447,7 +447,22 @@ function toggleReportStep(msg, stepId) {
   msg.reportExpanded[stepId] = !msg.reportExpanded[stepId]
 }
 
-function loadAvailableSkills() {
+async function loadAvailableSkills() {
+  // 优先加载技能管理（后端 skills.json）里的技能
+  try {
+    const res = await fetch('/api/skills')
+    if (res.ok) {
+      const data = await res.json()
+      if (Array.isArray(data.skills) && data.skills.length) {
+        availableSkills.value = data.skills.map(sk => ({
+          id: sk.id, name: sk.name, icon: sk.icon || '🛠️',
+          type: sk.type, url: sk.url || '', enabled: sk.enabled !== false,
+        }))
+        return
+      }
+    }
+  } catch {}
+  // 兜底：本地模板技能
   try {
     const saved = localStorage.getItem('skills')
     if (saved) availableSkills.value = JSON.parse(saved)
@@ -908,6 +923,7 @@ async function sendAgent(s, text, images = []) {
         model_preset_id: s.modelPresetId || globalDefaultPresetId.value || null,
         workspace_id: currentWorkspaceId.value || null,
         images: images.map(i => i.dataUrl),
+        skill_ids: (s.skills || []).map(sk => sk.id),
       }),
     })
     if (!startRes.ok) {

@@ -456,11 +456,12 @@ async function loadSkills() {
       skills.value = JSON.parse(saved)
     } else {
       skills.value = [...defaultSkills]
-      saveSkills()
     }
   } catch {
     skills.value = [...defaultSkills]
   }
+  // 每次加载都同步到后端，保证 Agent 技能体系可用
+  await saveSkills()
   checkTemplateStatus()
   skillLoading.value = false
 }
@@ -511,6 +512,7 @@ async function confirmUpload() {
     let parsedName = file.name.replace(/\.[^.]+$/, '')
     let parsedDesc = `从文件 ${file.name} 上传的技能`
     let parsedIcon = '📦'
+    let parsedInstructions = ''
 
     if (ext === '.md') {
       const text = await file.text()
@@ -525,6 +527,8 @@ async function confirmUpload() {
         const nameMatch = text.match(/^#\s+(.+)/m)
         if (nameMatch) parsedName = nameMatch[1].trim()
       }
+      // 保存 SKILL.md 完整内容，Agent 可将其作为 claude 技能注入 system prompt
+      parsedInstructions = text
     } else {
       await new Promise(r => setTimeout(r, 800))
     }
@@ -544,7 +548,8 @@ async function confirmUpload() {
       enabled: true,
       type: 'installed',
       icon: parsedIcon,
-      color: 'rgba(34, 197, 94, 0.12)'
+      color: 'rgba(34, 197, 94, 0.12)',
+      instructions: parsedInstructions,
     })
     saveSkills()
     currentPage.value = totalPages.value
@@ -656,7 +661,7 @@ async function installSkill() {
   }
 }
 
-function deleteSkill(id) {
+async function deleteSkill(id) {
   skills.value = skills.value.filter(s => s.id !== id)
   const deleted = skills.value
   skillTemplates.value.forEach(tpl => {
@@ -664,12 +669,46 @@ function deleteSkill(id) {
       tpl.added = false
     }
   })
-  saveSkills()
+  await saveSkills()
+  // 同步删除后端技能，保证 Agent / 工作流一致
+  try { await fetch(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' }) } catch {}
   if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
 }
 
-function saveSkills() {
+// 把前端技能格式转换为后端 skills.json 格式（供 Agent / 工作流使用）
+function toBackendSkill(sk) {
+  if (sk.type === 'api') {
+    return {
+      id: sk.id, name: sk.name, type: 'http', enabled: sk.enabled !== false,
+      description: sk.desc || '', method: 'GET', url: sk.url || '', headers: '', body: '',
+    }
+  }
+  if (sk.type === 'installed' || sk.type === 'claude') {
+    if (!sk.instructions) return null
+    return {
+      id: sk.id, name: sk.name, type: 'claude', enabled: sk.enabled !== false,
+      description: sk.desc || '', instructions: sk.instructions,
+    }
+  }
+  return null
+}
+
+async function saveSkills() {
   localStorage.setItem('skills', JSON.stringify(skills.value))
+  // 同步到后端 skills.json，让 Agent 技能体系（会话绑定技能）能用到
+  try {
+    for (const sk of skills.value) {
+      const backend = toBackendSkill(sk)
+      if (!backend) continue
+      await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(backend),
+      })
+    }
+  } catch (e) {
+    console.error('技能同步后端失败', e)
+  }
 }
 
 function checkTemplateStatus() {

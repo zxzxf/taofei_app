@@ -13,7 +13,7 @@ import time
 import uuid
 from typing import Any, Callable
 
-from agent_tools import TOOLS, execute_tool
+from agent_tools import TOOLS, build_skill_tools, execute_tool
 
 MAX_STEPS = 25
 
@@ -67,12 +67,29 @@ Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结
 """
 
 
-def _format_tools() -> str:
+def _format_tools(tools: list[dict] | None = None) -> str:
     lines = []
-    for t in TOOLS:
+    for t in tools or TOOLS:
         lines.append(f"- {t['name']}: {t['description']}")
         lines.append(f"  参数: {json.dumps(t['parameters'], ensure_ascii=False)}")
     return "\n".join(lines)
+
+
+def _build_skill_prompts(skills: list[dict]) -> str:
+    """把 Claude 类型技能的 instructions 拼成 system prompt 片段。"""
+    parts = []
+    for sk in skills or []:
+        if sk.get("type") != "claude" or not sk.get("enabled", True):
+            continue
+        name = sk.get("name") or sk.get("id") or "未命名技能"
+        desc = str(sk.get("description") or "").strip()
+        instr = str(sk.get("instructions") or "").strip()
+        head = f"技能「{name}」：{desc}" if desc else f"技能「{name}」"
+        if instr:
+            parts.append(f"{head}\n使用方法（instructions）：\n{instr}")
+        else:
+            parts.append(head)
+    return "\n\n".join(parts)
 
 
 def _sanitize_model_output(text: str) -> str:
@@ -301,10 +318,13 @@ def run_agent_task(
     task_lock: threading.Lock,
     notify_update: Callable[[], None] | None = None,
     images: list[str] | None = None,
+    skills: list[dict] | None = None,
 ) -> None:
     """在后台线程中执行 ReAct Agent。
 
     images: 首条用户消息附带的多模态图片（data URL 或 URL 列表）。
+    skills: 会话绑定的技能列表（HTTP 技能注册为 call_skill_<id> 工具，
+            Claude 技能 instructions 注入 system prompt）。
     """
 
     def update(**kwargs):
@@ -327,8 +347,17 @@ def run_agent_task(
     update(status="running")
     emit_log("INFO", f"Agent 任务开始：{user_request[:80]}...", task_id)
 
+    # 会话绑定技能：HTTP 技能注册为动态工具，Claude 技能 instructions 注入 system prompt
+    skills = skills or []
+    skill_tools = build_skill_tools(skills)
+    all_tools = TOOLS + skill_tools
+    system_content = REACT_SYSTEM_PROMPT.format(tools_desc=_format_tools(all_tools))
+    skill_prompt = _build_skill_prompts(skills)
+    if skill_prompt:
+        system_content += "\n\n## 已启用技能（请根据用户需求判断是否需要使用）\n" + skill_prompt
+
     messages: list[dict] = [
-        {"role": "system", "content": REACT_SYSTEM_PROMPT.format(tools_desc=_format_tools())},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": _build_user_content(user_request, images or [])},
     ]
 
@@ -438,7 +467,7 @@ def run_agent_task(
             })
             emit_log("INFO", f"调用工具 {action_name}({args})", task_id)
 
-            tool_result = execute_tool(action_name, workspace_path, llm_call, args)
+            tool_result = execute_tool(action_name, workspace_path, llm_call, args, skills=skills)
             observation = tool_result.get("observation", "")
             error = tool_result.get("error", "")
 
