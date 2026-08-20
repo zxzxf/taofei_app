@@ -203,7 +203,7 @@
           </div>
         </div>
         <div class="integration-grid">
-          <div class="integration-card" v-for="item in integrations" :key="item.name" :class="{ planned: item.status === 'planned' }">
+          <div class="integration-card" v-for="item in integrations" :key="item.name" :class="{ planned: item.status === 'planned', clickable: item.type === 'github' }" @click="item.type === 'github' && openGitHubModal()">
             <div class="integration-card-head">
               <div class="integration-icon">{{ item.icon }}</div>
               <div>
@@ -213,6 +213,40 @@
               <div class="integration-status" :class="item.status">{{ item.status === 'connected' ? '已接入' : '规划中' }}</div>
             </div>
             <div class="integration-desc">{{ item.desc }}</div>
+            <div v-if="item.type === 'github'" class="integration-action">点击提交代码 →</div>
+          </div>
+        </div>
+
+        <!-- GitHub 提交弹窗 -->
+        <div v-if="showGitHubModal" class="skill-upload-overlay" @click.self="showGitHubModal = false">
+          <div class="skill-upload-modal" style="max-width:520px">
+            <div class="skill-upload-header">
+              <span class="skill-upload-title">🐙 GitHub 代码提交</span>
+              <button class="skill-upload-close" @click="showGitHubModal = false">✕</button>
+            </div>
+            <div class="skill-install-form" style="padding:16px 0 0;margin:0;border:none">
+              <div class="field" style="margin-bottom:12px;">
+                <label style="font-size:12.5px;font-weight:600;margin-bottom:6px;display:block;">仓库地址</label>
+                <input v-model="githubConfig.repo" type="text" placeholder="https://github.com/owner/repo.git" style="width:100%;padding:9px 12px;border:1px solid var(--border-strong);border-radius:8px;background:var(--bg-soft);color:var(--text);">
+              </div>
+              <div class="field" style="margin-bottom:12px;">
+                <label style="font-size:12.5px;font-weight:600;margin-bottom:6px;display:block;">目标分支</label>
+                <input v-model="githubConfig.branch" type="text" placeholder="main" style="width:100%;padding:9px 12px;border:1px solid var(--border-strong);border-radius:8px;background:var(--bg-soft);color:var(--text);">
+              </div>
+              <div class="field" style="margin-bottom:12px;">
+                <label style="font-size:12.5px;font-weight:600;margin-bottom:6px;display:block;">提交信息</label>
+                <textarea v-model="githubConfig.message" rows="3" placeholder="描述本次提交内容" style="width:100%;padding:9px 12px;border:1px solid var(--border-strong);border-radius:8px;background:var(--bg-soft);color:var(--text);resize:vertical;"></textarea>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button class="btn-ghost" @click="showGitHubModal = false">取消</button>
+                <button class="btn-primary" @click="commitToGitHub" :disabled="githubLoading || !githubConfig.message.trim()">
+                  {{ githubLoading ? '提交中…' : '提交并推送' }}
+                </button>
+              </div>
+              <div v-if="githubResult" class="install-result" :class="githubResult.type" style="margin-top:12px">
+                {{ githubResult.msg }}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -325,12 +359,18 @@ const defaultSkills = [
 
 const integrations = ref([
   { icon: '🌤️', name: 'Open-Meteo', category: '天气服务', status: 'connected', desc: '免费天气数据 API，支持全球城市查询' },
+  { icon: '🐙', name: 'GitHub', category: '代码托管', status: 'connected', desc: '代码提交、推送与仓库管理集成', type: 'github' },
   { icon: '💬', name: '企业微信', category: '即时通讯', status: 'planned', desc: '企业微信消息推送与群聊管理' },
   { icon: '钉钉', name: '钉钉开放平台', category: '即时通讯', status: 'planned', desc: '钉钉机器人消息与审批集成' },
   { icon: '📧', name: '邮件服务', category: '通知服务', status: 'planned', desc: 'SMTP 邮件发送与通知' },
   { icon: '🔗', name: 'API 网关', category: '开发工具', status: 'planned', desc: '统一 API 管理与流量控制' },
   { icon: '🗄️', name: '向量数据库', category: '数据存储', status: 'planned', desc: '知识库向量存储与相似度检索' },
 ])
+
+const showGitHubModal = ref(false)
+const githubConfig = ref({ repo: 'https://github.com/zxzxf/taofei_app.git', branch: 'main', message: '' })
+const githubLoading = ref(false)
+const githubResult = ref(null)
 
 const filteredSkills = computed(() => {
   let result = skills.value
@@ -636,6 +676,37 @@ function checkTemplateStatus() {
   skillTemplates.value.forEach(tpl => {
     tpl.added = skills.value.some(s => s.name === tpl.name)
   })
+}
+
+function openGitHubModal() {
+  githubConfig.value = { repo: 'https://github.com/zxzxf/taofei_app.git', branch: 'main', message: '' }
+  githubResult.value = null
+  showGitHubModal.value = true
+}
+
+async function commitToGitHub() {
+  if (!githubConfig.value.message.trim()) return
+  githubLoading.value = true
+  githubResult.value = null
+  try {
+    const res = await fetch('/api/git/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        repo: githubConfig.value.repo,
+        branch: githubConfig.value.branch || 'main',
+        message: githubConfig.value.message.trim()
+      })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+    githubResult.value = { type: 'success', msg: `提交成功：${data.commit || data.output || '已推送至 GitHub'}` }
+    setTimeout(() => { showGitHubModal.value = false }, 1500)
+  } catch (e) {
+    githubResult.value = { type: 'error', msg: `提交失败：${e.message}` }
+  } finally {
+    githubLoading.value = false
+  }
 }
 
 onMounted(() => {

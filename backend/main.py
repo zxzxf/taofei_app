@@ -882,6 +882,12 @@ class AgentRunRequest(BaseModel):
     workspace_id: str | None = None
 
 
+class GitCommitRequest(BaseModel):
+    repo: str = ""  # 仓库地址，为空则使用当前目录 origin
+    branch: str = "main"
+    message: str
+
+
 @app.get("/api/health")
 def health():
     cfg = _load_model_config()
@@ -2040,6 +2046,67 @@ def agent_run(req: AgentRunRequest):
         daemon=True,
     ).start()
     return {"task_id": task_id}
+
+
+@app.post("/api/git/commit")
+def git_commit(req: GitCommitRequest):
+    """将当前工作目录的变更提交并推送到 GitHub。"""
+    import subprocess
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    message = req.message.strip()
+    if not message:
+        return JSONResponse({"error": "提交信息不能为空"}, status_code=400)
+
+    try:
+        # 检查工作区状态
+        status_res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if status_res.returncode != 0:
+            return JSONResponse({"error": f"git status 失败：{status_res.stderr}"}, status_code=500)
+        if not status_res.stdout.strip():
+            return JSONResponse({"error": "没有可提交的变更"}, status_code=400)
+
+        # 添加、提交、推送
+        subprocess.run(["git", "add", "."], cwd=repo_root, check=True, capture_output=True, text=True)
+        commit_res = subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if commit_res.returncode != 0:
+            return JSONResponse({"error": f"提交失败：{commit_res.stderr}"}, status_code=500)
+        commit_hash = commit_res.stdout.splitlines()[0] if commit_res.stdout else ""
+
+        branch = req.branch.strip() or "main"
+        push_res = subprocess.run(
+            ["git", "push", "origin", branch],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if push_res.returncode != 0:
+            return JSONResponse({"error": f"推送失败：{push_res.stderr}", "commit": commit_hash}, status_code=500)
+
+        log_buffer.emit("INFO", "system", f"Git 提交并推送成功：{message[:50]}")
+        return {
+            "ok": True,
+            "commit": commit_hash,
+            "branch": branch,
+            "output": (push_res.stdout or "已推送").strip(),
+        }
+    except subprocess.CalledProcessError as exc:
+        return JSONResponse({"error": f"Git 命令失败：{exc.stderr}"}, status_code=500)
+    except Exception as exc:
+        return JSONResponse({"error": f"提交异常：{str(exc)}"}, status_code=500)
 
 
 @app.get("/api/tasks")
