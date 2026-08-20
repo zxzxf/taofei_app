@@ -1203,7 +1203,9 @@ async function onWorkspaceChange(id) {
   }))
   // 刷新文件树
   if (currentWorkspaceId.value) {
-    loadFileTree()
+    expandedDirs.value = {}
+    fileTree.value = []
+    await loadWorkspaceFiles()
   } else {
     fileTree.value = []
     wsName.value = ''
@@ -1425,8 +1427,14 @@ async function openWorkspaceByPath(path) {
       return
     }
     const data = await res.json()
-    workspaceList.value.push(data.workspace)
-    pickWorkspace(data.workspace)
+    if (data.workspace) {
+      // 去重：检查是否已在列表中
+      const exists = workspaceList.value.find(w => w.path === data.workspace.path)
+      if (!exists) {
+        workspaceList.value.push(data.workspace)
+      }
+      pickWorkspace(data.workspace)
+    }
   } catch (e) {
     alert('打开失败：' + (e.message || String(e)))
   }

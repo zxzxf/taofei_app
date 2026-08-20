@@ -319,13 +319,23 @@ def run_agent_task(
     notify_update: Callable[[], None] | None = None,
     images: list[str] | None = None,
     skills: list[dict] | None = None,
+    cancel_flag_getter: Callable[[], bool] | None = None,
 ) -> None:
     """在后台线程中执行 ReAct Agent。
 
     images: 首条用户消息附带的多模态图片（data URL 或 URL 列表）。
     skills: 会话绑定的技能列表（HTTP 技能注册为 call_skill_<id> 工具，
             Claude 技能 instructions 注入 system prompt）。
+    cancel_flag_getter: 可选，返回 True 时任务应尽快停止。
     """
+
+    def is_cancelled() -> bool:
+        if cancel_flag_getter:
+            try:
+                return bool(cancel_flag_getter())
+            except Exception:
+                return False
+        return False
 
     def update(**kwargs):
         with task_lock:
@@ -365,6 +375,10 @@ def run_agent_task(
     near_limit_warned = False
     try:
         for step_idx in range(MAX_STEPS):
+            # 检查取消标志
+            if is_cancelled():
+                emit_log("INFO", "任务已被用户取消", task_id)
+                break
             # 更新当前步骤；若已有步骤则刷新部分报告摘要，让前端能看到"正在思考第 N 步"
             with task_lock:
                 task_store[task_id]["current_step"] = f"思考第 {step_idx + 1} 步"
@@ -512,20 +526,29 @@ def run_agent_task(
         # 最终阶段把 result 标记为 completed，并统一包装为 report dict，
         # 防止前端残留 running 状态的部分报告导致 badge 一直显示“进行中”。
         steps = task_store[task_id].get("steps", [])
-        computed_report = _build_partial_report(steps, user_request, status="completed")
-        if isinstance(final_answer, dict) and final_answer.get("type") == "report":
+        cancelled = is_cancelled()
+        final_status = "cancelled" if cancelled else "completed"
+        computed_report = _build_partial_report(steps, user_request, status=final_status)
+        if cancelled:
+            final_report = computed_report
+            final_report["title"] = f"已取消：{user_request[:30]}…"
+            final_report["summary"] = f"任务已被用户取消，已执行 {len(steps)} 步。"
+            update(status="cancelled", result=final_report, current_step="已取消")
+            emit_log("INFO", "Agent 任务已取消", task_id)
+        elif isinstance(final_answer, dict) and final_answer.get("type") == "report":
             final_answer["status"] = "completed"
             final_answer["steps"] = steps
             # 模型自己生成的 report 可能没有 duration 或带占位符，统一用计算值覆盖
             if not final_answer.get("duration") or final_answer.get("duration") == "进行中":
                 final_answer["duration"] = computed_report.get("duration", "进行中")
             update(status="completed", result=final_answer, current_step="完成")
+            emit_log("INFO", "Agent 任务完成", task_id)
         else:
             final_report = computed_report
             final_report["title"] = f"已完成：{user_request[:30]}…"
             final_report["summary"] = str(final_answer) if final_answer else "Agent 已完成任务。"
             update(status="completed", result=final_report, current_step="完成")
-        emit_log("INFO", "Agent 任务完成", task_id)
+            emit_log("INFO", "Agent 任务完成", task_id)
     except Exception as exc:
         err = str(exc)
         update(status="failed", error=err, current_step="失败")

@@ -83,12 +83,22 @@ def list_directory(workspace_path: str | None, path: str = "") -> dict:
             return {"observation": f"目录不存在：{path}"}
         if not target.is_dir():
             return {"observation": f"路径不是目录：{path}"}
+        all_entries = sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+        total = len(all_entries)
+        dir_count = sum(1 for e in all_entries if e.is_dir())
+        file_count = total - dir_count
+        # 限制最多返回 100 条，避免输出过长撑爆 LLM 上下文导致卡住
+        MAX_ENTRIES = 100
         entries = []
-        for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+        for entry in all_entries[:MAX_ENTRIES]:
             prefix = "📁" if entry.is_dir() else "📄"
             size = f" {entry.stat().st_size} bytes" if entry.is_file() else ""
             entries.append(f"{prefix} {entry.name}{size}")
-        return {"observation": f"--- 目录 {path or '.'} ---\n" + "\n".join(entries)}
+        header = f"--- 目录 {path or '.'}（共 {total} 项：{dir_count} 个目录，{file_count} 个文件）---"
+        truncated = ""
+        if total > MAX_ENTRIES:
+            truncated = f"\n... 还有 {total - MAX_ENTRIES} 项未显示，请指定更具体的子路径查看"
+        return {"observation": header + "\n" + "\n".join(entries) + truncated}
     except Exception as e:
         return {"observation": "", "error": f"list_directory 失败：{e}"}
 

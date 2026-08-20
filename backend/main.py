@@ -183,8 +183,27 @@ def _load_workspaces() -> dict:
                 data = json.load(f)
             if isinstance(data, dict):
                 if isinstance(data.get("workspaces"), list):
-                    default["workspaces"] = data["workspaces"]
-                if isinstance(data.get("current_id"), str):
+                    # 按路径去重，保留最新创建的条目
+                    seen: dict[str, dict] = {}
+                    for ws in data["workspaces"]:
+                        if not isinstance(ws, dict):
+                            continue
+                        path = ws.get("path", "")
+                        if not path:
+                            continue
+                        # 后出现的覆盖先出现的（保留最新）
+                        seen[path] = ws
+                    deduped = list(seen.values())
+                    default["workspaces"] = deduped
+                    # 如果去重后数量变化了，写回文件
+                    if len(deduped) != len(data["workspaces"]):
+                        data["workspaces"] = deduped
+                        # 确保 current_id 仍然有效
+                        if data.get("current_id") not in {w.get("id") for w in deduped}:
+                            data["current_id"] = deduped[0]["id"] if deduped else None
+                        _save_workspaces(data)
+                        default["current_id"] = data.get("current_id")
+                if isinstance(data.get("current_id"), str) and default["current_id"] is None:
                     default["current_id"] = data["current_id"]
     except Exception:
         pass
@@ -743,6 +762,8 @@ _tasks: dict[str, dict] = {}
 _tasks_lock = threading.Lock()
 # SSE 流式推送用：每个 task_id 对应一个 Event，任务更新时 set()
 _task_events: dict[str, threading.Event] = {}
+# 任务取消标志：Agent 执行循环中定期检查，收到取消请求时提前终止
+_task_cancel: dict[str, bool] = {}
 
 
 def _notify_task_update(task_id: str) -> None:
@@ -1904,11 +1925,24 @@ def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
             raise RuntimeError("LLM 初始化失败，请检查模型配置")
 
         def llm_call(messages: list[dict]) -> str:
-            try:
-                result = llm.call(messages)
-            except TypeError:
-                result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
-            return result if isinstance(result, str) else str(result)
+            # 使用线程 + Event 实现可中断的超时调用，避免 API 卡住时任务无限挂起
+            import concurrent.futures
+
+            def _call():
+                try:
+                    result = llm.call(messages)
+                except TypeError:
+                    result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
+                return result if isinstance(result, str) else str(result)
+
+            timeout = int(os.getenv("LLM_TIMEOUT", "120"))  # 默认 120 秒超时
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_call)
+                try:
+                    return future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    raise TimeoutError(f"模型调用超时（{timeout}秒），请检查网络或换用更快的模型")
 
         def wlog(level: str, message: str) -> None:
             log_buffer.emit(level, "workflow", message, task_id)
@@ -2053,11 +2087,24 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             raise RuntimeError("LLM 初始化失败，请检查模型配置")
 
         def llm_call(messages: list[dict]) -> str:
-            try:
-                result = llm.call(messages)
-            except TypeError:
-                result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
-            return result if isinstance(result, str) else str(result)
+            # 使用线程池实现超时保护，避免 API 卡住时任务无限挂起
+            import concurrent.futures
+
+            def _call():
+                try:
+                    result = llm.call(messages)
+                except TypeError:
+                    result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
+                return result if isinstance(result, str) else str(result)
+
+            timeout = int(os.getenv("LLM_TIMEOUT", "120"))  # 默认 120 秒超时
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_call)
+                try:
+                    return future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    raise TimeoutError(f"模型调用超时（{timeout}秒），请检查网络或换用更快的模型")
 
         def emit_log(level: str, message: str, tid: str):
             log_buffer.emit(level, "agent", message, tid)
@@ -2111,12 +2158,16 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             notify_update=notify_update,
             images=images or [],
             skills=bound_skills,
+            cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
         )
     except Exception as exc:
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"Agent 任务失败：{err_msg}", task_id)
         with _tasks_lock:
             _tasks[task_id].update(status="failed", error=err_msg)
+    finally:
+        # 任务结束后清理取消标志
+        _task_cancel.pop(task_id, None)
 
 
 @app.post("/api/agent/run")
@@ -2150,6 +2201,25 @@ def agent_run(req: AgentRunRequest):
         daemon=True,
     ).start()
     return {"task_id": task_id}
+
+
+@app.post("/api/agent/cancel/{task_id}")
+def agent_cancel(task_id: str):
+    """取消一个正在运行的 Agent 任务。"""
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        if not task:
+            return JSONResponse({"error": "任务不存在"}, status_code=404)
+        if task.get("status") not in ("running", "queued"):
+            return {"ok": True, "message": "任务已结束，无需取消"}
+        _task_cancel[task_id] = True
+        task["current_step"] = "取消中…"
+        if task.get("result") and isinstance(task.get("result"), dict):
+            task["result"]["summary"] = "用户请求取消，正在停止…"
+            task["result"]["status"] = "cancelling"
+    _notify_task_update(task_id)
+    log_buffer.emit("INFO", "system", f"用户请求取消任务：{task_id}", task_id)
+    return {"ok": True, "message": "已收到取消请求，任务将在当前步骤结束后停止"}
 
 
 @app.get("/api/git/status")
@@ -2416,7 +2486,7 @@ def list_workspaces():
 
 @app.post("/api/workspaces")
 def create_workspace(req: WorkspaceCreateRequest):
-    """创建并切换到一个新工作空间。"""
+    """创建并切换到一个新工作空间。若同路径已存在则直接切换到已有项。"""
     name = req.name.strip()
     path = req.path.strip()
     if not name:
@@ -2429,6 +2499,15 @@ def create_workspace(req: WorkspaceCreateRequest):
         return JSONResponse({"error": str(exc)}, status_code=400)
 
     data = _load_workspaces()
+
+    # 去重：同路径已存在则直接切换到已有工作空间
+    existing = next((ws for ws in data.get("workspaces", []) if ws.get("path") == normalized), None)
+    if existing:
+        data["current_id"] = existing["id"]
+        _save_workspaces(data)
+        log_buffer.emit("INFO", "system", f"切换到已有工作空间：{existing.get('name')} → {normalized}")
+        return {"workspace": existing, "current_id": existing["id"], "existed": True}
+
     ws_id = uuid.uuid4().hex[:12]
     workspace = {
         "id": ws_id,
@@ -2617,9 +2696,23 @@ def upload_workspace_files(req: WorkspaceUploadRequest):
 FRONTEND_DIR = BASE_DIR / "frontend"
 
 # Vue3 前端使用相对路径 (./assets/...)，将 frontend 目录挂载到根路径
-# 使用 HTML 模式：找不到文件时回退到 index.html（支持 Vue Router history 模式）
-# API 路由已在上方定义，会优先匹配
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+# 构建产物的静态资源目录
+app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
+
+# SPA history 路由回退：/chat 等前端路由直达时返回 index.html
+# 注意：Starlette StaticFiles(html=True) 只支持目录级回退（/ → index.html），
+# 不支持 /chat 这类无扩展名路径回退，因此这里用 catch-all 路由实现。
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    # API 未匹配的路径保持原有 404 JSON，不误回退到 index.html
+    if full_path.startswith("api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    # 请求真实存在的静态文件（如 favicon.png）时直接返回文件
+    file_path = FRONTEND_DIR / full_path
+    if full_path and file_path.is_file():
+        return FileResponse(file_path)
+    # 其余路径一律回退到前端入口，由 Vue Router 接管
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 # ---------------------------------------------------------------

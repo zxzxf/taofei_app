@@ -116,25 +116,12 @@ async function loadWorkspaces() {
       const data = await res.json()
       workspaces.value = data.workspaces || []
       currentWsId.value = data.current_id
-    }
-    if (!workspaces.value.length) {
-      // 后端无工作空间 → 用默认路径创建一个
-      try {
-        const defaultPath = 'E:\\20260814\\taofei_app'
-        const res2 = await fetch('/api/workspaces', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'taofei_app', path: defaultPath }),
-        })
-        if (res2.ok) {
-          const d2 = await res2.json()
-          workspaces.value = [d2.workspace]
-          currentWsId.value = d2.current_id || d2.workspace?.id
-        }
-      } catch (e) { /* ignore */ }
+    } else {
+      console.warn('加载工作空间列表失败：HTTP', res.status)
     }
   } catch (e) {
     console.error('加载工作空间失败', e)
+    // 后端不可用时，保留 localStorage 中的缓存数据
   }
 }
 
@@ -159,26 +146,39 @@ function emitWorkspaceChanged() {
 }
 
 async function addWorkspace(ws) {
+  // 浏览器端（File System Access API / input directory）拿不到绝对路径，
+  // 后端必须用真实路径才能扫描目录，path 为空时直接提示，不创建假空间。
+  if (!ws.path || !String(ws.path).trim()) {
+    showToast('浏览器端无法获取目录绝对路径，请使用桌面客户端或输入路径')
+    return
+  }
   try {
     const res = await fetch('/api/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(ws),
+      body: JSON.stringify({ name: ws.name, path: ws.path }),
     })
     if (res.ok) {
       const data = await res.json()
-      workspaces.value = data.workspaces || workspaces.value
+      // 后端返回的是单个 workspace 对象，需要合并到列表中
+      if (data.workspace) {
+        // 检查是否已存在同路径的工作空间（去重）
+        const exists = workspaces.value.find(w => w.path === data.workspace.path)
+        if (!exists) {
+          workspaces.value.push(data.workspace)
+        }
+      } else if (data.workspaces && Array.isArray(data.workspaces)) {
+        workspaces.value = data.workspaces
+      }
       currentWsId.value = data.current_id
     } else {
-      // 后端不可用：本地追加
-      const id = 'ws_' + Date.now()
-      workspaces.value.push({ id, ...ws })
-      currentWsId.value = id
+      const err = await res.json().catch(() => ({}))
+      showToast('工作空间添加失败：' + (err.error || `HTTP ${res.status}`))
+      return
     }
   } catch (e) {
-    const id = 'ws_' + Date.now()
-    workspaces.value.push({ id, ...ws })
-    currentWsId.value = id
+    showToast('工作空间添加失败：' + (e.message || String(e)))
+    return
   }
   fullAccess.value = true
   saveWorkspaces()
@@ -198,6 +198,7 @@ async function openLocalFolder() {
       })
     } catch (e) {
       console.error('桌面端目录选择失败', e)
+      showToast('目录选择失败：' + (e.message || String(e)))
     }
     if (picked.canceled) return
     const name = picked.path.split(/[\\/]/).pop() || '本地目录'
@@ -205,45 +206,28 @@ async function openLocalFolder() {
     return
   }
 
-  // 2. 浏览器端：File System Access API
+  // 2. 浏览器端：File System Access API 拿不到绝对路径，改用输入路径方式
   if (window.showDirectoryPicker) {
-    try {
-      const handle = await window.showDirectoryPicker()
-      const name = handle.name || '本地目录'
-      await addWorkspace({ name, path: '', handle })
-      // 尝试请求完全访问权限
-      try {
-        if (handle.requestPermission) {
-          await handle.requestPermission({ mode: 'readwrite' })
-        }
-      } catch (_) { /* ignore */ }
-    } catch (e) {
-      if (e.name !== 'AbortError') {
-        console.error('浏览器目录选择失败', e)
-      }
-    }
+    const typed = prompt(
+      '浏览器无法获取目录绝对路径，请粘贴或输入本地文件夹路径：\n（例如 D:\\projects\\my-app）',
+      ''
+    )
+    if (!typed) return
+    const trimmed = typed.trim()
+    const name = trimmed.split(/[\\/]/).filter(Boolean).pop() || '本地目录'
+    await addWorkspace({ name, path: trimmed })
     return
   }
 
-  // 3. 兜底：input directory 选择（只能拿到相对文件列表，无绝对路径）
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.webkitdirectory = true
-  input.directory = true
-  input.style.display = 'none'
-  document.body.appendChild(input)
-  input.addEventListener('change', () => {
-    if (input.files && input.files.length > 0) {
-      const first = input.files[0].webkitRelativePath || input.files[0].name
-      const name = first.split('/')[0] || '本地目录'
-      addWorkspace({ name, path: '' })
-    }
-    document.body.removeChild(input)
-  })
-  input.addEventListener('cancel', () => {
-    document.body.removeChild(input)
-  })
-  input.click()
+  // 3. 兜底：input directory 选择（只能拿到相对文件列表，无绝对路径）→ 同样走输入路径
+  const typed = prompt(
+    '请粘贴或输入要打开的本地文件夹路径：\n（例如 D:\\projects\\my-app）',
+    ''
+  )
+  if (!typed) return
+  const trimmed = typed.trim()
+  const name = trimmed.split(/[\\/]/).filter(Boolean).pop() || '本地目录'
+  await addWorkspace({ name, path: trimmed })
 }
 
 function clearWorkspace() {
