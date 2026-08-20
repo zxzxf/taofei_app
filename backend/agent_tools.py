@@ -207,6 +207,9 @@ def call_skill(skill: dict, args: dict) -> dict:
             raw = e.read().decode("utf-8", errors="replace")
         try:
             parsed_body = json.loads(raw)
+            # 若响应含 report 播报字段（如天气技能），直接返回该文案，便于 Agent 原样输出
+            if isinstance(parsed_body, dict) and isinstance(parsed_body.get("report"), str):
+                return {"observation": f"技能「{name}」响应 HTTP {status}\n{parsed_body['report']}"}
             body_out = json.dumps(parsed_body, ensure_ascii=False, indent=2)
         except Exception:
             body_out = raw
@@ -303,6 +306,9 @@ def build_skill_tools(skills: list[dict]) -> list[dict]:
         name = sk.get("name") or sid
         desc = str(sk.get("description") or "").strip()
         url = str(sk.get("url") or "").strip()
+        is_weather = "天气" in name or "weather" in url.lower()
+        if desc and is_weather and "report" not in desc:
+            desc = desc + "。工具响应中的 report 字段就是最终播报文案，请直接原样输出，不要改写。"
         tools.append({
             "name": f"call_skill_{sid}",
             "description": (

@@ -1406,6 +1406,46 @@ def _http_get_json(url: str, timeout: int = 10) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _build_weather_report(city: str, cur: dict) -> str:
+    """把当前天气数据组装成可直接展示的播报文案（供 Agent 原样输出）。"""
+    cond = str(cur.get("condition") or "未知")
+    t = cur.get("temperature")
+    hum = cur.get("humidity")
+    wind = cur.get("wind_speed")
+
+    def fmt(v: float, suffix: str, digits: int = 1) -> str:
+        return f"{v:.{digits}f}{suffix}" if isinstance(v, (int, float)) else "-"
+
+    lines = [
+        f"🌤 {city}天气播报",
+        "",
+        f"天气状况：{cond}",
+        f"温度：{fmt(t, '°C')}",
+        f"湿度：{fmt(hum, '%', 0)}",
+        f"风速：{fmt(wind, ' m/s')}",
+        "",
+    ]
+    if isinstance(t, (int, float)):
+        if t >= 30:
+            lines.append("😊 天气炎热，适合穿短袖短裤，注意防晒补水。")
+        elif t >= 24:
+            lines.append("😊 天气温和舒适，适合穿短袖或薄长袖。")
+        elif t >= 15:
+            lines.append("😊 天气凉爽，建议穿长袖或薄外套。")
+        elif t >= 8:
+            lines.append("😊 天气偏冷，建议穿厚外套注意保暖。")
+        else:
+            lines.append("😊 天气寒冷，注意添衣保暖。")
+    if isinstance(hum, (int, float)):
+        if hum >= 75:
+            lines.append("💧 湿度较高")
+        elif hum >= 55:
+            lines.append("💧 湿度适中")
+        else:
+            lines.append("💧 空气较干燥，注意补水。")
+    return "\n".join(lines)
+
+
 @app.get("/api/integrations/weather")
 def integration_weather(city: str = Query(..., min_length=1)):
     """天气查询集成：城市名 -> 当前天气 + 3 天预报（Open-Meteo）。"""
@@ -1430,23 +1470,26 @@ def integration_weather(city: str = Query(..., min_length=1)):
             "https://api.open-meteo.com/v1/forecast"
             f"?latitude={lat}&longitude={lon}"
             "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m"
-            "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto"
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4"
+            "&wind_speed_unit=ms&timezone=auto"
         )
         cur = wx.get("current", {})
         daily = wx.get("daily", {})
         code = cur.get("weather_code", 0)
+        current = {
+            "temperature": cur.get("temperature_2m"),
+            "feels_like": cur.get("apparent_temperature"),
+            "humidity": cur.get("relative_humidity_2m"),
+            "wind_speed": cur.get("wind_speed_10m"),
+            "condition": WEATHER_CODE_MAP.get(code, f"未知({code})"),
+        }
         result = {
             "city": loc.get("name", city),
             "admin1": loc.get("admin1", ""),
             "country": loc.get("country", ""),
-            "current": {
-                "temperature": cur.get("temperature_2m"),
-                "feels_like": cur.get("apparent_temperature"),
-                "humidity": cur.get("relative_humidity_2m"),
-                "wind_speed": cur.get("wind_speed_10m"),
-                "condition": WEATHER_CODE_MAP.get(code, f"未知({code})"),
-            },
+            "current": current,
             "daily": [],
+            "report": _build_weather_report(loc.get("name", city), current),
         }
         dates = daily.get("time", [])
         for i, d in enumerate(dates):
@@ -2049,6 +2092,10 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                 if _is_weather_skill(s) and s.get("enabled", True):
                     s = dict(s)
                     s["url"] = f"http://127.0.0.1:{SERVER_PORT}/api/integrations/weather?city={{{{input}}}}"
+                    s["description"] = (
+                        "查询城市实时天气。工具响应中的 report 字段就是可直接展示的播报文案，"
+                        "请直接原样输出该文案作为最终回答，不要重新组织或改写。"
+                    )
                     bound_skills.append(s)
                     emit_log("INFO", f"检测到天气意图，已自动启用技能「{s.get('name')}」", task_id)
                     break
