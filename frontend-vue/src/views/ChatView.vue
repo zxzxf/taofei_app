@@ -784,6 +784,13 @@ async function send() {
   const s = currentSession.value
   if (!s) { openNewSessionDialog(); return }
 
+  // 对话中心快捷指令：提交代码
+  if (text.startsWith('提交代码') && !hasImages && !agentMode.value) {
+    const customMsg = text.slice(4).trim()
+    const commitMessage = customMsg || 'chore: 通过对话中心提交代码'
+    return sendGitCommit(s, text, commitMessage)
+  }
+
   // Agent 模式走独立流程
   if (agentMode.value && !hasImages) {
     return sendAgent(s, text)
@@ -840,6 +847,52 @@ async function send() {
     aiMsg.pending = false
     aiMsg.error = true
   } finally {
+    sending.value = false
+    saveSessions()
+    await scrollToBottom()
+  }
+}
+
+// ===== 快捷指令：提交代码到 GitHub =====
+async function sendGitCommit(s, userText, commitMessage) {
+  // 1) 推入用户消息
+  s.messages.push({ role: 'user', text: userText, time: Date.now() })
+  s.title = userText.slice(0, 20)
+  inputText.value = ''
+  pendingImages.value = []
+  await scrollToBottom()
+
+  // 2) 预占 AI 消息
+  const aiMsg = { role: 'ai', text: '⏳ 正在提交代码…', time: Date.now(), pending: true }
+  s.messages.push(aiMsg)
+  await scrollToBottom()
+
+  sending.value = true
+  saveSessions()
+
+  try {
+    const res = await fetch('/api/git/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        repo: 'https://github.com/zxzxf/taofei_app.git',
+        branch: 'main',
+        message: commitMessage,
+      }),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      aiMsg.text = `❌ 提交失败：${data.error || `HTTP ${res.status}`}`
+      aiMsg.error = true
+    } else {
+      aiMsg.text = `✅ 代码已提交并推送至 GitHub\n\n- 分支：${data.branch || 'main'}\n- 提交：${(data.commit || '').split(' ')[1] || data.commit || '-'}\n- 消息：${commitMessage}`
+      s.time = Date.now()
+    }
+  } catch (e) {
+    aiMsg.text = `❌ 提交异常：${e.message || e}\n\n请确认后端服务已启动。`
+    aiMsg.error = true
+  } finally {
+    aiMsg.pending = false
     sending.value = false
     saveSessions()
     await scrollToBottom()
