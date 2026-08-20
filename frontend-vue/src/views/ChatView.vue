@@ -46,6 +46,55 @@
           </div>
         </div>
         <div class="chat-area-head-right">
+          <!-- 工作空间选择器 -->
+          <div class="ws-selector-wrap" v-click-outside="() => wsOpen = false">
+            <button class="ws-selector-btn" :class="{ open: wsOpen }" @click="wsOpen = !wsOpen">
+              <span class="ws-icon">📁</span>
+              <span class="ws-name">{{ currentWorkspaceName }}</span>
+              <span class="ws-arrow">▼</span>
+            </button>
+            <div class="ws-dropdown" :class="{ open: wsOpen }">
+              <div class="ws-search">
+                <span class="ws-search-icon">🔍</span>
+                <input v-model="wsSearch" type="text" placeholder="搜索工作空间" @click.stop />
+              </div>
+              <div class="ws-list">
+                <div
+                  v-for="ws in filteredWorkspaces"
+                  :key="ws.id"
+                  class="ws-item"
+                  :class="{ selected: ws.id === currentWorkspaceId }"
+                  @click="onWorkspaceChange(ws.id)"
+                >
+                  <span class="ws-item-icon">📁</span>
+                  <div class="ws-item-info">
+                    <div class="ws-item-name">{{ ws.name }}</div>
+                  </div>
+                  <span v-if="ws.id === currentWorkspaceId" class="ws-item-check">✓</span>
+                  <div class="ws-item-actions">
+                    <button
+                      v-if="ws.id !== currentWorkspaceId"
+                      title="删除"
+                      @click.stop="onDeleteWorkspace(ws.id)"
+                    >
+                      🗑
+                    </button>
+                  </div>
+                </div>
+                <div v-if="filteredWorkspaces.length === 0" class="ws-empty">未找到工作空间</div>
+              </div>
+              <div class="ws-dropdown-actions">
+                <button class="ws-action-open" @click="openLocalFolder">
+                  <span></span> 打开本地文件夹
+                </button>
+                <button class="ws-action-none" @click="onWorkspaceChange(null)">
+                  <span></span> 不使用工作空间
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 模型选择器 -->
           <div class="chat-current-model-wrap" :class="{ open: modelMenuOpen }" @click.stop="toggleModelMenu">
             <div class="chat-current-model" :title="currentModelFull">
               <span class="chat-current-model-dot">{{ currentModelInitial }}</span>
@@ -85,7 +134,6 @@
               </div>
             </div>
           </div>
-          <button class="btn-ghost" @click="editSkills" v-if="currentSession">管理技能</button>
           <button class="btn-ghost" @click="clearCurrent">清空当前</button>
         </div>
       </div>
@@ -105,10 +153,38 @@
             <div v-if="msg.report && msg.report.type === 'report'" class="chat-report-card">
               <div class="chat-report-header">
                 <span class="chat-report-badge" :class="msg.report.status">{{ msg.report.status === 'completed' ? '已完成' : '进行中' }}</span>
-                <span class="chat-report-duration">{{ msg.report.duration }}</span>
+                <span
+                  class="chat-report-duration"
+                  :class="{ expanded: msg.showReportSteps }"
+                  @click="msg.showReportSteps = !msg.showReportSteps"
+                  title="点击查看执行明细"
+                >
+                  {{ msg.report.duration }}
+                </span>
               </div>
               <div class="chat-report-title">{{ msg.report.title }}</div>
               <div class="chat-report-summary">{{ msg.report.summary }}</div>
+              <!-- 点击耗时展开：完整执行步骤（含内部步骤） -->
+              <div v-if="msg.showReportSteps && msg.report.steps && msg.report.steps.length" class="chat-report-section chat-report-steps">
+                <div class="chat-report-section-title">⚙️ 执行明细</div>
+                <div
+                  v-for="(st, sti) in msg.report.steps"
+                  :key="sti"
+                  class="chat-report-step"
+                  :class="st.status"
+                >
+                  <div v-if="!msg.stepExpanded || !msg.stepExpanded[sti]" class="chat-report-step-header" @click="toggleStep(msg, sti)">
+                    <span class="chat-report-step-toggle">▶</span>
+                    <span class="chat-report-step-icon">{{ st.icon }}</span>
+                    <span class="chat-report-step-name">{{ st.name }}</span>
+                    <span class="chat-report-step-time">{{ st.time }}</span>
+                  </div>
+                  <div v-else class="chat-report-step-body">
+                    <pre>{{ st.output || '（无输出内容）' }}</pre>
+                    <div class="chat-report-step-collapse" @click="toggleStep(msg, sti)">收起 ▲</div>
+                  </div>
+                </div>
+              </div>
               <!-- 其他章节（兼容旧报告/模型生成的章节） -->
               <div v-for="(sec, si) in msg.report.sections" :key="si" class="chat-report-section">
                 <div class="chat-report-section-title">{{ sec.heading }}</div>
@@ -118,10 +194,10 @@
               </div>
             </div>
             <div v-else class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
-            <div v-if="msg.agentSteps && msg.agentSteps.length && !(msg.report && msg.report.type === 'report')" class="chat-agent-steps">
+            <div v-if="false && visibleAgentSteps(msg).length && !(msg.report && msg.report.type === 'report')" class="chat-agent-steps">
               <div class="chat-agent-steps-title">⚙️ 执行步骤</div>
               <div
-                v-for="(step, si) in msg.agentSteps"
+                v-for="(step, si) in visibleAgentSteps(msg)"
                 :key="si"
                 class="chat-agent-step"
                 :class="step.status"
@@ -139,7 +215,7 @@
           <span>开始新对话</span>
         </div>
       </div>
-      <div class="chat-input-area">
+      <div class="chat-input-area" @dragover.prevent @drop="handleDrop">
         <div v-if="pendingImages.length" class="chat-input-images">
           <div v-for="(img, i) in pendingImages" :key="i" class="chat-input-image-item">
             <img :src="img.dataUrl" :alt="img.name">
@@ -174,9 +250,9 @@
       </div>
     </div>
 
-    <div class="chat-resizer chat-resizer-right" :class="{ active: filesResizing }" @mousedown="startFilesResize"></div>
+    <div v-if="false" class="chat-resizer chat-resizer-right" :class="{ active: filesResizing }" @mousedown="startFilesResize"></div>
 
-    <div class="chat-files" :class="{ collapsed: filesCollapsed }" :style="filesCollapsed ? {} : { width: filesWidth + 'px', flexShrink: 0 }">
+    <div v-if="false" class="chat-files" :class="{ collapsed: filesCollapsed }" :style="filesCollapsed ? {} : { width: filesWidth + 'px', flexShrink: 0 }">
       <div class="chat-files-head">
         <div class="chat-files-title-row">
           <div class="chat-files-title">
@@ -330,6 +406,7 @@ const editingSessionId = ref(null)
 const workspaceDirInput = ref(null)
 const imageInput = ref(null)
 const pendingImages = ref([])
+const MAX_IMAGES = 4
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
 const currentMessages = computed(() => currentSession.value?.messages || [])
@@ -343,6 +420,19 @@ const filteredSessions = computed(() => {
 function formatTime(ts) {
   if (!ts) return ''
   return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+// 过滤掉纯内部状态步骤（思考第 X 步 / 格式重试），只保留工具调用与结果
+function visibleAgentSteps(msg) {
+  if (!msg.agentSteps || !msg.agentSteps.length) return []
+  return msg.agentSteps.filter(st =>
+    !/^思考第\s*\d+\s*步/.test(st.name) && st.name !== '格式重试'
+  )
+}
+
+function toggleStep(msg, sti) {
+  if (!msg.stepExpanded) msg.stepExpanded = {}
+  msg.stepExpanded[sti] = !msg.stepExpanded[sti]
 }
 
 function renderMarkdown(text) {
@@ -548,10 +638,9 @@ function triggerImageUpload() {
 function onImageSelected(event) {
   const files = Array.from(event.target.files || [])
   if (!files.length) return
-  const MAX = 4
   for (const file of files) {
-    if (pendingImages.value.length >= MAX) {
-      showMessage(`最多上传 ${MAX} 张图片`)
+    if (pendingImages.value.length >= MAX_IMAGES) {
+      showMessage(`最多上传 ${MAX_IMAGES} 张图片`)
       break
     }
     if (!file.type || !file.type.startsWith('image/')) continue
@@ -590,36 +679,77 @@ function compressImage(file) {
   })
 }
 
-// 处理粘贴图片
+// 处理粘贴图片（textarea 内）
 function handlePaste(event) {
   const items = (event.clipboardData || event.originalEvent.clipboardData).items
   if (!items) return
-  
+  let handled = false
   for (const item of items) {
     if (item.type.indexOf('image') !== -1) {
-      event.preventDefault()
       const file = item.getAsFile()
       if (!file) continue
-      
-      const MAX = 4
-      if (pendingImages.value.length >= MAX) {
-        showMessage(`最多上传 ${MAX} 张图片`)
+      event.preventDefault()
+      handled = true
+      if (pendingImages.value.length >= MAX_IMAGES) {
+        showMessage(`最多上传 ${MAX_IMAGES} 张图片`)
         break
       }
-      
       compressImage(file)
-        .then(dataUrl => {
-          pendingImages.value.push({ name: `粘贴图片${Date.now()}.jpg`, dataUrl })
-          showMessage('图片已粘贴')
-        })
+        .then(dataUrl => { pendingImages.value.push({ name: `粘贴图片${Date.now()}.jpg`, dataUrl }) })
         .catch(() => showMessage('图片读取失败'))
-      return
     }
   }
+  if (handled) showMessage('图片已粘贴到输入框，点击发送即可')
+}
+
+// 全局粘贴监听：点击对话框其他位置时 Ctrl+V 也能粘贴图片
+function handleGlobalPaste(event) {
+  const target = event.target
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+    return
+  }
+  const items = (event.clipboardData || event.originalEvent?.clipboardData)?.items
+  if (!items) return
+  let hasImage = false
+  for (const item of items) {
+    if (item.type.indexOf('image') !== -1) { hasImage = true; break }
+  }
+  if (!hasImage) return
+  event.preventDefault()
+  for (const item of items) {
+    if (item.type.indexOf('image') !== -1) {
+      const file = item.getAsFile()
+      if (!file) continue
+      if (pendingImages.value.length >= MAX_IMAGES) {
+        showMessage(`最多上传 ${MAX_IMAGES} 张图片`)
+        break
+      }
+      compressImage(file)
+        .then(dataUrl => { pendingImages.value.push({ name: `粘贴图片${Date.now()}.jpg`, dataUrl }) })
+        .catch(() => showMessage('图片读取失败'))
+    }
+  }
+  showMessage('图片已粘贴到输入框，点击发送即可')
 }
 
 function removePendingImage(i) {
   pendingImages.value.splice(i, 1)
+}
+
+// 拖放图片到输入区域
+function handleDrop(event) {
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (!files.length) return
+  for (const file of files) {
+    if (pendingImages.value.length >= MAX_IMAGES) {
+      showMessage(`最多上传 ${MAX_IMAGES} 张图片`)
+      break
+    }
+    if (!file.type || !file.type.startsWith('image/')) continue
+    compressImage(file)
+      .then(dataUrl => { pendingImages.value.push({ name: file.name, dataUrl }) })
+      .catch(() => showMessage('图片读取失败：' + file.name))
+  }
 }
 
 function previewImage(dataUrl) {
@@ -667,7 +797,7 @@ async function send() {
   await scrollToBottom()
 
   // 2) 预占一条 AI 消息，等待后端返回
-  const aiMsg = { role: 'ai', text: '', time: Date.now(), pending: true }
+  const aiMsg = { role: 'ai', text: '', time: Date.now(), pending: true, showReportSteps: false, stepExpanded: {} }
   s.messages.push(aiMsg)
   await scrollToBottom()
 
@@ -766,8 +896,8 @@ async function sendAgent(s, text) {
   inputText.value = ''
   await scrollToBottom()
 
-  // 2) 预占一条 AI 消息（含 agentSteps）
-  const aiMsg = { role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [] }
+  // 2) 预占一条 AI 消息（含 agentSteps / reportSteps 展开状态）
+  const aiMsg = { role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: false }
   s.messages.push(aiMsg)
   await scrollToBottom()
 
@@ -908,6 +1038,10 @@ function loadSessions() {
 function onWorkspaceChanged(evt) {
   // App.vue 切换工作空间时派发此事件
   const newId = evt?.detail?.current_id
+  const newWorkspaces = evt?.detail?.workspaces
+  if (newWorkspaces) {
+    workspaceList.value = newWorkspaces
+  }
   if (newId && newId !== currentWorkspaceId.value) {
     currentWorkspaceId.value = newId
     // 切换工作空间时重置展开状态
@@ -921,7 +1055,6 @@ onMounted(async () => {
   loadSessions()
   loadAvailableSkills()
   await loadPresetsList()
-  // 回填旧会话（没有 modelPresetId 字段的）默认绑定全局激活预设
   for (const s of sessions.value) {
     if (!s.modelPresetId && globalDefaultPresetId.value) {
       s.modelPresetId = globalDefaultPresetId.value
@@ -932,6 +1065,7 @@ onMounted(async () => {
   window.addEventListener('taofei-workspace-changed', onWorkspaceChanged)
   document.addEventListener('click', onDocClickChat)
   document.addEventListener('click', onDocClickWorkspace)
+  document.addEventListener('paste', handleGlobalPaste)
   await loadWorkspaceList()
   loadWorkspaceFiles()
   if (!sessions.value.length) {
@@ -944,6 +1078,7 @@ onUnmounted(() => {
   window.removeEventListener('taofei-workspace-changed', onWorkspaceChanged)
   document.removeEventListener('click', onDocClickChat)
   document.removeEventListener('click', onDocClickWorkspace)
+  document.removeEventListener('paste', handleGlobalPaste)
 })
 
 watch(currentId, () => scrollToBottom())
@@ -957,6 +1092,78 @@ const expandedDirs = ref({})
 const filesLoading = ref(false)
 const filesError = ref('')
 const filesCollapsed = ref(false)
+
+// ===== 工作空间选择器（头部） =====
+const wsOpen = ref(false)
+const wsSearch = ref('')
+
+const currentWorkspaceName = computed(() => {
+  const ws = workspaceList.value.find(w => w.id === currentWorkspaceId.value)
+  return ws ? ws.name : '选择工作空间'
+})
+
+const filteredWorkspaces = computed(() => {
+  const term = wsSearch.value.trim().toLowerCase()
+  if (!term) return workspaceList.value
+  return workspaceList.value.filter(w =>
+    w.name.toLowerCase().includes(term) || (w.path || '').toLowerCase().includes(term)
+  )
+})
+
+// 点击外部关闭工作空间下拉
+const vClickOutside = {
+  mounted(el, binding) {
+    el._clickOutside = (e) => {
+      if (!el.contains(e.target)) binding.value()
+    }
+    document.addEventListener('click', el._clickOutside)
+  },
+  unmounted(el) {
+    document.removeEventListener('click', el._clickOutside)
+  },
+}
+
+async function onWorkspaceChange(id) {
+  wsOpen.value = false
+  wsSearch.value = ''
+  if (id) {
+    try {
+      const res = await fetch(`/api/workspaces/${id}/switch`, { method: 'POST' })
+      if (res.ok) {
+        const data = await res.json()
+        currentWorkspaceId.value = data.current_id || id
+      } else {
+        currentWorkspaceId.value = id
+      }
+    } catch (e) {
+      currentWorkspaceId.value = id
+    }
+  } else {
+    currentWorkspaceId.value = ''
+  }
+  // 通知 App.vue 工作空间已切换
+  window.dispatchEvent(new CustomEvent('taofei-workspace-changed', {
+    detail: { current_id: currentWorkspaceId.value, workspaces: workspaceList.value },
+  }))
+  // 刷新文件树
+  if (currentWorkspaceId.value) {
+    loadFileTree()
+  } else {
+    fileTree.value = []
+    wsName.value = ''
+    wsPath.value = ''
+  }
+}
+
+function openLocalFolder() {
+  wsOpen.value = false
+  wsSearch.value = ''
+  window.dispatchEvent(new CustomEvent('taofei-open-local-folder'))
+}
+
+function onDeleteWorkspace(id) {
+  window.dispatchEvent(new CustomEvent('taofei-delete-workspace', { detail: { id } }))
+}
 
 // 左侧会话列表宽度拖拽
 const sessionsWidth = ref(parseInt(localStorage.getItem('chatSessionsWidth') || '260'))
@@ -1455,6 +1662,61 @@ function onFilePick(node) {
 .chat-area-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .chat-area-head-left { flex: 1; min-width: 0; }
 .chat-area-head-right { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* ===== 工作空间选择器（头部） ===== */
+.ws-selector-wrap { position: relative; }
+.ws-selector-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px 4px 6px; border-radius: 20px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  cursor: pointer; user-select: none;
+  transition: border-color .15s, box-shadow .15s;
+  font-family: inherit; font-size: 13px; color: var(--text);
+}
+.ws-selector-btn:hover { border-color: rgba(16, 185, 129, 0.5); box-shadow: 0 0 8px rgba(16, 185, 129, 0.15); }
+.ws-selector-btn.open { border-color: rgba(16, 185, 129, 0.6); box-shadow: 0 0 10px rgba(16, 185, 129, 0.2); }
+.ws-icon { font-size: 14px; }
+.ws-name { font-weight: 500; max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-arrow { font-size: 10px; color: var(--text-muted); transition: transform .15s; }
+.ws-selector-btn.open .ws-arrow { transform: rotate(180deg); }
+
+.ws-dropdown {
+  position: absolute; top: calc(100% + 4px); right: 0;
+  width: 260px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  z-index: 100; overflow: hidden;
+  opacity: 0; transform: translateY(-6px); pointer-events: none;
+  transition: all .15s;
+}
+.ws-dropdown.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.ws-search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.ws-search input { flex: 1; border: none; outline: none; font-size: 13px; font-family: inherit; background: transparent; color: var(--text); }
+.ws-search-icon { font-size: 12px; opacity: .55; flex-shrink: 0; }
+.ws-list { max-height: 240px; overflow-y: auto; padding: 6px; }
+.ws-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+.ws-item:hover { background: rgba(16, 185, 129, 0.08); }
+.ws-item.selected { background: rgba(16, 185, 129, 0.12); }
+.ws-item-icon { font-size: 14px; opacity: .8; flex-shrink: 0; }
+.ws-item-info { flex: 1; min-width: 0; }
+.ws-item-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-item-check { font-size: 13px; font-weight: 700; color: var(--success); flex-shrink: 0; margin-left: 4px; }
+.ws-item-actions button { background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 4px; }
+.ws-item-actions button:hover { color: var(--danger); }
+.ws-empty { padding: 14px; text-align: center; font-size: 12px; color: var(--text-muted); }
+.ws-dropdown-actions { padding: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.ws-action-open,
+.ws-action-none {
+  width: 100%; padding: 8px; border: 1px dashed var(--border-strong);
+  background: transparent; border-radius: 6px; color: var(--text-secondary);
+  font-size: 12px; cursor: pointer; display: flex; align-items: center;
+  justify-content: flex-start; gap: 6px; transition: all .12s;
+  font-family: inherit;
+}
+.ws-action-open:hover { border-color: var(--primary); color: var(--primary); }
+.ws-action-none:hover { border-color: var(--danger); color: var(--danger); }
+
 .chat-area-skills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; align-items: center; }
 .chat-skill-tag {
   font-size: 11px; padding: 2px 8px; border-radius: 6px;
@@ -1981,6 +2243,16 @@ function onFilePick(node) {
 }
 .chat-report-duration {
   font-size: 11px; color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px; border-radius: 4px;
+  transition: background .12s, color .12s;
+}
+.chat-report-duration:hover {
+  background: rgba(139, 92, 246, 0.08);
+  color: var(--primary);
+}
+.chat-report-duration.expanded {
+  color: var(--primary);
 }
 .chat-report-title {
   font-size: 15px; font-weight: 700; color: var(--text);

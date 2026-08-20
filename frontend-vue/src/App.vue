@@ -5,107 +5,6 @@
       <div class="brand-name">淘飞AI</div>
     </div>
 
-    <!-- 工作空间选择器 -->
-    <div class="workspace-section" v-click-outside="closeWorkspaceDropdown">
-      <div
-        class="workspace-selector"
-        :class="{ open: wsOpen }"
-        @click="wsOpen = !wsOpen"
-      >
-        <div class="workspace-selector-main">
-          <div class="workspace-icon">📁</div>
-          <div class="workspace-info">
-            <div class="workspace-name">{{ currentWsName }}</div>
-          </div>
-        </div>
-        <span class="workspace-arrow">▼</span>
-      </div>
-
-      <div class="workspace-dropdown" :class="{ open: wsOpen }">
-        <div class="ws-search">
-          <span class="ws-search-icon">🔍</span>
-          <input
-            v-model="wsSearch"
-            type="text"
-            placeholder="搜索工作空间"
-            @click.stop
-          />
-        </div>
-
-        <div class="ws-dropdown-list">
-          <div
-            v-for="ws in filteredWorkspaces"
-            :key="ws.id"
-            class="ws-dropdown-item"
-            :class="{ selected: ws.id === currentWsId }"
-            @click="switchWorkspace(ws.id)"
-          >
-            <span class="ws-item-icon">📁</span>
-            <div class="ws-item-info">
-              <div class="ws-item-name">{{ ws.name }}</div>
-            </div>
-            <span v-if="ws.id === currentWsId" class="ws-item-check">✓</span>
-            <div class="ws-item-actions">
-              <button
-                v-if="workspaces.length > 1"
-                title="删除"
-                @click.stop="deleteWorkspace(ws.id)"
-              >
-                🗑
-              </button>
-            </div>
-          </div>
-
-          <div v-if="filteredWorkspaces.length === 0" class="ws-empty">
-            未找到工作空间
-          </div>
-
-          <!-- 新建工作空间内联表单 -->
-          <div v-if="showNewWsForm" class="ws-new-form" @click.stop>
-            <input
-              ref="newWsInput"
-              v-model="newWsName"
-              type="text"
-              placeholder="工作空间名称"
-              @keydown.enter="confirmCreateWorkspace"
-              @keydown.esc="cancelCreateWorkspace"
-            />
-            <div class="ws-new-actions">
-              <button class="btn-confirm" @click="confirmCreateWorkspace">
-                确定
-              </button>
-              <button class="btn-cancel" @click="cancelCreateWorkspace">
-                取消
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="ws-actions">
-          <button class="ws-action-new" @click="startCreateWorkspace">
-            <span>+</span> 新建工作空间
-          </button>
-          <button class="ws-action-open" @click="openLocalFolder">
-            <span>📂</span> 打开本地文件夹
-          </button>
-        </div>
-
-        <div class="ws-actions-bottom">
-          <button class="ws-action-none" @click="clearWorkspace">
-            <span>📂</span> 不使用工作空间
-          </button>
-        </div>
-
-        <div class="ws-footer">
-          <span class="ws-footer-icon">📁</span>
-          <span class="ws-footer-name">{{ currentWsName }}</span>
-          <span class="ws-footer-perm" :class="{ granted: fullAccess }">
-            <span class="perm-dot" /> 允许完全访问
-          </span>
-        </div>
-      </div>
-    </div>
-
     <nav class="nav-section">
       <button class="nav-item" :class="{ active: route.name === 'chat' }" @click="router.push('/chat')">
         <span class="icon">💬</span> 对话中心 <span class="nav-badge">新</span>
@@ -171,11 +70,6 @@ import { useRouter as useAppRouter } from 'vue-router'
 const route = useRoute()
 const router = useRouter()
 
-const wsOpen = ref(false)
-const wsSearch = ref('')
-const showNewWsForm = ref(false)
-const newWsName = ref('')
-const newWsInput = ref(null)
 const workspaces = ref([])
 const currentWsId = ref(null)
 const fullAccess = ref(false)
@@ -185,30 +79,9 @@ const isLight = ref(false)
 const toastVisible = ref(false)
 const toastMsg = ref('')
 
-// 点击外部关闭工作空间下拉
-const vClickOutside = {
-  mounted(el, binding) {
-    el._clickOutside = (e) => {
-      if (!el.contains(e.target)) binding.value()
-    }
-    document.addEventListener('click', el._clickOutside)
-  },
-  unmounted(el) {
-    document.removeEventListener('click', el._clickOutside)
-  },
-}
-
 const currentWsName = computed(() => {
   const ws = workspaces.value.find(w => w.id === currentWsId.value)
   return ws ? ws.name : '选择工作空间'
-})
-
-const filteredWorkspaces = computed(() => {
-  const term = wsSearch.value.trim().toLowerCase()
-  if (!term) return workspaces.value
-  return workspaces.value.filter(w =>
-    w.name.toLowerCase().includes(term) || (w.path || '').toLowerCase().includes(term)
-  )
 })
 
 const pageTitle = computed(() => route.meta.title || '淘飞AI')
@@ -283,29 +156,6 @@ function emitWorkspaceChanged() {
       detail: { current_id: currentWsId.value, workspaces: workspaces.value },
     }))
   } catch (e) { /* ignore */ }
-}
-
-function closeWorkspaceDropdown() {
-  wsOpen.value = false
-  if (showNewWsForm.value) cancelCreateWorkspace()
-}
-
-function startCreateWorkspace() {
-  newWsName.value = ''
-  showNewWsForm.value = true
-  setTimeout(() => newWsInput.value?.focus(), 0)
-}
-
-function cancelCreateWorkspace() {
-  showNewWsForm.value = false
-  newWsName.value = ''
-}
-
-async function confirmCreateWorkspace() {
-  const name = newWsName.value.trim()
-  if (!name) return
-  await addWorkspace({ name, path: '' })
-  cancelCreateWorkspace()
 }
 
 async function addWorkspace(ws) {
@@ -401,7 +251,6 @@ function clearWorkspace() {
   fullAccess.value = false
   saveWorkspaces()
   emitWorkspaceChanged()
-  wsOpen.value = false
   showToast('已取消工作空间')
 }
 
@@ -419,7 +268,6 @@ async function switchWorkspace(id) {
     currentWsId.value = id
   }
   saveWorkspaces()
-  wsOpen.value = false
   showToast('工作空间已切换')
   emitWorkspaceChanged()
 }
@@ -450,12 +298,23 @@ function checkApiStatus() {
   apiText.value = '服务正常'
 }
 
+function onOpenLocalFolderRequest() {
+  openLocalFolder()
+}
+
+function onDeleteWorkspaceRequest(evt) {
+  const id = evt?.detail?.id
+  if (id) deleteWorkspace(id)
+}
+
 onMounted(async () => {
   const savedTheme = localStorage.getItem('theme')
   if (savedTheme === 'light') {
     isLight.value = true
     document.body.classList.add('light-theme')
   }
+  window.addEventListener('taofei-open-local-folder', onOpenLocalFolderRequest)
+  window.addEventListener('taofei-delete-workspace', onDeleteWorkspaceRequest)
   await loadWorkspaces()
   saveWorkspaces()
   emitWorkspaceChanged()
