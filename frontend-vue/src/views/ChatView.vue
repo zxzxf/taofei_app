@@ -223,7 +223,7 @@
           </div>
         </div>
         <div class="chat-input-row">
-          <button class="chat-upload" @click="triggerImageUpload" title="上传图片">🖼️</button>
+          <button class="chat-upload" @click="triggerImageUpload" title="上传图片">＋</button>
           <textarea
             v-model="inputText"
             rows="1"

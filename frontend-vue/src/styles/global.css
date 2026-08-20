@@ -576,8 +576,9 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .chat-time { font-size: 11px; color: var(--text-muted); margin-top: 5px; }
 .chat-input-area { padding: 14px 18px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
 .chat-input-area textarea { flex: 1; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; color: var(--text); font-size: 13.5px; outline: none; resize: none; font-family: inherit; min-height: 44px; max-height: 120px; }
-.chat-send { background: linear-gradient(135deg, var(--primary), var(--purple)); border: none; color: #fff; border-radius: 10px; padding: 0 20px; font-size: 14px; cursor: pointer; }
+.chat-send { background: linear-gradient(135deg, var(--primary), var(--purple)); border: none; color: #fff; border-radius: 10px; height: 44px; min-width: 56px; padding: 0 18px; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: opacity .15s, transform .1s; }
 .chat-send:hover { opacity: .9; }
+.chat-send:active { transform: scale(.96); }
 
 /* markdown */
 .md h1 { font-size: 20px; margin: 18px 0 10px; color: var(--text); }
