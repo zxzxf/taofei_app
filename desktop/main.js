@@ -93,6 +93,7 @@ function createSplash() {
     center: true,
     show: true,
     backgroundColor: '#0f172a',
+    icon: path.join(__dirname, 'icon.ico'),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   splashWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
@@ -235,6 +236,7 @@ function createWindow(port) {
     show: false, // 等页面加载完成再显示，避免白屏
     title: '淘飞AI · 企业级AI智能体平台',
     autoHideMenuBar: true,
+    icon: path.join(__dirname, 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
