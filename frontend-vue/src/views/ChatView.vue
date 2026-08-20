@@ -173,15 +173,15 @@
                   class="chat-report-step"
                   :class="st.status"
                 >
-                  <div v-if="!msg.stepExpanded || !msg.stepExpanded[sti]" class="chat-report-step-header" @click="toggleStep(msg, sti)">
+                  <div v-if="isStepExpanded(msg, sti)" class="chat-report-step-body">
+                    <pre>{{ st.output || '（无输出内容）' }}</pre>
+                    <div class="chat-report-step-collapse" @click="toggleStep(msg, sti)">收起 ▲</div>
+                  </div>
+                  <div v-else class="chat-report-step-header" @click="toggleStep(msg, sti)">
                     <span class="chat-report-step-toggle">▶</span>
                     <span class="chat-report-step-icon">{{ st.icon }}</span>
                     <span class="chat-report-step-name">{{ st.name }}</span>
                     <span class="chat-report-step-time">{{ st.time }}</span>
-                  </div>
-                  <div v-else class="chat-report-step-body">
-                    <pre>{{ st.output || '（无输出内容）' }}</pre>
-                    <div class="chat-report-step-collapse" @click="toggleStep(msg, sti)">收起 ▲</div>
                   </div>
                 </div>
               </div>
@@ -194,17 +194,24 @@
               </div>
             </div>
             <div v-else class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
-            <div v-if="false && visibleAgentSteps(msg).length && !(msg.report && msg.report.type === 'report')" class="chat-agent-steps">
-              <div class="chat-agent-steps-title">⚙️ 执行步骤</div>
+            <div v-if="!msg.report && msg.agentSteps && msg.agentSteps.length" class="chat-agent-steps">
+              <div class="chat-agent-steps-title">⚙️ 思考与执行过程</div>
               <div
-                v-for="(step, si) in visibleAgentSteps(msg)"
+                v-for="(step, si) in msg.agentSteps"
                 :key="si"
-                class="chat-agent-step"
+                class="chat-report-step"
                 :class="step.status"
               >
-                <span class="chat-agent-step-icon">{{ step.status === 'error' ? '❌' : step.status === 'running' ? '⏳' : '✅' }}</span>
-                <span class="chat-agent-step-name">{{ step.name }}</span>
-                <span class="chat-agent-step-time">{{ step.time }}</span>
+                <div v-if="isStepExpanded(msg, si)" class="chat-report-step-body">
+                  <pre>{{ step.output || '（无输出内容）' }}</pre>
+                  <div class="chat-report-step-collapse" @click="toggleStep(msg, si)">收起 ▲</div>
+                </div>
+                <div v-else class="chat-report-step-header" @click="toggleStep(msg, si)">
+                  <span class="chat-report-step-toggle">▶</span>
+                  <span class="chat-report-step-icon">{{ step.status === 'error' ? '❌' : step.status === 'running' ? '⏳' : '✅' }}</span>
+                  <span class="chat-report-step-name">{{ step.name }}</span>
+                  <span class="chat-report-step-time">{{ step.time }}</span>
+                </div>
               </div>
             </div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
@@ -416,17 +423,15 @@ function formatTime(ts) {
   return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-// 过滤掉纯内部状态步骤（思考第 X 步 / 格式重试），只保留工具调用与结果
-function visibleAgentSteps(msg) {
-  if (!msg.agentSteps || !msg.agentSteps.length) return []
-  return msg.agentSteps.filter(st =>
-    !/^思考第\s*\d+\s*步/.test(st.name) && st.name !== '格式重试'
-  )
+// 步骤默认展开：Agent 边思考边显示，仅用户手动收起的步骤保持折叠
+function isStepExpanded(msg, sti) {
+  if (!msg.stepExpanded) return true
+  return msg.stepExpanded[sti] !== false
 }
 
 function toggleStep(msg, sti) {
   if (!msg.stepExpanded) msg.stepExpanded = {}
-  msg.stepExpanded[sti] = !msg.stepExpanded[sti]
+  msg.stepExpanded[sti] = !isStepExpanded(msg, sti)
 }
 
 function renderMarkdown(text) {
@@ -789,11 +794,11 @@ async function sendGitCommit(s, userText, commitMessage) {
   s.title = userText.slice(0, 20)
   inputText.value = ''
   pendingImages.value = []
-  await scrollToBottom()
+  await scrollToBottom(true)
 
   // 2) 预占 AI 消息
   s.messages.push({ role: 'ai', text: '⏳ 正在提交代码…', time: Date.now(), pending: true })
-  await scrollToBottom()
+  await scrollToBottom(true)
 
   sending.value = true
   saveSessions()
@@ -856,6 +861,7 @@ function fallbackPoll(task_id, aiMsg, s) {
         name: st.name,
         status: st.status,
         time: st.time || '',
+        output: st.output || '',
       }))
       const result = task.result
       if (result && typeof result === 'object' && result.type === 'report') {
@@ -903,12 +909,13 @@ async function sendAgent(s, text, images = []) {
   s.title = (text || '图片消息').slice(0, 20)
   inputText.value = ''
   pendingImages.value = []
-  await scrollToBottom()
+  await scrollToBottom(true)
 
-  // 2) 预占一条 AI 消息（含 agentSteps / reportSteps 展开状态）
-  const aiMsg = { role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: false }
-  s.messages.push(aiMsg)
-  await scrollToBottom()
+  // 2) 预占一条 AI 消息（执行明细默认展开，逐步显示思考过程）
+  // 注意：push 后必须从数组取回响应式代理引用（Vue3 中修改原始对象不触发渲染）
+  s.messages.push({ role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: true, stepExpanded: {} })
+  const aiMsg = s.messages[s.messages.length - 1]
+  await scrollToBottom(true)
 
   sending.value = true
   saveSessions()
@@ -941,26 +948,18 @@ async function sendAgent(s, text, images = []) {
     const es = new EventSource(`/api/agent/stream/${task_id}`)
 
     function applyTaskUpdate(task) {
-      // 更新步骤
+      // 更新步骤（保留 output：Thought 内容 / 工具入参 / 执行结果，逐步展示）
       aiMsg.agentSteps = (task.steps || []).map(st => ({
         name: st.name,
         status: st.status,
         time: st.time || '',
+        output: st.output || '',
       }))
       // 优先以报告形式展示
       const result = task.result
       if (result && typeof result === 'object' && result.type === 'report') {
         aiMsg.report = result
         aiMsg.text = ''
-        // 默认展开所有步骤；新出现的步骤自动展开，已手动折叠的步骤保持折叠
-        if (!aiMsg.reportExpanded) aiMsg.reportExpanded = {}
-        if (result.steps) {
-          for (const st of result.steps) {
-            if (!(st.id in aiMsg.reportExpanded)) {
-              aiMsg.reportExpanded[st.id] = true
-            }
-          }
-        }
       }
       // 运行中状态文本
       if (task.status === 'running') {
@@ -1031,13 +1030,30 @@ async function sendAgent(s, text, images = []) {
   }
 }
 
-async function scrollToBottom() {
+async function scrollToBottom(force = false) {
   await nextTick()
-  if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+  const el = messagesEl.value
+  if (!el) return
+  // 流式更新时仅在用户贴近底部才自动跟随，避免回看历史时被强行拉回
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  if (force || nearBottom) el.scrollTop = el.scrollHeight
 }
 
 function saveSessions() {
-  localStorage.setItem('chatSessions', JSON.stringify(sessions.value))
+  try {
+    // 精简持久化：带报告卡片的消息不重复保存 agentSteps（报告 steps 已含全部过程与输出）
+    const slim = sessions.value.map(s => ({
+      ...s,
+      messages: s.messages.map(m => {
+        if (m.role === 'ai' && m.report && m.agentSteps) {
+          const { agentSteps, ...rest } = m
+          return rest
+        }
+        return m
+      }),
+    }))
+    localStorage.setItem('chatSessions', JSON.stringify(slim))
+  } catch (e) { console.error('保存会话失败', e) }
 }
 
 function presetNameById(id) {
@@ -1102,7 +1118,7 @@ onUnmounted(() => {
   document.removeEventListener('paste', handleGlobalPaste)
 })
 
-watch(currentId, () => scrollToBottom())
+watch(currentId, () => scrollToBottom(true))
 
 // ===== 工作空间文件树（右侧面板） =====
 const currentWorkspaceId = ref('')
@@ -2204,24 +2220,16 @@ function onFilePick(node) {
 }
 
 .chat-agent-steps {
-  margin-top: 8px; padding: 8px 10px;
+  margin-top: 8px; padding: 10px;
   background: rgba(139, 92, 246, 0.06);
   border: 1px solid rgba(139, 92, 246, 0.15);
   border-radius: 8px;
+  display: flex; flex-direction: column; gap: 4px;
 }
 .chat-agent-steps-title {
   font-size: 11px; font-weight: 600; color: #8b5cf6;
-  margin-bottom: 6px;
+  margin-bottom: 2px;
 }
-.chat-agent-step {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11px; padding: 3px 0; color: var(--text-secondary);
-}
-.chat-agent-step .chat-agent-step-icon { font-size: 12px; }
-.chat-agent-step-name { flex: 1; }
-.chat-agent-step-time { color: var(--text-muted); font-size: 10px; }
-.chat-agent-step.running .chat-agent-step-name { color: var(--primary); }
-.chat-agent-step.error .chat-agent-step-name { color: #ef4444; }
 
 /* ===== Agent 伪流式报告卡片 ===== */
 .chat-report-card {
@@ -2347,6 +2355,28 @@ function onFilePick(node) {
   white-space: pre-wrap; word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   max-height: 240px; overflow-y: auto;
+}
+.chat-report-step-collapse {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  text-align: right;
+}
+.chat-report-step-collapse:hover { color: var(--primary); }
+/* 运行中的步骤呼吸动画：提示正在执行 */
+.chat-report-step.running .chat-report-step-icon,
+.chat-report-step.running .chat-report-step-name {
+  animation: chatStepPulse 1.2s ease-in-out infinite;
+}
+@keyframes chatStepPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-report-step.running .chat-report-step-icon,
+  .chat-report-step.running .chat-report-step-name { animation: none; }
 }
 
 </style>
