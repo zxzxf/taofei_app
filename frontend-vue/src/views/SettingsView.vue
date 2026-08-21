@@ -1,10 +1,10 @@
 <template>
   <div class="settings-layout">
     <div class="settings-tabs">
-      <button class="settings-tab" :class="{ active: tab === 'model' }" @click="tab = 'model'"><span>🔧</span> 模型管理</button>
+      <button class="settings-tab" :class="{ active: tab === 'model' }" @click="tab = 'model'"><span>🔧</span> 模型</button>
       <button class="settings-tab" :class="{ active: tab === 'appearance' }" @click="tab = 'appearance'"><span>🎨</span> 外观</button>
       <button class="settings-tab" :class="{ active: tab === 'notifications' }" @click="tab = 'notifications'"><span>🔔</span> 通知</button>
-      <button class="settings-tab" :class="{ active: tab === 'data' }" @click="tab = 'data'"><span>📦</span> 数据管理</button>
+      <button class="settings-tab" :class="{ active: tab === 'data' }" @click="tab = 'data'"><span>📦</span> 备份</button>
       <button class="settings-tab" :class="{ active: tab === 'about' }" @click="tab = 'about'"><span>ℹ️</span> 关于</button>
     </div>
     <div class="settings-content">

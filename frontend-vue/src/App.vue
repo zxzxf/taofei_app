@@ -13,7 +13,7 @@
         <span class="icon">🏠</span> 工作台
       </button>
       <button class="nav-item" :class="{ active: route.name === 'agents' }" @click="router.push('/agents')">
-        <span class="icon">🤖</span> 智能体中心
+        <span class="icon">🤖</span> 智能体
       </button>
       <button class="nav-item" :class="{ active: route.name === 'task' }" @click="router.push('/task')">
         <span class="icon">⚡</span> 任务编排
