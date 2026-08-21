@@ -258,7 +258,7 @@
             v-model="inputText"
             rows="1"
             placeholder="Agent 模式：描述任务，Agent 会自动分析、调用工具、连续执行…"
-            @keydown.enter.exact.prevent="send"
+            @keydown.enter.exact.prevent="onEnterPress"
             @paste="handlePaste"
             @input="autoResize"
           ></textarea>
@@ -752,6 +752,12 @@ function autoResize() {
   el.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden'
 }
 
+// 回车发送（输入法组合期间不触发，避免中文选字按回车被误发送）
+function onEnterPress(e) {
+  if (e.isComposing || e.keyCode === 229) return
+  send()
+}
+
 // 全局粘贴监听：点击对话框其他位置时 Ctrl+V 也能粘贴图片
 function handleGlobalPaste(event) {
   const target = event.target
@@ -810,8 +816,23 @@ async function send() {
   const text = inputText.value.trim()
   const hasImages = pendingImages.value.length > 0
   if (!text && !hasImages) return
-  const s = currentSession.value
-  if (!s) { openNewSessionDialog(); return }
+  let s = currentSession.value
+  // 没有会话时自动创建一个（不弹窗拦截，避免"输入不了/发不出去"的感觉）
+  if (!s) {
+    const id = Date.now().toString()
+    s = {
+      id,
+      title: '新对话',
+      time: Date.now(),
+      messages: [],
+      skills: [],
+      modelPresetId: globalDefaultPresetId.value || '',
+      sending: false,
+    }
+    sessions.value.unshift(s)
+    currentId.value = id
+    saveSessions()
+  }
   if (s.sending) return
 
   // 会话中心快捷指令：提交代码（任何模式下都优先拦截）
@@ -1124,6 +1145,17 @@ function loadSessions() {
     const saved = localStorage.getItem('chatSessions')
     if (saved) {
       sessions.value = JSON.parse(saved)
+      // 页面刚加载时不可能有任务在发送；重置残留的 sending/pending 状态，
+      // 否则上次关闭前卡住的会话会一直"发送中"，输入框按回车没反应
+      for (const s of sessions.value) {
+        if (s.sending) s.sending = false
+        for (const m of (s.messages || [])) {
+          if (m.pending) {
+            m.pending = false
+            if (!m.text) m.text = '（上次任务被中断）'
+          }
+        }
+      }
       currentId.value = sessions.value[0]?.id || null
     }
   } catch (e) { console.error('加载会话失败', e) }
