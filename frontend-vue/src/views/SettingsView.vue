@@ -1,7 +1,7 @@
 <template>
   <div class="settings-layout">
     <div class="settings-tabs">
-      <button class="settings-tab" :class="{ active: tab === 'model' }" @click="tab = 'model'"><span>🔧</span> 模型与 API</button>
+      <button class="settings-tab" :class="{ active: tab === 'model' }" @click="tab = 'model'"><span>🔧</span> 模型管理</button>
       <button class="settings-tab" :class="{ active: tab === 'appearance' }" @click="tab = 'appearance'"><span>🎨</span> 外观</button>
       <button class="settings-tab" :class="{ active: tab === 'notifications' }" @click="tab = 'notifications'"><span>🔔</span> 通知</button>
       <button class="settings-tab" :class="{ active: tab === 'data' }" @click="tab = 'data'"><span>📦</span> 数据管理</button>
@@ -132,14 +132,18 @@
                   <span class="chip">{{ p.provider }}</span>
                   <span class="preset-model">{{ p.model || '(未填)' }}</span>
                   <span v-if="p.base_url" class="preset-url">{{ p.base_url }}</span>
-                  <span class="preset-key">{{ p.has_api_key ? p.api_key_masked : '未设置Key' }}</span>
+                  <span v-if="visibleKeys[p.id]" class="preset-key">{{ getVisibleKey(p) }}</span>
                 </div>
               </div>
               <div class="preset-card-actions">
+                <button v-if="p.has_api_key" class="btn-icon btn-sm" :title="visibleKeys[p.id] ? '隐藏密钥' : '显示密钥'" @click="toggleKeyVisible(p)">
+                  <svg v-if="!visibleKeys[p.id]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                </button>
                 <button class="btn-ghost btn-sm" :disabled="saving || loadingId === p.id" @click="usePreset(p)">
                   {{ p.id === activePresetId ? '✓' : '使用' }}
                 </button>
-                <button class="btn-danger-text btn-sm" :disabled="saving || loadingId === p.id" @click="deletePreset(p)">
+                <button class="btn-danger-text btn-sm" :disabled="saving || loadingId === p.id || presets.length <= 1 || p.id === activePresetId" @click="deletePreset(p)">
                   删除
                 </button>
               </div>
@@ -248,10 +252,11 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, reactive } from 'vue'
 
 const tab = ref('model')
 const showKey = ref(false)
+const visibleKeys = reactive({})
 const config = ref({
   name: '',
   provider: 'deepseek',
@@ -360,11 +365,40 @@ async function loadPresets() {
     console.error('加载预设列表失败', e)
   } finally {
     listLoading.value = false
+    const tp = Math.max(1, Math.ceil(filteredPresets.value.length / pageSize))
+    if (currentPage.value > tp) currentPage.value = tp
   }
 }
 
 function notifyModelChanged() {
   window.dispatchEvent(new Event('taofei-model-changed'))
+}
+
+const plainKeys = reactive({})
+
+function getVisibleKey(p) {
+  if (!p.has_api_key) return '未设置Key'
+  return plainKeys[p.id] || p.api_key_masked
+}
+
+async function toggleKeyVisible(p) {
+  const isVisible = visibleKeys[p.id]
+  if (isVisible) {
+    visibleKeys[p.id] = false
+    return
+  }
+  try {
+    const res = await fetch(`/api/model-presets/${p.id}/api-key`)
+    const data = await res.json()
+    if (res.ok && data.ok) {
+      plainKeys[p.id] = data.api_key || ''
+      visibleKeys[p.id] = true
+    } else {
+      showSaveTip('err', '获取密钥失败：' + (data.error || res.statusText))
+    }
+  } catch (e) {
+    showSaveTip('err', '获取密钥失败：' + e.message)
+  }
 }
 
 function showSaveTip(type, text, timeout = 2400) {
@@ -455,6 +489,14 @@ async function usePreset(p) {
 
 async function deletePreset(p) {
   if (saving.value || loadingId.value) return
+  if (presets.value.length <= 1) {
+    showSaveTip('err', '至少保留一个模型配置，无法删除')
+    return
+  }
+  if (p.id === activePresetId.value) {
+    showSaveTip('err', '正在使用的配置不能删除，请先切换到其他配置')
+    return
+  }
   if (!confirm(`确定删除配置「${p.name}」？`)) return
   loadingId.value = p.id
   try {

@@ -1089,6 +1089,20 @@ def delete_model_preset(preset_id: str):
     return {"ok": True, "active_id": data.get("active_id", "")}
 
 
+@app.get("/api/model-presets/{preset_id}/api-key")
+def get_model_preset_api_key(preset_id: str):
+    """获取指定预设的完整 API Key（点击"显示"时调用）。"""
+    data = _load_presets()
+    target = None
+    for p in data.get("presets", []):
+        if p.get("id") == preset_id:
+            target = p
+            break
+    if not target:
+        return JSONResponse({"ok": False, "error": "预设不存在"}, status_code=404)
+    return {"ok": True, "api_key": target.get("api_key", "")}
+
+
 @app.post("/api/model-presets/{preset_id}/activate")
 def activate_model_preset(preset_id: str):
     """激活一个预设（设为当前模型配置）。"""
