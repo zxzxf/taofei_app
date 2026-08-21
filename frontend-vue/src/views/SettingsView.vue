@@ -88,7 +88,7 @@
               <button class="btn-ghost" :disabled="testing" @click="testConnection">
                 {{ testing ? '测试中...' : '测试连接' }}
               </button>
-              <button class="btn-save" :disabled="saving" @click="saveModel">
+              <button class="btn-primary" :disabled="saving" @click="saveModel">
                 {{ saving ? '保存中...' : '保存模型配置' }}
               </button>
             </div>
