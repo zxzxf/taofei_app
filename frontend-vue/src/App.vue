@@ -37,6 +37,10 @@
         <span class="dot" :class="apiStatus"></span>
         <span>{{ apiText }}</span>
       </div>
+      <div class="ws-status" :title="wsStatusText">
+        <span class="ws-dot" :class="wsStatus"></span>
+        <span>{{ wsStatusText }}</span>
+      </div>
     </div>
   </aside>
 
@@ -63,9 +67,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useRouter as useAppRouter } from 'vue-router'
+import wsManager from './utils/wsManager.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -75,6 +80,7 @@ const currentWsId = ref(null)
 const fullAccess = ref(false)
 const apiStatus = ref('')
 const apiText = ref('检测服务状态…')
+const wsStatus = ref('disconnected')
 const isLight = ref(false)
 const toastVisible = ref(false)
 const toastMsg = ref('')
@@ -86,6 +92,12 @@ const currentWsName = computed(() => {
 
 const pageTitle = computed(() => route.meta.title || '淘飞AI')
 const pageTags = computed(() => route.meta.tags || [])
+
+const wsStatusText = computed(() => {
+  if (wsStatus.value === 'connected') return '实时已连接'
+  if (wsStatus.value === 'connecting') return '实时连接中…'
+  return '实时未连接'
+})
 
 function toggleTheme() {
   isLight.value = !isLight.value
@@ -303,5 +315,16 @@ onMounted(async () => {
   saveWorkspaces()
   emitWorkspaceChanged()
   checkApiStatus()
+  wsManager.connect()
+  wsStatus.value = wsManager.status
+  wsUnsub = wsManager.onStatus((s) => { wsStatus.value = s })
+})
+
+let wsUnsub = null
+onUnmounted(() => {
+  if (wsUnsub) {
+    wsUnsub()
+    wsUnsub = null
+  }
 })
 </script>

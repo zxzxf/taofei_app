@@ -11,7 +11,7 @@ import re
 import threading
 from typing import Any
 
-_REF_RE = re.compile(r"\{\{#\s*([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\s*#\}\}")
+_REF_RE = re.compile(r"\{\{#\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_]+)*)\s*#\}\}")
 
 
 class VariablePool:

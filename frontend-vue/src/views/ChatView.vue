@@ -26,7 +26,10 @@
           @click="currentId = s.id"
         >
           <div class="chat-session-info">
-            <div class="chat-session-title">{{ s.title }}</div>
+            <div class="chat-session-title">
+              {{ s.title }}
+              <span v-if="s.sending" class="session-running-dot" title="正在思考中"></span>
+            </div>
             <div class="chat-session-meta">{{ formatTime(s.time) }} · {{ s.messages.length }} 条消息</div>
             <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
               <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
@@ -251,11 +254,13 @@
         <div class="chat-input-row">
           <button class="chat-upload" @click="triggerImageUpload" title="上传图片">＋</button>
           <textarea
+            ref="inputEl"
             v-model="inputText"
             rows="1"
             placeholder="Agent 模式：描述任务，Agent 会自动分析、调用工具、连续执行…"
             @keydown.enter.exact.prevent="send"
             @paste="handlePaste"
+            @input="autoResize"
           ></textarea>
           <button class="chat-send agent-active" @click="send">➤</button>
         </div>
@@ -413,10 +418,12 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue'
+import wsManager from '../utils/wsManager.js'
 
 const sessions = ref([])
 const currentId = ref(null)
 const inputText = ref('')
+const inputEl = ref(null)
 const searchTerm = ref('')
 const messagesEl = ref(null)
 const showSkillPicker = ref(false)
@@ -560,9 +567,6 @@ function clearCurrent() {
   s.messages = [{ role: 'ai', text: '当前会话已清空，请重新输入。', time: Date.now() }]
   saveSessions()
 }
-
-const sending = ref(false)
-const agentPolling = ref(false)
 
 // ===== 当前会话模型（会话级，每个对话可独立切换） =====
 const presets = ref([])
@@ -734,6 +738,20 @@ function handlePaste(event) {
   if (handled) showMessage('图片已粘贴到输入框，点击发送即可')
 }
 
+function autoResize() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  const lineHeight = 22
+  const minHeight = lineHeight * 2 + 24
+  const maxHeight = lineHeight * 10 + 24
+  const scrollHeight = el.scrollHeight
+  let h = Math.max(minHeight, scrollHeight)
+  if (h > maxHeight) h = maxHeight
+  el.style.height = h + 'px'
+  el.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden'
+}
+
 // 全局粘贴监听：点击对话框其他位置时 Ctrl+V 也能粘贴图片
 function handleGlobalPaste(event) {
   const target = event.target
@@ -791,9 +809,10 @@ function previewImage(dataUrl) {
 async function send() {
   const text = inputText.value.trim()
   const hasImages = pendingImages.value.length > 0
-  if ((!text && !hasImages) || sending.value) return
+  if (!text && !hasImages) return
   const s = currentSession.value
   if (!s) { openNewSessionDialog(); return }
+  if (s.sending) return
 
   // 会话中心快捷指令：提交代码（任何模式下都优先拦截）
   if (text.startsWith('提交代码') && !hasImages) {
@@ -819,7 +838,7 @@ async function sendGitCommit(s, userText, commitMessage) {
   s.messages.push({ role: 'ai', text: '⏳ 正在提交代码…', time: Date.now(), pending: true })
   await scrollToBottom(true)
 
-  sending.value = true
+  s.sending = true
   saveSessions()
 
   function updateAiMsg(patch) {
@@ -863,7 +882,7 @@ async function sendGitCommit(s, userText, commitMessage) {
   } catch (e) {
     updateAiMsg({ text: `❌ 提交异常：${e.message || e}\n\n请确认后端服务已启动。`, error: true, pending: false })
   } finally {
-    sending.value = false
+    s.sending = false
     saveSessions()
     await scrollToBottom()
   }
@@ -871,7 +890,7 @@ async function sendGitCommit(s, userText, commitMessage) {
 
 // ===== Agent 模式：ReAct 循环 =====
 
-// SSE 异常时的兜底轮询
+// SSE/WS 异常时的兜底轮询
 function fallbackPoll(task_id, aiMsg, s) {
   const pollInterval = setInterval(async () => {
     try {
@@ -906,8 +925,7 @@ function fallbackPoll(task_id, aiMsg, s) {
         }
         aiMsg.pending = false
         clearInterval(pollInterval)
-        agentPolling.value = false
-        sending.value = false
+        s.sending = false
         s.time = Date.now()
         saveSessions()
       } else if (task.status === 'failed') {
@@ -915,8 +933,7 @@ function fallbackPoll(task_id, aiMsg, s) {
         aiMsg.pending = false
         aiMsg.error = true
         clearInterval(pollInterval)
-        agentPolling.value = false
-        sending.value = false
+        s.sending = false
         saveSessions()
       }
       scrollToBottom()
@@ -932,17 +949,68 @@ async function sendAgent(s, text, images = []) {
   pendingImages.value = []
   await scrollToBottom(true)
 
-  // 2) 预占一条 AI 消息（执行明细默认展开，逐步显示思考过程）
-  // 注意：push 后必须从数组取回响应式代理引用（Vue3 中修改原始对象不触发渲染）
+  // 2) 预占一条 AI 消息
   s.messages.push({ role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: true, stepExpanded: {} })
   const aiMsg = s.messages[s.messages.length - 1]
   await scrollToBottom(true)
 
-  sending.value = true
+  s.sending = true
   saveSessions()
 
+  function applyTaskUpdate(task) {
+    aiMsg.agentSteps = (task.steps || []).map(st => ({
+      name: st.name,
+      status: st.status,
+      time: st.time || '',
+      output: st.output || '',
+    }))
+    const result = task.result
+    if (result && typeof result === 'object' && result.type === 'report') {
+      aiMsg.report = result
+      aiMsg.text = ''
+    }
+    if (task.status === 'running') {
+      const stepText = `⏳ ${task.current_step || 'Agent 正在执行…'}`
+      if (aiMsg.report) {
+        aiMsg.report.summary = stepText
+      } else {
+        aiMsg.text = stepText
+      }
+    }
+    saveSessions()
+    scrollToBottom()
+  }
+
+  function finalizeTask(task) {
+    if (task.status === 'completed') {
+      const result = task.result
+      if (result && typeof result === 'object' && result.type === 'report') {
+        aiMsg.report = result
+        aiMsg.text = ''
+      } else if (!aiMsg.report) {
+        aiMsg.text = result || '(Agent 无返回结果)'
+      }
+      aiMsg.pending = false
+    } else if (task.status === 'cancelled') {
+      aiMsg.text = '⏹️ 已取消'
+      aiMsg.pending = false
+    } else if (task.status === 'failed') {
+      aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
+      aiMsg.pending = false
+      aiMsg.error = true
+    }
+    s.sending = false
+    s.time = Date.now()
+    saveSessions()
+    scrollToBottom()
+  }
+
+  function useFallback(taskId) {
+    fallbackPoll(taskId, aiMsg, s)
+  }
+
   try {
-    // 3) 启动 Agent 任务（附带多模态图片）
+    // 3) 启动 Agent 任务
     const startRes = await fetch('/api/agent/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -960,92 +1028,60 @@ async function sendAgent(s, text, images = []) {
       aiMsg.text = `❌ Agent 启动失败：${errMsg}`
       aiMsg.pending = false
       aiMsg.error = true
+      s.sending = false
+      saveSessions()
       return
     }
     const { task_id } = await startRes.json()
 
-    // 4) 通过 SSE 实时接收任务更新（Level 2 真流式）
-    agentPolling.value = true
-    const es = new EventSource(`/api/agent/stream/${task_id}`)
-
-    function applyTaskUpdate(task) {
-      // 更新步骤（保留 output：Thought 内容 / 工具入参 / 执行结果，逐步展示）
-      aiMsg.agentSteps = (task.steps || []).map(st => ({
-        name: st.name,
-        status: st.status,
-        time: st.time || '',
-        output: st.output || '',
-      }))
-      // 优先以报告形式展示
-      const result = task.result
-      if (result && typeof result === 'object' && result.type === 'report') {
-        aiMsg.report = result
-        aiMsg.text = ''
-      }
-      // 运行中状态文本
-      if (task.status === 'running') {
-        const stepText = `⏳ ${task.current_step || 'Agent 正在执行…'}`
-        if (aiMsg.report) {
-          // 报告卡片模式下，把 summary 实时替换为当前步骤，让用户看到思考过程
-          aiMsg.report.summary = stepText
-        } else {
-          aiMsg.text = stepText
+    // 4) 优先走 WebSocket 订阅；连接未就绪时降级 SSE
+    if (wsManager.status === 'connected') {
+      const unsub = wsManager.subscribe(task_id, (msg) => {
+        if (msg.type === 'task_update') {
+          applyTaskUpdate(msg.task)
+        } else if (msg.type === 'task_done') {
+          applyTaskUpdate(msg.task)
+          finalizeTask(msg.task)
+          unsub()
         }
-      }
-      saveSessions()
-      scrollToBottom()
-    }
+      })
+      // 保存 unsub 用于清理
+      aiMsg._wsUnsub = unsub
+      aiMsg._taskId = task_id
+    } else {
+      // WS 未连接，降级为 SSE
+      const es = new EventSource(`/api/agent/stream/${task_id}`)
+      aiMsg._es = es
+      aiMsg._taskId = task_id
 
-    function finalizeTask(task) {
-      if (task.status === 'completed') {
-        const result = task.result
-        if (result && typeof result === 'object' && result.type === 'report') {
-          aiMsg.report = result
-          aiMsg.text = ''
-        } else if (!aiMsg.report) {
-          aiMsg.text = result || '(Agent 无返回结果)'
-        }
-        aiMsg.pending = false
-      } else if (task.status === 'failed') {
-        aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
-        aiMsg.pending = false
-        aiMsg.error = true
+      es.onmessage = (e) => {
+        try {
+          const task = JSON.parse(e.data)
+          applyTaskUpdate(task)
+        } catch { /* 忽略解析错误 */ }
       }
-      agentPolling.value = false
-      sending.value = false
-      s.time = Date.now()
-      saveSessions()
-      scrollToBottom()
-    }
-
-    es.onmessage = (e) => {
-      try {
-        const task = JSON.parse(e.data)
-        applyTaskUpdate(task)
-      } catch { /* 忽略解析错误 */ }
-    }
-    es.addEventListener('done', (e) => {
-      try {
-        const task = JSON.parse(e.data)
-        applyTaskUpdate(task)
-        finalizeTask(task)
-      } catch { /* 忽略解析错误 */ }
-      es.close()
-    })
-    es.addEventListener('error', (e) => {
-      // 任务不存在或 SSE 异常：兜底切回轮询
-      es.close()
-      if (aiMsg.pending) fallbackPoll(task_id, aiMsg, s)
-    })
-    es.onerror = () => {
-      es.close()
-      if (aiMsg.pending) fallbackPoll(task_id, aiMsg, s)
+      es.addEventListener('done', (e) => {
+        try {
+          const task = JSON.parse(e.data)
+          applyTaskUpdate(task)
+          finalizeTask(task)
+        } catch { /* 忽略解析错误 */ }
+        es.close()
+      })
+      es.addEventListener('error', () => {
+        es.close()
+        if (aiMsg.pending) useFallback(task_id)
+      })
+      es.onerror = () => {
+        es.close()
+        if (aiMsg.pending) useFallback(task_id)
+      }
     }
   } catch (e) {
     aiMsg.text = `❌ 网络错误：${e.message || e}`
     aiMsg.pending = false
     aiMsg.error = true
-    sending.value = false
+    s.sending = false
     saveSessions()
     await scrollToBottom()
   }
@@ -1129,6 +1165,8 @@ onMounted(async () => {
   if (!sessions.value.length) {
     openNewSessionDialog()
   }
+  // 建立 WebSocket 连接（全局单例，跨页面保持）
+  wsManager.connect()
 })
 
 onUnmounted(() => {
@@ -1137,6 +1175,13 @@ onUnmounted(() => {
   document.removeEventListener('click', onDocClickChat)
   document.removeEventListener('click', onDocClickWorkspace)
   document.removeEventListener('paste', handleGlobalPaste)
+  // 清理所有仍在运行的任务订阅/SSE 连接
+  for (const s of sessions.value) {
+    for (const m of s.messages || []) {
+      if (m._wsUnsub) { try { m._wsUnsub() } catch {} }
+      if (m._es) { try { m._es.close() } catch {} }
+    }
+  }
 })
 
 watch(currentId, () => scrollToBottom(true))
@@ -2220,6 +2265,31 @@ function onFilePick(node) {
   border-radius: 8px;
   border: 1px solid var(--border);
   display: block;
+}
+.chat-input-row textarea {
+  flex: 1;
+  min-height: 68px;
+  max-height: 240px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 22px;
+  resize: none;
+  outline: none;
+  transition: border-color .2s, background .2s;
+  font-family: inherit;
+  box-sizing: border-box;
+  overflow-y: hidden;
+}
+.chat-input-row textarea:focus {
+  border-color: var(--primary);
+  background: var(--bg-card);
+}
+.chat-input-row textarea::placeholder {
+  color: var(--text-muted);
 }
 .chat-input-image-del {
   position: absolute;

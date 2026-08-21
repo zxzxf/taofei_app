@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -620,8 +620,16 @@ class _LogBuffer:
             try:
                 print(f"[{record.time}] [{record.level}] [{record.source}] {record.task_id or '-'} {record.message}", flush=True)
             except Exception:
-                # 控制台编码问题（如 GBK 无法编码 emoji）不能影响任务本身，静默跳过
                 pass
+        try:
+            try:
+                from backend.ws_manager import ws_manager
+            except ImportError:
+                from ws_manager import ws_manager
+            if ws_manager.has_log_subscribers() or (record.task_id and ws_manager.has_log_subscribers(record.task_id)):
+                ws_manager.broadcast_log(record)
+        except Exception:
+            pass
         return record
 
     def query(
@@ -783,6 +791,14 @@ def _notify_task_update(task_id: str) -> None:
         event = _task_events.get(task_id)
         if event is not None:
             event.set()
+    try:
+        try:
+            from backend.ws_manager import ws_manager
+        except ImportError:
+            from ws_manager import ws_manager
+        ws_manager.broadcast_task_update(task_id)
+    except Exception:
+        pass
 
 
 def _read_workspace_context(workspace_path: str | None, max_chars: int = 30000) -> str:
@@ -1993,12 +2009,26 @@ def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
             progress_map[record["id"]] = record
             with _tasks_lock:
                 _tasks[task_id]["node_runs"] = list(progress_map.values())
+            _notify_task_update(task_id)
 
         def get_skill(skill_id: str):
             return next((s for s in _load_skills() if s.get("id") == skill_id), None)
 
+        graph = dict(wf.get("graph", {}))
+        edges = []
+        raw_conns = graph.get("connections") or graph.get("edges") or []
+        for conn in raw_conns:
+            src = conn.get("source") or conn.get("from") or conn.get("sourceNode")
+            tgt = conn.get("target") or conn.get("to") or conn.get("targetNode")
+            if src and tgt:
+                edge = dict(conn)
+                edge["source"] = src
+                edge["target"] = tgt
+                edges.append(edge)
+        graph["edges"] = edges
+
         engine = WorkflowEngine(
-            wf.get("graph", {}),
+            graph,
             llm_call=llm_call, log=wlog, python_bin=sys.executable,
             progress=on_progress, extra_ctx={"get_skill": get_skill},
         )
@@ -2010,12 +2040,14 @@ def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
                 node_runs=result.get("node_runs", []),
                 skipped=result.get("skipped", []),
             )
+        _notify_task_update(task_id)
         log_buffer.emit("INFO", "system", f"工作流「{wf['name']}」执行完成", task_id)
     except Exception as exc:  # noqa: BLE001
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"工作流执行失败：{err_msg}", task_id)
         with _tasks_lock:
             _tasks[task_id].update(status="failed", error=err_msg)
+        _notify_task_update(task_id)
 
 
 @app.post("/api/workflows/{wf_id}/run")
@@ -2104,6 +2136,112 @@ def agent_stream(task_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+@app.websocket("/api/ws")
+async def ws_endpoint(websocket: WebSocket):
+    """WebSocket 统一通道：订阅任务更新、取消任务、心跳等。
+
+    客户端 -> 服务端消息类型：
+      - subscribe        { task_id }         订阅某任务的实时更新
+      - unsubscribe      { task_id }         取消订阅
+      - subscribe_logs   { task_id? }        订阅日志流（不传 task_id 订阅全部）
+      - unsubscribe_logs { task_id? }        取消日志订阅
+      - cancel_task      { task_id }         取消任务
+      - list_tasks       {}                  获取当前运行中任务列表
+      - ping             { ts }              心跳
+    """
+    try:
+        from backend.ws_manager import ws_manager
+    except ImportError:
+        from ws_manager import ws_manager
+
+    await websocket.accept()
+    conn_id = ws_manager.add(websocket)
+    ws_manager.set_tasks_ref(_tasks)
+    try:
+        await websocket.send_json({"type": "connected", "conn_id": conn_id})
+        while True:
+            try:
+                data = await websocket.receive_json()
+            except ValueError:
+                await websocket.send_json({"type": "error", "code": "bad_json", "message": "消息格式错误，应为 JSON"})
+                continue
+
+            msg_type = data.get("type")
+            if msg_type == "subscribe":
+                task_id = data.get("task_id", "")
+                if not task_id:
+                    await websocket.send_json({"type": "error", "code": "bad_request", "message": "缺少 task_id"})
+                    continue
+                ws_manager.subscribe(conn_id, task_id)
+                with _tasks_lock:
+                    task = _tasks.get(task_id)
+                if task is not None:
+                    await websocket.send_json({
+                        "type": "task_update",
+                        "task_id": task_id,
+                        "task": dict(task),
+                    })
+
+            elif msg_type == "unsubscribe":
+                task_id = data.get("task_id", "")
+                if task_id:
+                    ws_manager.unsubscribe(conn_id, task_id)
+
+            elif msg_type == "subscribe_logs":
+                task_id = data.get("task_id")
+                ws_manager.subscribe_logs(conn_id, task_id)
+                recent = list(log_buffer._records)[-20:]
+                for rec in recent:
+                    if task_id and rec.task_id != task_id:
+                        continue
+                    try:
+                        record_dict = rec.model_dump()
+                    except AttributeError:
+                        record_dict = dict(rec)
+                    await websocket.send_json({"type": "log", "record": record_dict})
+
+            elif msg_type == "unsubscribe_logs":
+                task_id = data.get("task_id")
+                ws_manager.unsubscribe_logs(conn_id, task_id)
+
+            elif msg_type == "cancel_task":
+                task_id = data.get("task_id", "")
+                if not task_id:
+                    await websocket.send_json({"type": "error", "code": "bad_request", "message": "缺少 task_id"})
+                    continue
+                with _tasks_lock:
+                    task = _tasks.get(task_id)
+                    if task and task.get("status") in ("queued", "running"):
+                        _task_cancel[task_id] = True
+                        if isinstance(task.get("result"), dict):
+                            task["result"]["status"] = "cancelled"
+                            task["result"]["summary"] = "取消中…"
+                        task["current_step"] = "取消中…"
+                        ok = True
+                    else:
+                        ok = False
+                if ok:
+                    _notify_task_update(task_id)
+                    await websocket.send_json({"type": "cancelled", "task_id": task_id})
+                else:
+                    await websocket.send_json({"type": "error", "code": "not_found", "message": "任务不存在或未在运行"})
+
+            elif msg_type == "list_tasks":
+                tasks = ws_manager.list_running_tasks()
+                await websocket.send_json({"type": "task_list", "tasks": tasks})
+
+            elif msg_type == "ping":
+                await websocket.send_json({"type": "pong", "ts": data.get("ts")})
+
+            else:
+                await websocket.send_json({"type": "error", "code": "unknown_type", "message": f"未知消息类型: {msg_type}"})
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        ws_manager.remove(conn_id)
 
 
 # ---------------------------------------------------------------

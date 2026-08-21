@@ -6,6 +6,7 @@
       <button class="settings-tab" :class="{ active: tab === 'notifications' }" @click="tab = 'notifications'"><span>🔔</span> 通知</button>
       <button class="settings-tab" :class="{ active: tab === 'data' }" @click="tab = 'data'"><span>📦</span> 备份</button>
       <button class="settings-tab" :class="{ active: tab === 'about' }" @click="tab = 'about'"><span>ℹ️</span> 关于</button>
+      <button class="settings-tab" :class="{ active: tab === 'log' }" @click="switchLogTab"><span>📋</span> 日志</button>
     </div>
     <div class="settings-content">
       <div v-show="tab === 'model'" class="settings-panel active">
@@ -247,12 +248,79 @@
           </p>
         </div>
       </div>
+
+      <div v-show="tab === 'log'" class="settings-panel active">
+        <div class="log-viewer">
+          <div class="log-page-header">
+            <div>
+              <div class="log-page-title">系统日志</div>
+              <div class="log-page-subtitle">实时查看平台运行日志</div>
+            </div>
+            <div class="log-header-actions">
+              <span v-if="logLive" class="log-live-badge">● 实时</span>
+              <button class="btn-ghost-sm" @click="loadLogs(1)">刷新</button>
+            </div>
+          </div>
+
+          <div class="log-filter-bar">
+            <select v-model="logFilter.level" @change="loadLogs(1)">
+              <option value="">全部级别</option>
+              <option value="INFO">INFO</option>
+              <option value="WARNING">WARNING</option>
+              <option value="ERROR">ERROR</option>
+            </select>
+            <select v-model="logFilter.source" @change="loadLogs(1)">
+              <option value="">全部来源</option>
+              <option v-for="s in logSources" :key="s" :value="s">{{ s }}</option>
+            </select>
+            <select v-model="logFilter.taskId" @change="loadLogs(1)">
+              <option value="">全部任务</option>
+              <option v-for="t in logTasks" :key="t.id" :value="t.id">{{ (t.topic || t.id).slice(0, 30) }}</option>
+            </select>
+            <input v-model="logFilter.keyword" placeholder="搜索关键词…" @keyup.enter="loadLogs(1)">
+          </div>
+
+          <div class="log-table-wrap">
+            <table class="log-table">
+              <thead>
+                <tr>
+                  <th style="width:170px">时间</th>
+                  <th style="width:80px">级别</th>
+                  <th style="width:110px">来源</th>
+                  <th>消息</th>
+                  <th style="width:180px">任务</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in logList" :key="r.time + r.message" :class="'log-row-' + r.level.toLowerCase()">
+                  <td class="log-time">{{ formatTime(r.time) }}</td>
+                  <td><span class="log-level" :class="r.level.toLowerCase()">{{ r.level }}</span></td>
+                  <td class="log-source">{{ r.source }}</td>
+                  <td class="log-msg">{{ r.message }}</td>
+                  <td class="log-task">{{ r.task_id || '-' }}</td>
+                </tr>
+                <tr v-if="!logList.length && !logLoading">
+                  <td colspan="5" class="log-empty">暂无日志</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="log-pagination">
+            <span class="log-total">共 {{ logTotal }} 条</span>
+            <button class="btn-ghost-sm" :disabled="logPage <= 1" @click="loadLogs(logPage - 1)">上一页</button>
+            <span class="log-page-info">第 {{ logPage }} / {{ logTotalPages }} 页</span>
+            <button class="btn-ghost-sm" :disabled="logPage >= logTotalPages" @click="loadLogs(logPage + 1)">下一页</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, reactive } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, reactive } from 'vue'
+import wsManager from '../utils/wsManager.js'
 
 const tab = ref('model')
 const showKey = ref(false)
@@ -579,4 +647,148 @@ onMounted(async () => {
     try { localStorage.removeItem('model_config') } catch (e) { /* ignore */ }
   }
 })
+
+const logPage = ref(1)
+const logPageSize = 50
+const logTotal = ref(0)
+const logList = ref([])
+const logLoading = ref(false)
+const logLive = ref(true)
+const logFilter = reactive({ level: '', source: '', taskId: '', keyword: '' })
+const logTasks = ref([])
+const logSources = ['system', 'agent', 'workflow', 'model', 'integration']
+let _logWsUnsub = null
+
+const logTotalPages = computed(() => Math.max(1, Math.ceil(logTotal.value / logPageSize)))
+
+function formatTime(iso) {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  } catch { return iso }
+}
+
+async function loadLogs(page) {
+  if (page) logPage.value = page
+  logLoading.value = true
+  try {
+    const params = new URLSearchParams()
+    params.set('limit', String(logPageSize))
+    params.set('offset', String((logPage.value - 1) * logPageSize))
+    if (logFilter.level) params.set('level', logFilter.level)
+    if (logFilter.source) params.set('source', logFilter.source)
+    if (logFilter.taskId) params.set('task_id', logFilter.taskId)
+    if (logFilter.keyword) params.set('keyword', logFilter.keyword)
+    const res = await fetch(`/api/logs?${params.toString()}`)
+    const data = await res.json()
+    logList.value = data.logs || []
+    logTotal.value = data.total || 0
+  } catch (e) {
+    console.error('加载日志失败', e)
+  } finally {
+    logLoading.value = false
+  }
+}
+
+async function loadLogTasks() {
+  try {
+    const res = await fetch('/api/log-tasks')
+    const data = await res.json()
+    logTasks.value = data.tasks || []
+  } catch {}
+}
+
+function handleWsLog(record) {
+  if (!logLive.value) return
+  if (logPage.value > 1) return
+  if (logFilter.level && record.level !== logFilter.level) return
+  if (logFilter.source && record.source !== logFilter.source) return
+  if (logFilter.taskId && record.task_id !== logFilter.taskId) return
+  if (logFilter.keyword && !record.message.toLowerCase().includes(logFilter.keyword.toLowerCase())) return
+  logList.value.unshift(record)
+  if (logList.value.length > logPageSize) logList.value.pop()
+  logTotal.value += 1
+}
+
+function toggleLogLive() {
+  logLive.value = !logLive.value
+  if (logLive.value) {
+    _startWsLog()
+    loadLogs(1)
+  } else {
+    _stopWsLog()
+  }
+}
+
+function _startWsLog() {
+  _stopWsLog()
+  _logWsUnsub = wsManager.subscribeLogs(handleWsLog, logFilter.taskId || undefined)
+}
+
+function _stopWsLog() {
+  if (_logWsUnsub) {
+    _logWsUnsub()
+    _logWsUnsub = null
+  }
+}
+
+function switchLogTab() {
+  tab.value = 'log'
+  loadLogs(1)
+  loadLogTasks()
+  if (logLive.value) _startWsLog()
+}
+
+onUnmounted(() => {
+  _stopWsLog()
+})
 </script>
+
+<style scoped>
+.log-viewer { display: flex; flex-direction: column; gap: 14px; height: calc(100vh - 120px); }
+.log-page-header { display: flex; justify-content: space-between; align-items: flex-start; }
+.log-page-title { font-size: 20px; font-weight: 600; color: var(--text); }
+.log-page-subtitle { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
+.log-header-actions { display: flex; align-items: center; gap: 8px; }
+.log-live-badge { font-size: 11.5px; color: var(--success); font-weight: 600; animation: logPulse 1.5s ease-in-out infinite; }
+@keyframes logPulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+.btn-ghost-sm { padding: 5px 10px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; transition: all .2s; }
+.btn-ghost-sm:hover { border-color: var(--primary); color: var(--primary); }
+.btn-ghost-sm:disabled { opacity: .4; cursor: not-allowed; }
+
+.log-filter-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.log-filter-bar select, .log-filter-bar input {
+  padding: 5px 10px; font-size: 12.5px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+  outline: none; transition: border-color .2s;
+}
+.log-filter-bar select:focus, .log-filter-bar input:focus { border-color: var(--primary); }
+.log-filter-bar input { min-width: 180px; }
+
+.log-table-wrap { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
+.log-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.log-table th {
+  position: sticky; top: 0; background: var(--bg-soft); color: var(--text-secondary);
+  font-weight: 500; text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.log-table td { padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+.log-table tr:last-child td { border-bottom: none; }
+.log-row-warning { background: rgba(245, 158, 11, 0.04); }
+.log-row-error { background: rgba(239, 68, 68, 0.05); }
+.log-time { color: var(--text-secondary); font-family: 'Monaco', 'Menlo', monospace; font-size: 11.5px; white-space: nowrap; }
+.log-level { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10.5px; font-weight: 600; }
+.log-level.info { background: rgba(59, 130, 246, 0.12); color: #60a5fa; }
+.log-level.warning { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+.log-level.error { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.log-source { color: var(--text-secondary); font-size: 12px; }
+.log-msg { color: var(--text); line-height: 1.5; word-break: break-all; }
+.log-task { color: var(--text-muted); font-family: 'Monaco', 'Menlo', monospace; font-size: 11px; }
+.log-empty { text-align: center; padding: 40px 0; color: var(--text-muted); font-size: 13px; }
+
+.log-pagination { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+.log-total { font-size: 12.5px; color: var(--text-secondary); }
+.log-page-info { font-size: 12.5px; color: var(--text-muted); }
+</style>

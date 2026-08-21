@@ -142,7 +142,10 @@
           <button class="btn-mini" @click="exportFlow">📤 导出</button>
           <button class="btn-mini" @click="importFlow">📥 导入</button>
           <input ref="importInput" type="file" accept=".json" style="display:none" @change="onImportFile">
-          <button class="btn-mini run" @click="runFlow">▶ 运行</button>
+          <button class="btn-mini run" @click="runFlow">▶ 调试运行</button>
+          <button class="btn-mini" :class="{ run: true, active: wfRunning }" @click="runFlowBackend" :disabled="wfRunning">
+            {{ wfRunning ? '⏳ 执行中...' : '🚀 后端执行' }}
+          </button>
           <button class="btn-mini debug" @click="stepRun" :disabled="debugState.isStepping && !debugState.stepQueue.length">⏭ 单步</button>
           <button class="btn-mini" @click="testSingleNode" :disabled="!selectedNodeData || selectedNodeData.type==='end'">🔍 测试节点</button>
           <button class="btn-mini" @click="toggleBreakpoint" :disabled="!selectedNodeData">🔴 断点</button>
@@ -534,13 +537,20 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import wsManager from '../utils/wsManager.js'
 
 const section = ref('input')
 const topic = ref('')
 const running = ref(false)
-const result = ref('')
 const error = ref('')
+const result = ref('')
+
+const wfRunning = ref(false)
+const wfTaskId = ref(null)
+const wfNodeRuns = ref([])
+const wfUnsub = ref(null)
+const wfError = ref('')
 const flowName = ref('')
 
 // === 画布状态 ===
@@ -629,6 +639,24 @@ function loadResultList() {
 
 // 执行追踪分页
 const traceTotalPages = computed(() => Math.max(1, Math.ceil(debugState.value.execHistory.length / tracePageSize)))
+
+const nodeStatusMap = computed(() => {
+  const map = {}
+  for (const r of wfNodeRuns.value) {
+    map[r.id] = r.status
+  }
+  return map
+})
+
+watch(wfNodeRuns, (runs) => {
+  for (const n of nodes.value) {
+    const run = runs.find(r => r.id === n.id)
+    if (!run) continue
+    if (run.status === 'running') n._status = 'running'
+    else if (run.status === 'succeeded') n._status = 'done'
+    else if (run.status === 'failed') n._status = 'error'
+  }
+}, { deep: true })
 const pagedTrace = computed(() => {
   const start = (tracePage.value - 1) * tracePageSize
   return debugState.value.execHistory.slice(start, start + tracePageSize)
@@ -1684,6 +1712,189 @@ async function runFlow() {
   saveExecResult()
 }
 
+// === 后端工作流执行（WebSocket 实时推送） ===
+async function runFlowBackend() {
+  const startNode = nodes.value.find(n => n.type === 'start')
+  if (!startNode) { flowResult.value = '请添加开始节点'; return }
+  const endNode = nodes.value.find(n => n.type === 'end')
+  if (!endNode) { flowResult.value = '请添加结束节点'; return }
+  if (!connections.value.length) { flowResult.value = '请添加连线'; return }
+
+  nodes.value.forEach(n => { n._status = ''; n._output = '' })
+  wfNodeRuns.value = []
+  wfError.value = ''
+  tracePage.value = 1
+
+  if (wfUnsub.value) {
+    try { wfUnsub.value() } catch {}
+    wfUnsub.value = null
+  }
+
+  const graph = {
+    nodes: nodes.value.map(n => ({
+      id: n.id,
+      type: n.type,
+      data: buildNodeConfig(n),
+    })),
+    edges: connections.value.map(c => ({ source: c.from, target: c.to })),
+  }
+
+  const wfPayload = {
+    name: flowName.value || '未命名工作流',
+    graph,
+  }
+
+  try {
+    const saveRes = await fetch('/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(wfPayload),
+    })
+    if (!saveRes.ok) {
+      const d = await saveRes.json().catch(() => ({}))
+      throw new Error(d.error || `保存工作流失败 (${saveRes.status})`)
+    }
+    const { id: wfId } = await saveRes.json()
+
+    const startInput = topic.value || ''
+    const runRes = await fetch(`/api/workflows/${wfId}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs: { input: startInput } }),
+    })
+    if (!runRes.ok) {
+      const d = await runRes.json().catch(() => ({}))
+      throw new Error(d.error || `启动工作流失败 (${runRes.status})`)
+    }
+    const { task_id } = await runRes.json()
+    wfTaskId.value = task_id
+    wfRunning.value = true
+    flowResult.value = '⏳ 工作流已提交，等待执行...'
+
+    const handleUpdate = (msg) => {
+      const task = msg.task || {}
+      wfNodeRuns.value = task.node_runs || []
+      if (msg.type === 'task_update') {
+        const runningNode = (task.node_runs || []).find(r => r.status === 'running')
+        if (runningNode) {
+          flowResult.value = `⏳ 执行中: ${runningNode.title || runningNode.id}...`
+        }
+      } else if (msg.type === 'task_done') {
+        wfRunning.value = false
+        if (task.status === 'completed') {
+          const outputs = task.result || {}
+          const outputLines = []
+          for (const [key, val] of Object.entries(outputs)) {
+            const v = typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val)
+            outputLines.push(`【${key}】\n${v}`)
+          }
+          const outputText = outputLines.join('\n\n')
+          flowResult.value = `✅ 工作流执行完成\n共 ${(task.node_runs || []).length} 个节点\n\n--- 输出 ---\n${outputText || '（无输出变量）'}`
+          try { wfUnsub.value?.() } catch {}
+          wfUnsub.value = null
+          saveExecResult()
+        } else if (task.status === 'failed') {
+          flowResult.value = `❌ 执行失败: ${task.error || '未知错误'}`
+          wfError.value = task.error || '执行失败'
+          try { wfUnsub.value?.() } catch {}
+          wfUnsub.value = null
+        } else if (task.status === 'cancelled') {
+          flowResult.value = '⏹️ 已取消'
+          try { wfUnsub.value?.() } catch {}
+          wfUnsub.value = null
+        }
+      }
+    }
+
+    if (wsManager.status === 'connected') {
+      wfUnsub.value = wsManager.subscribe(task_id, handleUpdate)
+    } else {
+      const es = new EventSource(`/api/agent/stream/${task_id}`)
+      es.onmessage = (e) => {
+        try {
+          const task = JSON.parse(e.data)
+          handleUpdate({ type: 'task_update', task })
+        } catch {}
+      }
+      es.addEventListener('done', (e) => {
+        try {
+          const task = JSON.parse(e.data)
+          handleUpdate({ type: 'task_done', task })
+        } catch {}
+        es.close()
+      })
+      es.addEventListener('error', () => { es.close() })
+      wfUnsub.value = () => es.close()
+    }
+  } catch (e) {
+    wfRunning.value = false
+    wfError.value = e.message
+    flowResult.value = `❌ 错误: ${e.message}`
+  }
+}
+
+function buildNodeConfig(node) {
+  const typeMap = {
+    start: {
+      variables: [{ variable: 'input', default: '' }],
+    },
+    llm: {
+      model: 'model',
+      temperature: 'temperature',
+      systemPrompt: 'system_prompt',
+      userPrompt: 'prompt',
+    },
+    http: {
+      method: 'method',
+      url: 'url',
+      headers: 'headers',
+      body: 'body',
+    },
+    code: {
+      code: 'code',
+      language: 'language',
+    },
+    template: {
+      templateText: 'template',
+    },
+    condition: {
+      conditions: 'conditions',
+      trueLabel: 'true_label',
+      falseLabel: 'false_label',
+    },
+    variable: {
+      varName: 'var_name',
+      varValue: 'var_value',
+    },
+    knowledge: {
+      query: 'query',
+      topK: 'top_k',
+    },
+    tool: {
+      toolName: 'skill_id',
+      toolInput: 'input',
+    },
+    end: {
+      outputVar: 'output_var',
+    },
+  }
+  const mapping = typeMap[node.type] || {}
+  const cfg = {}
+  for (const [from, to] of Object.entries(mapping)) {
+    if (node[from] !== undefined) {
+      let val = node[from]
+      if (from === 'headers' && typeof val === 'string') {
+        try { val = JSON.parse(val) } catch { val = {} }
+      }
+      cfg[to] = val
+    }
+  }
+  if (node.type === 'end' && node.outputVar) {
+    cfg.outputs = [{ name: 'output', value: node.outputVar }]
+  }
+  return cfg
+}
+
 // === 逐步执行 ===
 async function stepRun() {
   // 如果未开始逐步执行，初始化
@@ -2054,5 +2265,8 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', onMouseUpGlobal)
   document.removeEventListener('mousemove', onCanvasMouseMove)
   document.removeEventListener('keydown', onKeyDown)
+  if (wfUnsub.value) {
+    try { wfUnsub.value() } catch {}
+  }
 })
 </script>

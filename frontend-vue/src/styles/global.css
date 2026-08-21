@@ -118,6 +118,16 @@ option { background: var(--panel); padding: 6px 8px; }
 .dot.ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
 .dot.bad { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
 
+.ws-status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); white-space: nowrap; cursor: pointer; }
+.ws-dot { width: 6px; height: 6px; border-radius: 50%; background: #475569; transition: all .2s; }
+.ws-dot.connected { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.ws-dot.connecting { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; animation: wsPulse 1.2s ease-in-out infinite; }
+.ws-dot.disconnected { background: #64748b; }
+@keyframes wsPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 /* ===== 主区域 ===== */
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .main-header {
@@ -573,7 +583,12 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .chat-session:hover { background: rgba(59, 130, 246, 0.08); }
 .chat-session.active { background: rgba(59, 130, 246, 0.14); border-left: 3px solid var(--primary); }
 .chat-session-info { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.chat-session-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-session-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+.session-running-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; animation: sessionRunningPulse 1.2s ease-in-out infinite; }
+@keyframes sessionRunningPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
 .chat-session-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-session-delete { width: 26px; height: 26px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 15px; opacity: 0; transition: all .15s; flex-shrink: 0; margin-top: 2px; }
 .chat-session:hover .chat-session-delete { opacity: 1; }
