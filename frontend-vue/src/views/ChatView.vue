@@ -419,6 +419,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue'
 import wsManager from '../utils/wsManager.js'
+import { appConfirm, appAlert, appPrompt } from '../utils/appDialog.js'
 
 const sessions = ref([])
 const currentId = ref(null)
@@ -553,17 +554,27 @@ function confirmSkillSelection() {
   showSkillPicker.value = false
 }
 
-function deleteSession(id) {
-  if (!confirm('确定删除该会话？')) return
+async function deleteSession(id) {
+  // 原生 confirm() 在 Electron 桌面端关闭后窗口系统级焦点无法恢复（输入框打不了字），
+  // 改用应用内自定义对话框，全程页面内交互，不触发系统焦点切换。
+  if (!(await appConfirm('确定删除该会话？'))) return
   sessions.value = sessions.value.filter(s => s.id !== id)
   if (currentId.value === id) currentId.value = sessions.value[0]?.id || null
   saveSessions()
+  // 焦点还给输入框，删除后可继续直接打字
+  nextTick(() => {
+    const el = inputEl.value
+    if (el) {
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    }
+  })
 }
 
-function clearCurrent() {
+async function clearCurrent() {
   const s = currentSession.value
   if (!s) return
-  if (!confirm('确定清空当前会话的消息记录吗？')) return
+  if (!(await appConfirm('确定清空当前会话的消息记录吗？'))) return
   s.messages = [{ role: 'ai', text: '当前会话已清空，请重新输入。', time: Date.now() }]
   saveSessions()
 }
@@ -1409,7 +1420,7 @@ async function pickWorkspace(ws) {
 }
 
 async function removeWorkspace(id) {
-  if (!confirm('确定删除该工作空间？')) return
+  if (!(await appConfirm('确定删除该工作空间？'))) return
   try {
     const res = await fetch(`/api/workspaces/${id}`, { method: 'DELETE' })
     if (res.ok) {
@@ -1478,9 +1489,10 @@ async function createWorkspace() {
 
   // --- 路径 4：prompt 粘贴路径 ---
   if (!path) {
-    const input = prompt(
+    const input = await appPrompt(
       '请粘贴或输入要打开的本地文件夹路径：\n（例如 D:\\projects\\my-app）',
-      'D:\\workspaces\\taofei_plateform\\taofei_app'
+      'D:\\workspaces\\taofei_plateform\\taofei_app',
+      '打开本地目录',
     )
     if (!input) return
     path = input
@@ -1502,7 +1514,7 @@ async function openWorkspaceByPath(path) {
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      alert('打开失败：' + (err.error || '路径无效'))
+      await appAlert('打开失败：' + (err.error || '路径无效'))
       return
     }
     const data = await res.json()
@@ -1515,7 +1527,7 @@ async function openWorkspaceByPath(path) {
       pickWorkspace(data.workspace)
     }
   } catch (e) {
-    alert('打开失败：' + (e.message || String(e)))
+    await appAlert('打开失败：' + (e.message || String(e)))
   }
 }
 
@@ -1539,7 +1551,7 @@ async function onWorkspaceDirSelected(event) {
   }
 
   if (items.length === 0) {
-    alert('未读取到可上传的文件，请重新选择目录。')
+    await appAlert('未读取到可上传的文件，请重新选择目录。')
     return
   }
 
@@ -1551,17 +1563,17 @@ async function onWorkspaceDirSelected(event) {
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      alert('上传目录失败：' + (err.error || '请重试'))
+      await appAlert('上传目录失败：' + (err.error || '请重试'))
       return
     }
     const data = await res.json()
     if (data.path) {
       await openWorkspaceByPath(data.path)
     } else {
-      alert('上传目录失败：后端未返回路径')
+      await appAlert('上传目录失败：后端未返回路径')
     }
   } catch (e) {
-    alert('上传目录失败：' + (e.message || String(e)))
+    await appAlert('上传目录失败：' + (e.message || String(e)))
   } finally {
     // 允许重复选择同一目录
     if (workspaceDirInput.value) workspaceDirInput.value.value = ''

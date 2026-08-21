@@ -64,6 +64,9 @@
   </main>
 
   <div class="toast" :class="{ show: toastVisible }">{{ toastMsg }}</div>
+
+  <!-- 应用内自定义对话框（替代原生 confirm/alert/prompt，规避 Electron 焦点缺陷） -->
+  <AppDialog />
 </template>
 
 <script setup>
@@ -71,6 +74,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useRouter as useAppRouter } from 'vue-router'
 import wsManager from './utils/wsManager.js'
+import AppDialog from './components/AppDialog.vue'
+import { appConfirm, appPrompt } from './utils/appDialog.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -220,9 +225,10 @@ async function openLocalFolder() {
 
   // 2. 浏览器端：File System Access API 拿不到绝对路径，改用输入路径方式
   if (window.showDirectoryPicker) {
-    const typed = prompt(
+    const typed = await appPrompt(
       '浏览器无法获取目录绝对路径，请粘贴或输入本地文件夹路径：\n（例如 D:\\projects\\my-app）',
-      ''
+      '',
+      '打开本地目录',
     )
     if (!typed) return
     const trimmed = typed.trim()
@@ -232,9 +238,10 @@ async function openLocalFolder() {
   }
 
   // 3. 兜底：input directory 选择（只能拿到相对文件列表，无绝对路径）→ 同样走输入路径
-  const typed = prompt(
+  const typed = await appPrompt(
     '请粘贴或输入要打开的本地文件夹路径：\n（例如 D:\\projects\\my-app）',
-    ''
+    '',
+    '打开本地目录',
   )
   if (!typed) return
   const trimmed = typed.trim()
@@ -269,7 +276,7 @@ async function switchWorkspace(id) {
 }
 
 async function deleteWorkspace(id) {
-  if (!confirm('确定删除该工作空间？')) return
+  if (!(await appConfirm('确定删除该工作空间？'))) return
   try {
     const res = await fetch(`/api/workspaces/${id}`, { method: 'DELETE' })
     if (res.ok) {

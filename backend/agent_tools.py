@@ -121,6 +121,170 @@ def list_directory(workspace_path: str | None, path: str = "") -> dict:
         return {"observation": "", "error": f"list_directory 失败：{e}"}
 
 
+def _is_ignored_dir(name: str) -> bool:
+    """判断目录是否应跳过搜索。"""
+    IGNORED_DIRS = {
+        "node_modules", ".git", "build", "dist", "__pycache__",
+        ".venv", "venv", "env", ".next", ".nuxt", ".cache",
+        ".idea", ".vscode", "target", "out", "assets", "static",
+        "public", "coverage", ".output",
+    }
+    return name.lower() in IGNORED_DIRS or name.startswith(".")
+
+
+def _is_code_file(name: str) -> bool:
+    """判断是否为需要搜索的代码/文本文件。"""
+    CODE_EXTS = {
+        ".vue", ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".cpp",
+        ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt",
+        ".css", ".scss", ".less", ".html", ".htm", ".xml", ".json", ".yaml",
+        ".yml", ".md", ".markdown", ".txt", ".sh", ".bash", ".sql",
+    }
+    return any(name.lower().endswith(ext) for ext in CODE_EXTS)
+
+
+def grep_code(
+    workspace_path: str | None,
+    pattern: str,
+    path: str = "",
+    case_sensitive: bool = False,
+    include: str = "",
+) -> dict:
+    """在工作空间内全局搜索关键词（类似 IDE 的全局查找）。
+
+    pattern 为搜索关键词，支持普通字符串匹配。
+    path 可选，用于缩小搜索范围到某个子目录。
+    case_sensitive 控制是否大小写敏感，默认不敏感。
+    include 可选，逗号分隔的文件后缀过滤，如 "*.vue,*.js"。
+    自动跳过 node_modules、.git、build 等大目录。
+    """
+    try:
+        if not workspace_path:
+            return {"observation": "", "error": "没有可用的工作空间，无法搜索"}
+        root = Path(workspace_path).resolve()
+        search_root = (root / path).resolve() if path else root
+        # 确保搜索范围在 workspace 内
+        try:
+            search_root.relative_to(root)
+        except ValueError:
+            return {"observation": "", "error": f"路径越界：{path}"}
+        if not search_root.exists():
+            return {"observation": f"搜索路径不存在：{path or '.'}"}
+
+        if not pattern:
+            return {"observation": "", "error": "搜索关键词不能为空"}
+
+        # 解析 include 过滤
+        include_exts: set[str] = set()
+        if include:
+            for item in include.split(","):
+                item = item.strip().lower()
+                if not item:
+                    continue
+                if item.startswith("*."):
+                    include_exts.add(item[1:])
+                elif item.startswith("."):
+                    include_exts.add(item)
+                else:
+                    include_exts.add("." + item)
+
+        # 准备匹配
+        search_pattern = pattern if case_sensitive else pattern.lower()
+        results: list[tuple[str, int, str]] = []  # (file_path, line_no, line_content)
+        file_count = 0
+        total_matches = 0
+        MAX_MATCHES = 200  # 最多匹配数，防止过多
+
+        # 遍历文件
+        for dirpath, dirnames, filenames in os.walk(search_root):
+            # 过滤掉忽略的目录（原地修改 dirnames，os.walk 就不会进去）
+            dirnames[:] = [d for d in dirnames if not _is_ignored_dir(d)]
+
+            for fname in filenames:
+                if not _is_code_file(fname):
+                    continue
+                if include_exts:
+                    ext_ok = any(fname.lower().endswith(ext) for ext in include_exts)
+                    if not ext_ok:
+                        continue
+
+                full_path = os.path.join(dirpath, fname)
+                # 跳过符号链接和过大的文件
+                try:
+                    if os.path.islink(full_path):
+                        continue
+                    size = os.path.getsize(full_path)
+                    if size > MAX_FILE_SIZE:
+                        continue
+                except OSError:
+                    continue
+
+                try:
+                    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                        lines = f.readlines()
+                except OSError:
+                    continue
+
+                file_matched = False
+                for line_idx, line in enumerate(lines):
+                    line_stripped = line.rstrip("\n").rstrip("\r")
+                    haystack = line_stripped if case_sensitive else line_stripped.lower()
+                    if search_pattern in haystack:
+                        # 计算相对路径
+                        rel_path = os.path.relpath(full_path, root)
+                        results.append((rel_path, line_idx + 1, line_stripped.strip()))
+                        total_matches += 1
+                        file_matched = True
+                        if total_matches >= MAX_MATCHES:
+                            break
+                if file_matched:
+                    file_count += 1
+                if total_matches >= MAX_MATCHES:
+                    break
+            if total_matches >= MAX_MATCHES:
+                break
+
+        # 按文件分组输出
+        if not results:
+            scope = path or "整个工作空间"
+            return {"observation": f"未找到匹配「{pattern}」的内容（搜索范围：{scope}）"}
+
+        # 聚合：按文件分组
+        from collections import defaultdict
+        by_file: dict[str, list[tuple[int, str]]] = defaultdict(list)
+        for fpath, lno, lcontent in results:
+            by_file[fpath].append((lno, lcontent))
+
+        lines_out = []
+        scope_note = f"（搜索范围：{path}）" if path else ""
+        header = f"--- 搜索结果：「{pattern}」{scope_note}共 {file_count} 个文件，{total_matches} 处匹配 ---"
+        lines_out.append(header)
+
+        MAX_PER_FILE = 10  # 每文件最多显示匹配行数
+        shown_files = 0
+        for fpath in sorted(by_file.keys()):
+            matches = by_file[fpath]
+            lines_out.append("")
+            lines_out.append(f"📄 {fpath}")
+            shown_files += 1
+            for lno, lcontent in matches[:MAX_PER_FILE]:
+                # 截断过长的行
+                display = lcontent[:200] if len(lcontent) > 200 else lcontent
+                lines_out.append(f"  {lno}: {display}")
+            if len(matches) > MAX_PER_FILE:
+                lines_out.append(f"  ... 还有 {len(matches) - MAX_PER_FILE} 处匹配")
+
+        truncated_note = ""
+        if total_matches >= MAX_MATCHES:
+            truncated_note = f"\n\n⚠️ 结果已达上限（{MAX_MATCHES} 处），可能还有更多匹配。请缩小搜索范围或使用更精确的关键词。"
+
+        output = "\n".join(lines_out) + truncated_note
+        return {"observation": _short(output, MAX_OUTPUT_LEN)}
+
+    except Exception as e:
+        return {"observation": "", "error": f"grep_code 失败：{e}"}
+
+
 def _is_usable_python(path: str) -> bool:
     """真实执行一次验证解释器可用，排除不可用的候选。
 
@@ -342,6 +506,20 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "grep_code",
+        "description": "在工作空间内全局搜索关键词（类似 IDE 全局查找），一步找到包含关键词的文件和行号。自动跳过 node_modules、.git、build 等大目录。搜索代码、配置、按钮文字等都优先用这个工具，比逐个 list_directory + read_file 快很多。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "要搜索的关键词"},
+                "path": {"type": "string", "description": "可选，缩小搜索范围到某个子目录"},
+                "case_sensitive": {"type": "boolean", "description": "是否大小写敏感，默认 false"},
+                "include": {"type": "string", "description": "可选，逗号分隔的文件后缀过滤，如 *.vue,*.js"},
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
         "name": "write_file",
         "description": "在工作空间内写入或覆盖文件。参数 path 为相对路径，content 为文件内容。",
         "parameters": {
@@ -426,6 +604,14 @@ def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list
     """根据工具名分发执行。skills 提供动态注册的 HTTP 技能（call_skill_<id>）。"""
     if name == "read_file":
         return read_file(workspace_path, args.get("path", ""))
+    if name == "grep_code":
+        return grep_code(
+            workspace_path,
+            args.get("pattern", ""),
+            path=args.get("path", ""),
+            case_sensitive=bool(args.get("case_sensitive", False)),
+            include=args.get("include", ""),
+        )
     if name == "write_file":
         return write_file(workspace_path, args.get("path", ""), args.get("content", ""))
     if name == "list_directory":

@@ -321,6 +321,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, reactive } from 'vue'
 import wsManager from '../utils/wsManager.js'
+import { appConfirm, appAlert } from '../utils/appDialog.js'
 
 const tab = ref('model')
 const showKey = ref(false)
@@ -565,7 +566,7 @@ async function deletePreset(p) {
     showSaveTip('err', '正在使用的配置不能删除，请先切换到其他配置')
     return
   }
-  if (!confirm(`确定删除配置「${p.name}」？`)) return
+  if (!(await appConfirm(`确定删除配置「${p.name}」？`))) return
   loadingId.value = p.id
   try {
     const res = await fetch(`/api/model-presets/${p.id}`, { method: 'DELETE' })
@@ -611,15 +612,15 @@ async function testConnection() {
   }
 }
 
-function clearChat() {
-  if (!confirm('确定清空所有对话记录？')) return
+async function clearChat() {
+  if (!(await appConfirm('确定清空所有对话记录？'))) return
   localStorage.removeItem('chatSessions')
-  alert('已清空')
+  await appAlert('已清空')
 }
 
-function clearTask() {
-  if (!confirm('确定清空所有任务记录？')) return
-  alert('已清空')
+async function clearTask() {
+  if (!(await appConfirm('确定清空所有任务记录？'))) return
+  await appAlert('已清空')
 }
 
 onMounted(async () => {

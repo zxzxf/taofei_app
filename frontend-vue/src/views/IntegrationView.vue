@@ -256,6 +256,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { appAlert } from '../utils/appDialog.js'
 
 const section = ref('weather')
 const city = ref('')
@@ -425,7 +426,7 @@ async function queryWeather() {
     const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=zh`)
     const geoData = await geoRes.json()
     if (!geoData.results || !geoData.results.length) {
-      alert('未找到城市：' + cityName)
+      appAlert('未找到城市：' + cityName)
       return
     }
     const loc = geoData.results[0]
@@ -443,7 +444,7 @@ async function queryWeather() {
       city: loc.name + (loc.admin1 ? ' · ' + loc.admin1 : '')
     }
   } catch (e) {
-    alert('查询失败：' + e.message)
+    appAlert('查询失败：' + e.message)
   }
 }
 

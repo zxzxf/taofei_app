@@ -539,6 +539,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import wsManager from '../utils/wsManager.js'
+import { appConfirm, appAlert } from '../utils/appDialog.js'
 
 const section = ref('input')
 const topic = ref('')
@@ -1137,8 +1138,8 @@ function onImportFile(e) {
 // === 节点操作 ===
 let nodeCounter = 0
 function addNode(pt) {
-  if (pt.type === 'start' && nodes.value.some(n => n.type === 'start')) { alert('已存在开始节点'); return }
-  if (pt.type === 'end' && nodes.value.some(n => n.type === 'end')) { alert('已存在结束节点'); return }
+  if (pt.type === 'start' && nodes.value.some(n => n.type === 'start')) { appAlert('已存在开始节点'); return }
+  if (pt.type === 'end' && nodes.value.some(n => n.type === 'end')) { appAlert('已存在结束节点'); return }
   const id = pt.type + '-' + (++nodeCounter)
   const count = nodes.value.length
   const node = {
@@ -1447,8 +1448,8 @@ function loadFlow() {
   }
 }
 
-function clearFlow() {
-  if (!confirm('确定清空画布？')) return
+async function clearFlow() {
+  if (!(await appConfirm('确定清空画布？'))) return
   clearFlowSilent()
 }
 
@@ -1593,15 +1594,17 @@ function editSavedFlow(name) {
 function deleteSavedFlow(name) {
   // 内置模板不可删除
   if (builtinFlows.some(t => t.name === name)) {
-    alert('内置模板不可删除')
+    appAlert('内置模板不可删除')
     return
   }
-  if (!confirm(`确定删除任务「${name}」？`)) return
-  localStorage.removeItem('flow_' + name)
-  if (localStorage.getItem('flow_last') === name) {
-    localStorage.removeItem('flow_last')
-  }
-  refreshSavedFlows()
+  appConfirm(`确定删除任务「${name}」？`).then(ok => {
+    if (!ok) return
+    localStorage.removeItem('flow_' + name)
+    if (localStorage.getItem('flow_last') === name) {
+      localStorage.removeItem('flow_last')
+    }
+    refreshSavedFlows()
+  })
 }
 
 // === 键盘删除 ===
