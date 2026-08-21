@@ -46,8 +46,12 @@ def _short(text: Any, n: int = MAX_OUTPUT_LEN) -> str:
 # ------------------------------------------------------------------
 # 工具实现
 # ------------------------------------------------------------------
-def read_file(workspace_path: str | None, path: str) -> dict:
-    """读取工作空间内指定文本文件的内容。"""
+def read_file(workspace_path: str | None, path: str, offset: int = 1, limit: int = 100) -> dict:
+    """读取工作空间内指定文本文件的内容，支持按行分页。
+
+    offset 为起始行号（从 1 开始），limit 为最多返回行数。
+    大文件请配合 offset 分页查看后半部分，例如 offset=500 读取第 500 行起的内容。
+    """
     try:
         target = _safe_path(workspace_path, path)
         if not target.exists():
@@ -58,7 +62,20 @@ def read_file(workspace_path: str | None, path: str) -> dict:
         if size > MAX_FILE_SIZE:
             return {"observation": f"文件过大（{size} bytes），只返回路径：{path}"}
         content = target.read_text(encoding="utf-8", errors="ignore")
-        return {"observation": f"--- 文件 {path} ---\n" + _short(content)}
+        lines = content.splitlines()
+        total = len(lines)
+        start = max(1, int(offset))
+        max_lines = min(500, max(0, int(limit)))
+        if start > total:
+            return {"observation": f"文件 {path} 共 {total} 行，起始行 {offset} 超出范围"}
+        stop = min(total, start + max_lines - 1) if max_lines > 0 else total
+        chunk = lines[start - 1 : stop]
+        numbered = [f"{start + i}: {ln[:200]}" for i, ln in enumerate(chunk)]
+        note = ""
+        if stop < total:
+            note = f"\n... 还有 {total - stop} 行未显示，可传 offset={stop + 1} 继续读取"
+        header = f"--- 文件 {path}（第 {start}-{stop} 行 / 共 {total} 行）---"
+        return {"observation": header + "\n" + "\n".join(numbered) + note}
     except Exception as e:
         return {"observation": "", "error": f"read_file 失败：{e}"}
 
@@ -104,6 +121,31 @@ def list_directory(workspace_path: str | None, path: str = "") -> dict:
         return {"observation": "", "error": f"list_directory 失败：{e}"}
 
 
+def _is_usable_python(path: str) -> bool:
+    """真实执行一次验证解释器可用，排除不可用的候选。
+
+    重点排除 Microsoft Store 的「应用执行别名」（%LOCALAPPDATA%\\Microsoft\\WindowsApps\\
+    python.exe）：该类别名在本机未安装 Store 版 Python 时存在但无法执行，
+    subprocess 运行会返回 9009（命令未找到），导致 Agent 报
+    「代码执行返回非零退出码 9009」。
+    """
+    try:
+        if os.path.isdir(path):
+            return False
+        norm = os.path.normpath(path).lower()
+        if "windowsapps" in norm.split(os.sep):
+            return False
+        proc = subprocess.run(
+            [path, "-c", "import sys"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def _resolve_python_exe() -> str | None:
     """返回可用于执行代码的 Python 解释器路径。
 
@@ -114,7 +156,27 @@ def _resolve_python_exe() -> str | None:
     """
     if not getattr(sys, "frozen", False):
         return sys.executable
-    return shutil.which("python") or shutil.which("python3") or shutil.which("py")
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for name in ("python.exe", "python3.exe", "python", "python3", "py"):
+        p = shutil.which(name)
+        if p and p not in seen:
+            seen.add(p)
+            candidates.append(p)
+    # which 只返回 PATH 中的第一个匹配；手动遍历 PATH，避免第一个命中
+    # WindowsApps 别名后漏掉后面真实的 python。
+    for name in ("python.exe", "python3.exe"):
+        for dir_ in os.environ.get("PATH", "").split(os.pathsep):
+            if not dir_:
+                continue
+            p = os.path.join(dir_, name)
+            if p not in seen:
+                seen.add(p)
+                candidates.append(p)
+    for cand in candidates:
+        if _is_usable_python(cand):
+            return cand
+    return None
 
 
 def run_python_code(workspace_path: str | None, code: str) -> dict:
@@ -268,11 +330,13 @@ def call_skill(skill: dict, args: dict) -> dict:
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "read_file",
-        "description": "读取工作空间内指定文本文件的内容。参数 path 为相对路径。",
+        "description": "读取工作空间内指定文本文件的内容，支持按行分页。offset 为起始行号（从 1 开始，默认 1），limit 为最多返回行数（默认 100，最大 500）。文件较大时请用 offset 分页读取后半部分，例如 offset=500 读取第 500 行起的内容。",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "相对于工作空间的文件路径"},
+                "offset": {"type": "integer", "description": "起始行号，从 1 开始，默认 1"},
+                "limit": {"type": "integer", "description": "最多返回行数，默认 100，最大 500"},
             },
             "required": ["path"],
         },
@@ -322,17 +386,6 @@ TOOLS: list[dict[str, Any]] = [
                 "body": {"type": "string"},
             },
             "required": ["url"],
-        },
-    },
-    {
-        "name": "ask_llm",
-        "description": "当你需要模型帮你做总结、改写、分析等纯文本子任务时使用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "给模型的子任务提示词"},
-            },
-            "required": ["prompt"],
         },
     },
 ]

@@ -59,12 +59,13 @@ Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结
 3. 不要写 Observation，Observation 由系统在工具执行后自动填入。
 4. 禁止使用 <tool_call>、<think>、<tool_response> 等 XML 标签，只输出纯文本 ReAct 格式。
 5. 不要输出 ``` 代码块包裹 JSON。
-6. 如果用户请求涉及项目文件，优先使用 list_directory 和 read_file 查看文件，但不要反复查看同一目录。
-7. 如需创建或修改文件，使用 write_file，修改后必须输出 Final Answer 报告完成情况。
-8. 如需计算或运行脚本，使用 run_python_code。
-9. 如果需要模型帮你总结、改写、分析，使用 ask_llm。
-10. 功能开发/代码修改类任务：完成文件修改并验证思路正确后，立即输出 Final Answer，不要继续探索。
-11. 禁止启动后端服务或桌面应用（python backend/main.py、CrewAIWorkbench.exe、TaofeiAI.exe 等），禁止打开浏览器（webbrowser、os.startfile、start 命令）。验证接口请用 http_request 访问已在运行的服务即可。
+6. 用户指令优先级最高。若用户要求与其他规则或工具使用习惯冲突，以用户要求为准；用户明确说"禁止/不要/不得"的操作，一律不执行，不要反向理解。
+7. 除非用户明确要求修改或创建文件，否则任务默认为只读：查询、验证、总结、排查类请求禁止使用 write_file，禁止改动任何文件。
+8. 如果用户请求涉及项目文件，优先使用 list_directory 和 read_file 查看文件（read_file 支持 offset/limit 分页，可读取大文件的任意区段），但不要反复查看同一目录。
+9. 读取文件必须使用 read_file 工具，不得用 run_python_code 替代读文件；run_python_code 仅用于计算、数据处理或运行脚本。
+10. 如需创建或修改文件，使用 write_file，修改后必须输出 Final Answer 报告完成情况。
+11. 功能开发/代码修改类任务：完成文件修改并验证思路正确后，立即输出 Final Answer，不要继续探索。
+12. 禁止启动后端服务或桌面应用（python backend/main.py、CrewAIWorkbench.exe、TaofeiAI.exe 等），禁止打开浏览器（webbrowser、os.startfile、start 命令）。验证接口请用 http_request 访问已在运行的服务即可。
 """
 
 
@@ -94,11 +95,23 @@ def _build_skill_prompts(skills: list[dict]) -> str:
 
 
 def _sanitize_model_output(text: str) -> str:
-    """去除 Qwen 等模型可能输出的 <tool_call>/<think> 等 XML 包装标签。"""
-    # 移除成对的 XML 标签但保留标签内文本
+    """去除模型可能输出的 <tool_call>/<think>/<thinking> 等 XML 包装标签。
+    对思考类标签（<think>/<thinking>），直接移除标签及其内容，避免内部思考泄露到用户界面。
+    """
+    # 1) 先移除整个思考块（包括标签和内容）——豆包 reasoning 模型常用 <thinking>
+    text = re.sub(r"<thinking[>\s].*?</thinking>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # 兼容单标签或不成对的开始标签
+    text = re.sub(r"<thinking[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</thinking\s*>", "", text, flags=re.IGNORECASE)
+    # 兼容 <think> 标签（Qwen/其他模型）
+    text = re.sub(r"<think[>\s].*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<think[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</think\s*>", "", text, flags=re.IGNORECASE)
+    # 2) 移除 tool_call/tool_response 包装标签（保留内容）
     text = re.sub(r"</?tool_call>\s*", "", text)
     text = re.sub(r"</?tool_response>\s*", "", text)
-    text = re.sub(r"</?think>\s*", "", text)
+    # 3) 去掉可能残留的 "♪" 等豆包思考链标记字符
+    text = re.sub(r"^[♪\s]+", "", text)
     return text.strip()
 
 
@@ -227,6 +240,19 @@ def _extract_final_answer(text: str) -> str:
     text = _sanitize_model_output(text)
     match = re.search(r"Final Answer:\s*(.*)", text, re.DOTALL)
     return match.group(1).strip() if match else text.strip()
+
+
+def _extract_thought(text: str) -> str:
+    """从模型输出中提取 Thought 内容（去掉前缀和 Action 之后的部分），用于前端展示。"""
+    text = _sanitize_model_output(text)
+    # 匹配 Thought: ... 到 Action:/Final Answer: 之前
+    match = re.search(r"Thought:\s*(.*?)(?=\n\s*(?:Action:|Final Answer:|Action Input:))", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        thought = match.group(1).strip()
+        if thought:
+            return thought
+    # 如果没有标准格式，返回原文前 200 字
+    return text.strip()[:300]
 
 
 def _build_partial_report(steps: list[dict], user_request: str, status: str = "running") -> dict:
@@ -428,7 +454,7 @@ def run_agent_task(
                 "id": f"step-{step_idx + 1}",
                 "name": f"思考第 {step_idx + 1} 步",
                 "status": "done",
-                "output": reply,
+                "output": _extract_thought(reply),
                 "time": time.strftime("%H:%M:%S"),
             })
 
