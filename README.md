@@ -115,13 +115,13 @@ npm start        # 自动调 .venv 的 Python 启动后端，弹原生窗口
 # 双击 desktop\build-desktop.bat，或命令行：
 cd desktop && build-desktop.bat
 # 参数: /b = 只构建前端+后端  /e = 只打包 Electron  /u = 覆盖到 D:\TaofeiAI
-# 产物：desktop\release_v3\TaofeiAI Setup 1.2.1.exe
+# 产物：desktop\release_v4\TaofeiAI Setup 1.2.1.exe
 ```
 
 脚本内部流程（4 步）：
 1. **[0/4]** 在 `frontend-vue/` 执行 `npm install` + `npm run build` → 输出到项目根 `frontend/`
 2. **[1/4]** PyInstaller 收集 `backend/` + `frontend/` → `dist/CrewAIWorkbench_v3/CrewAIWorkbench/`
-3. **[2/4]** electron-builder 组装 Electron + extraResources（后端 exe 与 `.env`）→ `desktop/release_v3/`
+3. **[2/4]** electron-builder 组装 Electron + extraResources（后端 exe 与 `.env`）-> `desktop/release_v4/`
 4. **[3/4]** （双击运行或带 `/u`）复制 `win-unpacked` 到 `D:\TaofeiAI` 做免安装覆盖更新
 
 安装包为 **per-user 安装**（装到 `%LocalAppData%\Programs`，无需管理员权限），后端 exe 与 `.env` 打包在 `resources\backend\` 下。`.env` 会一起打包进安装包，安装后开箱即用。

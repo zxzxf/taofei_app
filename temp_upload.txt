@@ -1,0 +1,260 @@
+
+@app.get("/api/workspaces")
+def list_workspaces():
+    """列出所有工作空间与当前选中项。"""
+    data = _load_workspaces()
+    return {
+        "current_id": data.get("current_id"),
+        "workspaces": data.get("workspaces", []),
+    }
+
+
+@app.post("/api/workspaces")
+def create_workspace(req: WorkspaceCreateRequest):
+    """创建并切换到一个新工作空间。若同路径已存在则直接切换到已有项。"""
+    name = req.name.strip()
+    path = req.path.strip()
+    if not name:
+        return JSONResponse({"error": "工作空间名称不能为空"}, status_code=400)
+    if not path:
+        return JSONResponse({"error": "工作空间路径不能为空"}, status_code=400)
+    try:
+        normalized = _normalize_workspace_path(path)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    data = _load_workspaces()
+
+    # 去重：同路径已存在则直接切换到已有工作空间
+    existing = next((ws for ws in data.get("workspaces", []) if ws.get("path") == normalized), None)
+    if existing:
+        data["current_id"] = existing["id"]
+        _save_workspaces(data)
+        log_buffer.emit("INFO", "system", f"切换到已有工作空间：{existing.get('name')} → {normalized}")
+        return {"workspace": existing, "current_id": existing["id"], "existed": True}
+
+    ws_id = uuid.uuid4().hex[:12]
+    workspace = {
+        "id": ws_id,
+        "name": name,
+        "path": normalized,
+        "created_at": datetime.now(timezone.utc).astimezone().isoformat(),
+    }
+    data["workspaces"].append(workspace)
+    data["current_id"] = ws_id
+    _save_workspaces(data)
+    log_buffer.emit("INFO", "system", f"创建工作空间：{name} → {normalized}")
+    return {"workspace": workspace, "current_id": ws_id}
+
+
+@app.get("/api/workspaces/{workspace_id}")
+def get_workspace(workspace_id: str):
+    data = _load_workspaces()
+    for ws in data.get("workspaces", []):
+        if ws.get("id") == workspace_id:
+            return ws
+    return JSONResponse({"error": "工作空间不存在"}, status_code=404)
+
+
+@app.delete("/api/workspaces/{workspace_id}")
+def delete_workspace(workspace_id: str):
+    data = _load_workspaces()
+    before = len(data.get("workspaces", []))
+    data["workspaces"] = [ws for ws in data.get("workspaces", []) if ws.get("id") != workspace_id]
+    if len(data["workspaces"]) == before:
+        return JSONResponse({"error": "工作空间不存在"}, status_code=404)
+    if data.get("current_id") == workspace_id:
+        data["current_id"] = data["workspaces"][0]["id"] if data["workspaces"] else None
+    _save_workspaces(data)
+    log_buffer.emit("INFO", "system", f"删除工作空间：{workspace_id}")
+    return {"ok": True, "current_id": data.get("current_id")}
+
+
+@app.post("/api/workspaces/{workspace_id}/switch")
+def switch_workspace(workspace_id: str):
+    data = _load_workspaces()
+    exists = any(ws.get("id") == workspace_id for ws in data.get("workspaces", []))
+    if not exists:
+        return JSONResponse({"error": "工作空间不存在"}, status_code=404)
+    data["current_id"] = workspace_id
+    _save_workspaces(data)
+    ws = next((w for w in data["workspaces"] if w["id"] == workspace_id), {})
+    log_buffer.emit("INFO", "system", f"切换工作空间：{ws.get('name')} → {ws.get('path')}")
+    return {"current_id": workspace_id, "workspace": ws}
+
+
+@app.get("/api/workspaces/{workspace_id}/files")
+def list_workspace_files_api(workspace_id: str, max_depth: int = Query(4, ge=1, le=10), max_files: int = Query(2000, ge=1, le=20000)):
+    data = _load_workspaces()
+    ws = next((w for w in data.get("workspaces", []) if w.get("id") == workspace_id), None)
+    if not ws:
+        return JSONResponse({"error": "工作空间不存在"}, status_code=404)
+    path = ws.get("path")
+    if not path or not Path(path).exists():
+        return JSONResponse({"error": "工作空间目录不存在"}, status_code=400)
+    try:
+        files = _list_workspace_files(path, max_depth=max_depth, max_files=max_files)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"读取目录失败：{exc}"}, status_code=500)
+    return {"files": files}
+
+
+def _can_show_gui_on_windows() -> bool:
+    """判断当前进程运行的 Windows 会话是否允许显示可见的 GUI 对话框。
+
+    返回 True 的条件：Windows 平台 + 运行在非 Session 0（Session 0 为服务/沙箱会话，
+    UI 仅能在「交互会话」显示，通常 SessionId >= 1）。
+    Linux/macOS 下默认返回 False，避免弹出无窗口。
+    """
+    if platform.system() != "Windows":
+        return False
+    try:
+        import ctypes
+        # ProcessIdToSessionId: kernel32 原生 API，WinXP+ 均可用
+        session_id = ctypes.c_ulong(0)
+        ok = ctypes.windll.kernel32.ProcessIdToSessionId(
+            ctypes.c_ulong(os.getpid()),
+            ctypes.byref(session_id),
+        )
+        if not ok:
+            # 取不到时保守认为不能显示，退回 prompt 粘贴路径
+            return False
+        return session_id.value > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@app.get("/api/browse-directory")
+def browse_directory():
+    """弹出系统目录选择对话框，返回用户选择的目录路径。
+
+    - Windows + 交互桌面会话：用 PowerShell 调 OpenFileDialog（ValidateNames=False hack）
+      实现现代 Windows 资源管理器风格的文件夹选择对话框。
+      通过 TopMost 属主窗体置顶（否则弹窗会落到其它窗口后面），并声明 DPI 感知
+      （否则高分屏缩放下对话框会被系统位图拉伸放大）
+    - 其它环境：返回 ``{ unsupported: true }``，前端会退回"粘贴路径"方式，避免
+      请求阻塞在 UI 无法显示的环境里。
+    - 接口会阻塞等待用户在弹窗完成选择；取消 / 超时返回 ``{ canceled: true }``
+    """
+    if not _can_show_gui_on_windows():
+        return {"unsupported": True, "canceled": False, "path": ""}
+    try:
+        import shutil
+        ps_exe = shutil.which("powershell.exe") or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        if not os.path.isfile(ps_exe):
+            return {"unsupported": True, "canceled": False, "path": "", "reason": "powershell.exe not found"}
+
+        # 开发模式 BASE_DIR=项目根，脚本在 backend/ 下；打包模式 BASE_DIR=_MEIPASS，
+        # 脚本由 spec 打包到 _MEIPASS/backend/ 下，两种模式路径一致。
+        script_path = BASE_DIR / "backend" / "browse_directory.ps1"
+        if not script_path.exists():
+            return {"unsupported": True, "canceled": False, "path": "", "reason": "browse_directory.ps1 not found"}
+
+        result = subprocess.run(
+            [ps_exe, "-Sta", "-WindowStyle", "Hidden", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            encoding="utf-8",
+            check=False,
+        )
+        path = (result.stdout or "").strip()
+        if not path or path == "Folder Selection.":
+            return {"unsupported": False, "canceled": True, "path": ""}
+        normalized = _normalize_workspace_path(path)
+        return {"unsupported": False, "canceled": False, "path": normalized}
+    except subprocess.TimeoutExpired:
+        return {"unsupported": False, "canceled": True, "path": ""}
+    except Exception as exc:  # noqa: BLE001
+        # 任何异常都按"不支持原生对话框"返回，让前端走粘贴路径兜底，不向前端抛 500
+        return {"unsupported": True, "canceled": False, "path": "", "reason": str(exc)}
+
+
+class WorkspaceFileItem(BaseModel):
+    path: str
+    content: str
+
+
+class WorkspaceUploadRequest(BaseModel):
+    files: list[WorkspaceFileItem]
+    directory_name: str = ""
+
+
+@app.post("/api/workspaces/upload")
+def upload_workspace_files(req: WorkspaceUploadRequest):
+    """接收前端上传的目录文件，保存到临时目录，返回绝对路径供创建工作空间使用。"""
+    files = req.files or []
+    if not files:
+        return JSONResponse({"error": "没有可上传的文件"}, status_code=400)
+
+    try:
+        # 开发模式放在项目根目录下的 temp_workspaces；打包模式放在 exe 同目录
+        temp_root = EXE_DIR / "temp_workspaces"
+        temp_root.mkdir(exist_ok=True)
+        # 按 directory_name + uuid 创建子目录，避免冲突
+        slug = re.sub(r"[^\w\-]", "_", req.directory_name.strip() or "workspace")[:32]
+        temp_dir = temp_root / f"{slug}_{uuid.uuid4().hex[:8]}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        written = 0
+        for item in files:
+            rel = item.path.strip().lstrip("/\\")
+            if not rel or ".." in Path(rel).parts:
+                continue
+            target = (temp_dir / rel).resolve()
+            if not str(target).startswith(str(temp_dir.resolve())):
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "w", encoding="utf-8") as fp:
+                fp.write(item.content)
+            written += 1
+
+        log_buffer.emit("INFO", "system", f"上传工作空间文件到临时目录：{temp_dir}（{written} 个文件）")
+        return {"path": _normalize_workspace_path(str(temp_dir)), "file_count": written}
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"上传文件失败：{exc}"}, status_code=500)
+
+
+# ---------------------------------------------------------------
+# 静态页面（前端）
+# ---------------------------------------------------------------
+FRONTEND_DIR = BASE_DIR / "frontend"
+
+# Vue3 前端使用相对路径 (./assets/...)，将 frontend 目录挂载到根路径
+# 构建产物的静态资源目录
+app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
+
+# SPA history 路由回退：/chat 等前端路由直达时返回 index.html
+# 注意：Starlette StaticFiles(html=True) 只支持目录级回退（/ → index.html），
+# 不支持 /chat 这类无扩展名路径回退，因此这里用 catch-all 路由实现。
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    # API 未匹配的路径保持原有 404 JSON，不误回退到 index.html
+    if full_path.startswith("api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    # 请求真实存在的静态文件（如 favicon.png）时直接返回文件
+    file_path = FRONTEND_DIR / full_path
+    if full_path and file_path.is_file():
+        return FileResponse(file_path)
+    # 其余路径一律回退到前端入口，由 Vue Router 接管
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+
+# ---------------------------------------------------------------
+# 启动入口
+# ---------------------------------------------------------------
+def main():
+    import socket
+    import webbrowser
+
+    # Windows 下 stdout/stderr 默认 GBK，打印含 emoji 的日志（如 📁）会抛
+    # UnicodeEncodeError 导致 Agent 任务失败。强制改为 UTF-8 + errors=replace 根治。
+    for stream_name in ("stdout", "stderr"):
+        try:
+            stream = getattr(sys, stream_name)
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    # --no-browser: Electron 模式下不自动打开浏览器

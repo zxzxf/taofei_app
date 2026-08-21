@@ -1,0 +1,140 @@
+=== knowledge ===
+=== 知识库 ===
+=== rag ===
+=== 向量 ===
+=== upload ===
+2703|@app.post("/api/workspaces/upload")
+2704|def upload_workspace_files(req: WorkspaceUploadRequest):
+=== embedding ===
+=== document ===
+=== workspace ===
+76|WORKSPACES_FILE = EXE_DIR / "workspaces.json"
+171|#   开发模式: 项目根目录/workspaces.json
+172|#   打包模式: exe 同目录/workspaces.json
+177|def _load_workspaces() -> dict:
+179|default = {"current_id": None, "workspaces": []}
+185|if isinstance(data.get("workspaces"), list):
+188|for ws in data["workspaces"]:
+197|default["workspaces"] = deduped
+199|if len(deduped) != len(data["workspaces"]):
+200|data["workspaces"] = deduped
+204|_save_workspaces(data)
+213|def _save_workspaces(data: dict) -> None:
+222|def _normalize_workspace_path(path: str) -> str:
+232|def _list_workspace_files(path: str, max_depth: int = 3, max_files: int = 2000) -> list[dict]:
+290|def _get_current_workspace() -> dict | None:
+292|data = _load_workspaces()
+294|for ws in data.get("workspaces", []):
+298|if data.get("workspaces"):
+299|first = data["workspaces"][0]
+301|_save_workspaces(data)
+781|def _read_workspace_context(workspace_path: str | None, max_chars: int = 30000) -> str:
+783|if not workspace_path:
+785|root = Path(workspace_path).resolve()
+826|def _build_crew(topic: str, workspace_path: str | None = None) -> Crew:
+833|context = _read_workspace_context(workspace_path)
+866|def _workspace_path_by_id(workspace_id: str | None) -> str | None:
+867|"""根据 workspace_id 获取路径。"""
+868|if not workspace_id:
+870|data = _load_workspaces()
+871|for ws in data.get("workspaces", []):
+872|if ws.get("id") == workspace_id:
+877|def _run_crew_async(task_id: str, topic: str, workspace_id: str | None = None):
+880|ws_path = _workspace_path_by_id(workspace_id)
+887|crew, context = _build_crew(topic, workspace_path=ws_path)
+910|workspace_id: str = ""
+923|workspace_id: str | None = None  # 当前工作空间 ID，用于注入上下文
+929|workspace_id: str | None = None
+938|workspace_id: str | None = None  # 工作空间 ID，为空则使用 taofei_app 自身目录
+945|current_ws = _get_current_workspace()
+951|"workspace": {
+1299|workspace_id = (req.workspace_id or "").strip()
+1301|if not workspace_id:
+1302|current_ws = _get_current_workspace()
+1303|workspace_id = current_ws.get("id") if current_ws else ""
+1310|"workspace_id": workspace_id,
+1315|thread = threading.Thread(target=_run_crew_async, args=(task_id, topic, workspace_id or None), daemon=True)
+1347|def _build_workspace_system_prompt(workspace_id: str | None) -> str | None:
+1348|"""根据 workspace_id 构建工作空间上下文 system prompt，注入文件列表和关键文件内容。"""
+1349|if not workspace_id:
+1351|ws_path = _workspace_path_by_id(workspace_id)
+1354|ws_data = _load_workspaces()
+1356|for ws in ws_data.get("workspaces", []):
+1357|if ws.get("id") == workspace_id:
+1361|file_list = _list_workspace_files(ws_path, max_depth=3)
+1366|lines.append(f"- 名称：{ws_name or workspace_id}")
+1375|context = _read_workspace_context(ws_path, max_chars=8000)
+1398|workspace_prompt = _build_workspace_system_prompt(req.workspace_id)
+1400|if workspace_prompt:
+1401|system_messages.append(workspace_prompt)
+1416|f"{'（含工作空间上下文）' if workspace_prompt else ''}"
+1419|return {"reply": reply_text, "skills_injected": bool(skill_prompt), "workspace_injected": bool(workspace_prompt)}
+2012|"workspace_id": "",
+2092|def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None):
+2173|workspace_path=workspace_path,
+2203|workspace_path = _workspace_path_by_id(req.workspace_id) if req.workspace_id else None
+2209|"workspace_id": req.workspace_id or "",
+2219|args=(task_id, req.request, workspace_path, req.model_preset_id, req.images or [], req.skill_ids or []),
+2245|def git_status(workspace_id: str | None = Query(None)):
+2249|repo_root = _resolve_repo_root(workspace_id)
+2268|def _resolve_repo_root(workspace_id: str | None) -> str | JSONResponse:
+2269|"""根据 workspace_id 解析 Git 仓库根目录；失败返回 JSONResponse 错误。"""
+2272|if not workspace_id:
+2275|for w in _load_workspaces().get("workspaces", []):
+2276|if w.get("id") == workspace_id:
+2280|return JSONResponse({"error": f"工作空间不存在：{workspace_id}"}, status_code=400)
+2295|repo_root = _resolve_repo_root(req.workspace_id)
+2354|def list_tasks(workspace_id: str | None = Query(None)):
+2355|# 倒序返回,最多 50 个;可按 workspace_id 过滤
+2357|if workspace_id:
+2358|tasks = [t for t in tasks if t.get("workspace_id") == workspace_id]
+2522|@app.get("/api/workspaces")
+2523|def list_workspaces():
+2525|data = _load_workspaces()
+2528|"workspaces": data.get("workspaces", []),
+2532|@app.post("/api/workspaces")
+2533|def create_workspace(req: WorkspaceCreateRequest):
+2542|normalized = _normalize_workspace_path(path)
+2546|data = _load_workspaces()
+2549|existing = next((ws for ws in data.get("workspaces", []) if ws.get("path") == normalized), None)
+2552|_save_workspaces(data)
+2554|return {"workspace": existing, "current_id": existing["id"], "existed": True}
+2557|workspace = {
+2563|data["workspaces"].append(workspace)
+2565|_save_workspaces(data)
+2567|return {"workspace": workspace, "current_id": ws_id}
+2570|@app.get("/api/workspaces/{workspace_id}")
+2571|def get_workspace(workspace_id: str):
+2572|data = _load_workspaces()
+2573|for ws in data.get("workspaces", []):
+2574|if ws.get("id") == workspace_id:
+2579|@app.delete("/api/workspaces/{workspace_id}")
+2580|def delete_workspace(workspace_id: str):
+2581|data = _load_workspaces()
+2582|before = len(data.get("workspaces", []))
+2583|data["workspaces"] = [ws for ws in data.get("workspaces", []) if ws.get("id") != workspace_id]
+2584|if len(data["workspaces"]) == before:
+2586|if data.get("current_id") == workspace_id:
+2587|data["current_id"] = data["workspaces"][0]["id"] if data["workspaces"] else None
+2588|_save_workspaces(data)
+2589|log_buffer.emit("INFO", "system", f"删除工作空间：{workspace_id}")
+2593|@app.post("/api/workspaces/{workspace_id}/switch")
+2594|def switch_workspace(workspace_id: str):
+2595|data = _load_workspaces()
+2596|exists = any(ws.get("id") == workspace_id for ws in data.get("workspaces", []))
+2599|data["current_id"] = workspace_id
+2600|_save_workspaces(data)
+2601|ws = next((w for w in data["workspaces"] if w["id"] == workspace_id), {})
+2603|return {"current_id": workspace_id, "workspace": ws}
+2606|@app.get("/api/workspaces/{workspace_id}/files")
+2607|def list_workspace_files_api(workspace_id: str, max_depth: int = Query(4, ge=1, le=10), max_files: int = Query(2000, ge=1, le=20000)):
+2608|data = _load_workspaces()
+2609|ws = next((w for w in data.get("workspaces", []) if w.get("id") == workspace_id), None)
+2616|files = _list_workspace_files(path, max_depth=max_depth, max_files=max_files)
+2684|normalized = _normalize_workspace_path(path)
+2703|@app.post("/api/workspaces/upload")
+2704|def upload_workspace_files(req: WorkspaceUploadRequest):
+2711|# 开发模式放在项目根目录下的 temp_workspaces；打包模式放在 exe 同目录
+2712|temp_root = EXE_DIR / "temp_workspaces"
+2715|slug = re.sub(r"[^\w\-]", "_", req.directory_name.strip() or "workspace")[:32]
+2733|return {"path": _normalize_workspace_path(str(temp_dir)), "file_count": written}

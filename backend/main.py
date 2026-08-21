@@ -65,6 +65,13 @@ try:
 except ImportError:
     LLM = None  # type: ignore
 
+# 打包时由 build/CrewAIWorkbench.spec 自动生成；开发环境无此文件时用默认值。
+# 用于确认运行中的到底是哪次提交的代码（访问 /api/version 或看启动日志）。
+try:
+    from _version import BUILD_COMMIT, BUILD_DIRTY, BUILD_TIME  # type: ignore
+except Exception:
+    BUILD_COMMIT, BUILD_TIME, BUILD_DIRTY = "dev", "", False
+
 app = FastAPI(title="CrewAI Workbench", version="1.2.0")
 
 # ---------------------------------------------------------------
@@ -936,6 +943,19 @@ class GitCommitRequest(BaseModel):
     branch: str = "main"
     message: str
     workspace_id: str | None = None  # 工作空间 ID，为空则使用 taofei_app 自身目录
+
+
+@app.get("/api/version")
+def get_version():
+    """返回当前运行的代码版本（git commit + 打包时间），用于排查「桌面端跑的是不是新代码」"""
+    return {
+        "app": "CrewAI Workbench",
+        "version": app.version,
+        "commit": BUILD_COMMIT,
+        "build_time": BUILD_TIME,
+        "dirty": BUILD_DIRTY,
+        "packaged": PACKAGED,
+    }
 
 
 @app.get("/api/health")
@@ -2778,7 +2798,9 @@ def main():
             pass
 
     # --no-browser: Electron 模式下不自动打开浏览器
-    no_browser = "--no-browser" in sys.argv
+    # TAOFEI_AGENT_CHILD=1: 由 Agent 的 run_python_code 拉起的进程，同样禁开浏览器，
+    # 防止「分析项目」类任务在会话中心弹出 http://127.0.0.1:800x/ 浏览器窗口
+    no_browser = "--no-browser" in sys.argv or os.getenv("TAOFEI_AGENT_CHILD") == "1"
 
     port = int(os.getenv("CREWAI_APP_PORT", "8000"))
 
@@ -2790,8 +2812,12 @@ def main():
             port += 1
 
     url = f"http://127.0.0.1:{port}"
+    _ver = f"{BUILD_COMMIT} ({BUILD_TIME})" if BUILD_TIME else BUILD_COMMIT
+    if BUILD_DIRTY:
+        _ver += " [含未提交改动]"
     print("=" * 56)
     print("  CrewAI Workbench 已启动")
+    print(f"  代码版本 : {_ver}")
     print(f"  访问地址: {url}")
     print(f"  API Key  : {'已配置' if os.getenv('DEEPSEEK_API_KEY') else '未配置（请在 .env 中填写）'}")
     print("  按 Ctrl+C 停止服务")

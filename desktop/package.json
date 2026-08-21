@@ -23,7 +23,7 @@
     "productName": "TaofeiAI",
     "npmRebuild": false,
     "directories": {
-      "output": "release_v3",
+      "output": "release_v4",
       "buildResources": "."
     },
     "files": [

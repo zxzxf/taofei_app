@@ -64,6 +64,7 @@ Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结
 8. 如需计算或运行脚本，使用 run_python_code。
 9. 如果需要模型帮你总结、改写、分析，使用 ask_llm。
 10. 功能开发/代码修改类任务：完成文件修改并验证思路正确后，立即输出 Final Answer，不要继续探索。
+11. 禁止启动后端服务或桌面应用（python backend/main.py、CrewAIWorkbench.exe、TaofeiAI.exe 等），禁止打开浏览器（webbrowser、os.startfile、start 命令）。验证接口请用 http_request 访问已在运行的服务即可。
 """
 
 

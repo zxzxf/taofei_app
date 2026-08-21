@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -103,16 +104,49 @@ def list_directory(workspace_path: str | None, path: str = "") -> dict:
         return {"observation": "", "error": f"list_directory 失败：{e}"}
 
 
+def _resolve_python_exe() -> str | None:
+    """返回可用于执行代码的 Python 解释器路径。
+
+    打包（PyInstaller）环境下 sys.executable 是应用本体（CrewAIWorkbench.exe），
+    不能当解释器用——直接 spawn 会拉起一个全新后端实例（该实例还会自动打开
+    浏览器），这是「会话中心说'分析项目'就弹出 http://127.0.0.1:800x/chat
+    新建会话页面」的根源。此时改为在系统 PATH 中查找真实的 python。
+    """
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    return shutil.which("python") or shutil.which("python3") or shutil.which("py")
+
+
 def run_python_code(workspace_path: str | None, code: str) -> dict:
     """在独立子进程中执行 Python 代码片段，返回 stdout/stderr。"""
     try:
+        python_exe = _resolve_python_exe()
+        if not python_exe:
+            return {
+                "observation": "",
+                "error": "打包环境且系统未安装 Python，无法执行代码；请改用 read_file/list_directory 分析文件",
+            }
+        # 安全护栏：Agent 代码不允许打开浏览器或拉起会自动开浏览器的后端
+        # 1) 预置 webbrowser 空实现（import webbrowser 后 open() 无副作用）
+        # 2) 预置 os.startfile 空实现（防止用系统默认程序打开 URL）
+        # 3) 注入 TAOFEI_AGENT_CHILD=1，backend/main.py 据此跳过启动时自动开浏览器
+        guard = (
+            "import sys,types as _t;"
+            "_w=_t.ModuleType('webbrowser');"
+            "_w.open=lambda *a,**k:False;"
+            "sys.modules['webbrowser']=_w;"
+            "import os as _os;"
+            "_os.startfile=lambda *a,**k:None\n"
+        )
+        env = {**os.environ, "TAOFEI_AGENT_CHILD": "1"}
         proc = subprocess.run(
-            [sys.executable, "-c", code],
+            [python_exe, "-c", guard + code],
             capture_output=True,
             text=True,
             encoding="utf-8",
             timeout=15,
             cwd=workspace_path or None,
+            env=env,
         )
         out = proc.stdout.strip()
         err = proc.stderr.strip()

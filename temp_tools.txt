@@ -1,0 +1,34 @@
+=== def  ===
+25|def _safe_path(workspace_path: str | None, rel: str) -> Path:
+39|def _short(text: Any, n: int = MAX_OUTPUT_LEN) -> str:
+49|def read_file(workspace_path: str | None, path: str) -> dict:
+66|def write_file(workspace_path: str | None, path: str, content: str) -> dict:
+77|def list_directory(workspace_path: str | None, path: str = "") -> dict:
+107|def _resolve_python_exe() -> str | None:
+120|def run_python_code(workspace_path: str | None, code: str) -> dict:
+167|def http_request(workspace_path: str | None, url: str, method: str = "GET", headers: str = "", body: str = "") -> dict:
+196|def ask_llm(llm_call: Callable[[list[dict]], str], prompt: str) -> dict:
+206|def call_skill(skill: dict, args: dict) -> dict:
+341|def build_skill_tools(skills: list[dict]) -> list[dict]:
+372|def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list[dict]], str], args: dict, skills: list[dict] | No
+=== 知识库 ===
+=== vector ===
+=== search ===
+=== file ===
+49|def read_file(workspace_path: str | None, path: str) -> dict:
+55|if not target.is_file():
+63|return {"observation": "", "error": f"read_file 失败：{e}"}
+66|def write_file(workspace_path: str | None, path: str, content: str) -> dict:
+74|return {"observation": "", "error": f"write_file 失败：{e}"}
+90|file_count = total - dir_count
+96|size = f" {entry.stat().st_size} bytes" if entry.is_file() else ""
+98|header = f"--- 目录 {path or '.'}（共 {total} 项：{dir_count} 个目录，{file_count} 个文件）---"
+127|"error": "打包环境且系统未安装 Python，无法执行代码；请改用 read_file/list_directory 分析文件",
+131|# 2) 预置 os.startfile 空实现（防止用系统默认程序打开 URL）
+139|"_os.startfile=lambda *a,**k:None\n"
+270|"name": "read_file",
+281|"name": "write_file",
+374|if name == "read_file":
+375|return read_file(workspace_path, args.get("path", ""))
+376|if name == "write_file":
+377|return write_file(workspace_path, args.get("path", ""), args.get("content", ""))

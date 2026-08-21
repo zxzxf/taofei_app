@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 打包配置：CrewAI Workbench"""
+import datetime
 import os
+import subprocess
 
 from PyInstaller.utils.hooks import collect_data_files
 
@@ -10,6 +12,36 @@ NAME = "CrewAIWorkbench"
 # 项目根目录：spec 中的相对路径以 spec 所在目录(build/)为基准，
 # 因此必须基于 SPECPATH 显式计算，否则会去找 build/build/backend/main.py
 PROJECT_ROOT = os.path.dirname(SPECPATH)  # E:\taofei_ai\crewai_app
+
+
+# ---------------------------------------------------------------
+# 构建时生成版本文件 backend/_version.py（git commit + 构建时间）。
+# 运行时由 main.py 读取，通过 /api/version 与启动日志展示，
+# 用于快速确认打包产物里到底是哪次提交的代码（防止旧代码被当成新版本部署）。
+# ---------------------------------------------------------------
+def _gen_version_file():
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True,
+        ).stdout.strip() or "unknown"
+        dirty = bool(subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True,
+        ).stdout.strip())
+    except Exception:
+        commit, dirty = "unknown", False
+    content = (
+        "# 由 PyInstaller 打包时自动生成，请勿手动编辑或提交\n"
+        f"BUILD_COMMIT = {commit!r}\n"
+        f"BUILD_TIME = {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')!r}\n"
+        f"BUILD_DIRTY = {dirty!r}\n"
+    )
+    with open(os.path.join(PROJECT_ROOT, "backend", "_version.py"), "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+_gen_version_file()
 
 # 前端静态文件目录（打包后嵌入到 _MEIPASS/frontend）
 frontend_dir = os.path.join(PROJECT_ROOT, "frontend")

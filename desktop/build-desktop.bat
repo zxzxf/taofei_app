@@ -11,14 +11,14 @@ REM    build-desktop.bat /u    = Update D:\TaofeiAI only
 REM
 REM  Output:
 REM    dist\CrewAIWorkbench.exe                   = PyInstaller backend (onefile, includes frontend)
-REM    desktop\release_v3\TaofeiAI Setup 1.2.1.exe = NSIS installer (final release)
-REM    desktop\release_v3\win-unpacked\            = Portable version
+REM    desktop\release_v4\TaofeiAI Setup 1.2.1.exe = NSIS installer (final release)
+REM    desktop\release_v4\win-unpacked\            = Portable version
 REM
 REM  Prerequisites: .venv created + Node.js installed
 REM  Steps:
 REM    [0/4] frontend-vue npm install + npm run build -> output to project root\frontend\
 REM    [1/4] PyInstaller collects frontend\ + backend\ -> dist\CrewAIWorkbench.exe (onefile)
-REM    [2/4] electron-builder combines Electron + extraResources -> release_v3\
+REM    [2/4] electron-builder combines Electron + extraResources -> release_v4\
 REM    [3/4] (optional) copy win-unpacked to D:\TaofeiAI
 REM ============================================
 setlocal enabledelayedexpansion
@@ -36,7 +36,7 @@ set "ELECTRON_RUN_AS_NODE="
 set "CI=false"
 
 REM ---------- Paths ----------
-set "RELEASE_VER=release_v3"
+set "RELEASE_VER=release_v4"
 set "INSTALL_DIR=D:\TaofeiAI"
 
 cd /d "%~dp0.."
@@ -150,15 +150,50 @@ if not exist "node_modules\electron\package.json" (
     echo        node_modules OK, skipping install
 )
 
+REM Guard 1: kill running desktop app so files are not locked during build
+taskkill /F /IM TaofeiAI.exe /T >nul 2>&1
+taskkill /F /IM CrewAIWorkbench.exe /T >nul 2>&1
+timeout /t 1 /nobreak >nul 2>&1
+
+REM Guard 2: remove old win-unpacked BEFORE building.
+REM If electron-builder fails, stale artifacts from a previous build can never
+REM be mistaken for fresh output and deployed to %INSTALL_DIR%
+if exist "%RELEASE_VER%\win-unpacked" (
+    echo        Cleaning old win-unpacked to avoid stale artifacts...
+    rd /s /q "%RELEASE_VER%\win-unpacked"
+    if exist "%RELEASE_VER%\win-unpacked" (
+        echo [ERROR] Cannot remove old win-unpacked - a file is locked by another process.
+        echo        Common cause: app.asar or exe opened inside the IDE - close that tab,
+        echo        or an antivirus is scanning - wait a moment, then rebuild.
+        echo        You can also switch the output dir in desktop\package.json
+        echo        ^(directories.output^) to a fresh name to bypass the locked file.
+        pause
+        exit /b 1
+    )
+)
+
 echo        electron-builder...
 call npm run dist
 if errorlevel 1 (
-    echo [WARNING] electron-builder reported errors, check output above
-    echo           Product may still be usable if win-unpacked exists
+    echo [ERROR] electron-builder failed. Old artifacts already cleaned,
+    echo        script will NOT continue with stale files. Fix the error above and rebuild.
+    pause
+    exit /b 1
 )
 
 if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (
     echo [ERROR] Desktop build failed: no win-unpacked
+    pause
+    exit /b 1
+)
+
+REM Guard 3: extraResources MUST contain the freshly built backend exe,
+REM otherwise the deployed desktop app would silently run OLD code
+if not exist "%RELEASE_VER%\win-unpacked\resources\backend\CrewAIWorkbench.exe" (
+    echo [ERROR] VERIFICATION FAILED:
+    echo        %RELEASE_VER%\win-unpacked\resources\backend\CrewAIWorkbench.exe not found
+    echo        extraResources did not include the backend exe.
+    echo        Do NOT deploy this build - fix electron-builder config and rebuild.
     pause
     exit /b 1
 )
@@ -180,6 +215,14 @@ if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (
     exit /b 1
 )
 
+REM Guard 4: source build must contain backend exe before deploying
+if not exist "%RELEASE_VER%\win-unpacked\resources\backend\CrewAIWorkbench.exe" (
+    echo [ERROR] %RELEASE_VER%\win-unpacked\resources\backend\CrewAIWorkbench.exe not found
+    echo        Build is incomplete - run full build first, never deploy without backend exe
+    pause
+    exit /b 1
+)
+
 taskkill /F /IM TaofeiAI.exe /T >nul 2>&1
 taskkill /F /IM CrewAIWorkbench.exe /T >nul 2>&1
 timeout /t 2 /nobreak >nul 2>&1
@@ -194,7 +237,16 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+
+REM Guard 5: verify backend exe exists in target dir after copy
+if not exist "%INSTALL_DIR%\resources\backend\CrewAIWorkbench.exe" (
+    echo [ERROR] Verify failed: %INSTALL_DIR%\resources\backend\CrewAIWorkbench.exe missing
+    pause
+    exit /b 1
+)
 echo       [OK] Updated: %INSTALL_DIR%
+echo       Verify: launch TaofeiAI.exe, then open http://127.0.0.1:8000/api/version
+echo              and confirm the commit/build time matches this build.
 
 :done
 echo.

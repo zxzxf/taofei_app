@@ -49,3 +49,6 @@ model_config.json
 model_presets.json
 skills.json
 workflows.json
+
+# PyInstaller 构建时自动生成的版本文件（见 build/CrewAIWorkbench.spec）
+backend/_version.py
