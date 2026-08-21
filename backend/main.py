@@ -386,9 +386,17 @@ class _LLMCompat:
                 else:
                     lc_msgs.append(HumanMessage(content=content))
         result = self._llm.invoke(lc_msgs)
-        if hasattr(result, "content"):
-            return result.content
-        return str(result)
+        content = result.content if hasattr(result, "content") else str(result)
+        # 提取 DeepSeek reasoning_content / OpenAI o1 reasoning 等思考内容
+        reasoning = ""
+        if hasattr(result, "additional_kwargs"):
+            reasoning = result.additional_kwargs.get("reasoning_content", "") or \
+                        result.additional_kwargs.get("reasoning", "")
+        if not reasoning and hasattr(result, "response_metadata"):
+            reasoning = result.response_metadata.get("reasoning_content", "")
+        if reasoning:
+            content = f"<thinking>\n{reasoning}\n</thinking>\n\n{content}"
+        return content
 
     # ------------------------------------------------------------------
     # 转发到 langchain ChatModel 原生接口（crewai Agent 使用）
@@ -479,7 +487,7 @@ class _AnthropicLLM:
 
         data = resp.json()
         text_parts: list[str] = []
-        fallback = ""
+        thinking_parts: list[str] = []
         for block in data.get("content") or []:
             if isinstance(block, str):
                 text_parts.append(block)
@@ -490,11 +498,13 @@ class _AnthropicLLM:
             if btype == "text":
                 text_parts.append(block.get("text", ""))
             elif btype == "thinking" and block.get("thinking"):
-                fallback = fallback or block.get("thinking", "")
-            # tool_use 等块忽略（当前对话流不使用工具）
+                thinking_parts.append(block["thinking"])
+            elif btype == "redacted_thinking":
+                pass
         text = "".join(text_parts).strip()
-        if not text and fallback:
-            text = fallback.strip()
+        if thinking_parts:
+            thinking_block = "<thinking>\n" + "\n\n".join(thinking_parts) + "\n</thinking>\n\n"
+            text = (thinking_block + text).strip() if text else thinking_block.strip()
         return text
 
     # langchain / crewai 风格别名
@@ -2115,6 +2125,8 @@ def agent_stream(task_id: str):
                 task.get("current_step"),
                 task.get("result"),
                 len(task.get("steps") or []),
+                len(task.get("thinking") or ""),
+                len(task.get("timeline") or []),
             )
             if snapshot != last_snapshot:
                 last_snapshot = snapshot
@@ -2370,6 +2382,9 @@ def agent_run(req: AgentRunRequest):
             "steps": [],
             "current_step": "",
             "type": "agent",
+            "thinking": "",
+            "thinking_duration": 0,
+            "timeline": [],
         }
     log_buffer.emit("INFO", "system", f"收到 Agent 任务：{req.request[:60]}", task_id)
     threading.Thread(

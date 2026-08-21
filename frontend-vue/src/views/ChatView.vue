@@ -172,41 +172,58 @@
                 @click="previewImage(img)"
               >
             </div>
+            <!-- 报告卡片（点击耗时折叠/展开思考时间线，标题摘要章节始终显示） -->
             <div v-if="msg.report && msg.report.type === 'report'" class="chat-report-card">
               <div class="chat-report-header">
                 <span class="chat-report-badge" :class="msg.report.status">{{ msg.report.status === 'completed' ? '已完成' : '进行中' }}</span>
                 <span
-                  class="chat-report-duration"
-                  :class="{ expanded: msg.showReportSteps }"
-                  @click="msg.showReportSteps = !msg.showReportSteps"
-                  title="点击查看执行明细"
+                  class="chat-report-duration-toggle"
+                  :class="{ expanded: msg.thinkingExpanded !== false }"
+                  @click="msg.thinkingExpanded = !msg.thinkingExpanded"
+                  title="点击折叠/展开思考时间线"
                 >
-                  {{ msg.report.duration }}
+                  耗时 {{ formatThinkingDuration(msg.thinkingDuration) }}
+                  <span class="chat-report-collapse-arrow" :class="{ expanded: msg.thinkingExpanded !== false }">▼</span>
                 </span>
               </div>
-              <div class="chat-report-title">{{ msg.report.title }}</div>
-              <div class="chat-report-summary">{{ msg.report.summary }}</div>
-              <!-- 点击耗时展开：完整执行步骤（含内部步骤） -->
-              <div v-if="msg.showReportSteps && msg.report.steps && msg.report.steps.length" class="chat-report-section chat-report-steps">
-                <div class="chat-report-section-title">⚙️ 执行明细</div>
-                <div
-                  v-for="(st, sti) in msg.report.steps"
-                  :key="sti"
-                  class="chat-report-step"
-                  :class="st.status"
-                >
-                  <div v-if="isStepExpanded(msg, sti)" class="chat-report-step-body">
-                    <pre>{{ st.output || '（无输出内容）' }}</pre>
-                    <div class="chat-report-step-collapse" @click="toggleStep(msg, sti)">收起 ▲</div>
-                  </div>
-                  <div v-else class="chat-report-step-header" @click="toggleStep(msg, sti)">
-                    <span class="chat-report-step-toggle">▶</span>
-                    <span class="chat-report-step-icon">{{ st.icon }}</span>
-                    <span class="chat-report-step-name">{{ st.name }}</span>
-                    <span class="chat-report-step-time">{{ st.time }}</span>
+              <!-- 思考过程时间线：由头部控制折叠（默认展开） -->
+              <div v-if="msg.thinkingExpanded !== false && msg.timeline && msg.timeline.length" class="chat-thinking-inline">
+                <div class="chat-thinking-inline-header">
+                  <span class="chat-thinking-inline-icon">🧠</span>
+                  <span v-if="msg.thinkingActive" class="chat-thinking-inline-title active">
+                    思考中...
+                    <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+                  </span>
+                  <span v-else class="chat-thinking-inline-title">思考过程</span>
+                </div>
+                <div class="chat-thinking-inline-body">
+                  <div class="chat-timeline">
+                    <div v-for="(item, idx) in msg.timeline" :key="idx" class="chat-timeline-item">
+                      <!-- 思考项：内容直接可见 -->
+                      <div v-if="item.type === 'thinking'" class="timeline-thinking">
+                        <div class="timeline-thinking-header">
+                          <span class="timeline-icon">💭</span>
+                          <span class="timeline-label">思考中。。。</span>
+                        </div>
+                        <div class="timeline-thinking-content">{{ item.content }}</div>
+                      </div>
+                      <!-- 命令项：可展开/折叠，结果直接可见 -->
+                      <div v-else-if="item.type === 'command'" class="timeline-command">
+                        <div class="timeline-command-header" @click="toggleTimelineItem(msg, idx)">
+                          <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
+                          <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
+                          <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
+                          <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
+                        </div>
+                        <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
+              <!-- 报告标题/摘要/章节：始终显示 -->
+              <div class="chat-report-title">{{ msg.report.title }}</div>
+              <div class="chat-report-summary">{{ msg.report.summary }}</div>
               <!-- 其他章节（兼容旧报告/模型生成的章节） -->
               <div v-for="(sec, si) in msg.report.sections" :key="si" class="chat-report-section">
                 <div class="chat-report-section-title">{{ sec.heading }}</div>
@@ -215,27 +232,42 @@
                 </ul>
               </div>
             </div>
-            <div v-else class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
-            <div v-if="!msg.report && msg.agentSteps && msg.agentSteps.length" class="chat-agent-steps">
-              <div class="chat-agent-steps-title">⚙️ 思考与执行过程</div>
-              <div
-                v-for="(step, si) in msg.agentSteps"
-                :key="si"
-                class="chat-report-step"
-                :class="step.status"
-              >
-                <div v-if="isStepExpanded(msg, si)" class="chat-report-step-body">
-                  <pre>{{ step.output || '（无输出内容）' }}</pre>
-                  <div class="chat-report-step-collapse" @click="toggleStep(msg, si)">收起 ▲</div>
-                </div>
-                <div v-else class="chat-report-step-header" @click="toggleStep(msg, si)">
-                  <span class="chat-report-step-toggle">▶</span>
-                  <span class="chat-report-step-icon">{{ step.status === 'error' ? '❌' : step.status === 'running' ? '⏳' : '✅' }}</span>
-                  <span class="chat-report-step-name">{{ step.name }}</span>
-                  <span class="chat-report-step-time">{{ step.time }}</span>
+            <!-- 无报告但有时间线（任务运行初期），单独展示思考过程 -->
+            <div v-else-if="msg.timeline && msg.timeline.length" class="chat-thinking-card">
+              <div class="chat-thinking-header">
+                <span class="chat-thinking-icon">🧠</span>
+                <span v-if="msg.thinkingActive" class="chat-thinking-status active">
+                  思考中...
+                  <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+                </span>
+                <span v-else class="chat-thinking-status">思考过程</span>
+              </div>
+              <div class="chat-thinking-body">
+                <div class="chat-timeline">
+                  <div v-for="(item, idx) in msg.timeline" :key="idx" class="chat-timeline-item">
+                    <!-- 思考项：内容直接可见 -->
+                    <div v-if="item.type === 'thinking'" class="timeline-thinking">
+                      <div class="timeline-thinking-header">
+                        <span class="timeline-icon">💭</span>
+                        <span class="timeline-label">思考中。。。</span>
+                      </div>
+                      <div class="timeline-thinking-content">{{ item.content }}</div>
+                    </div>
+                    <!-- 命令项：可展开/折叠，结果直接可见 -->
+                    <div v-else-if="item.type === 'command'" class="timeline-command">
+                      <div class="timeline-command-header" @click="toggleTimelineItem(msg, idx)">
+                        <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
+                        <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
+                        <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
+                        <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
+                      </div>
+                      <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
+            <div v-else class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
           </div>
         </div>
@@ -459,6 +491,57 @@ function isStepExpanded(msg, sti) {
 function toggleStep(msg, sti) {
   if (!msg.stepExpanded) msg.stepExpanded = {}
   msg.stepExpanded[sti] = !isStepExpanded(msg, sti)
+}
+
+// ===== 时间线（思考过程）辅助方法 =====
+
+// 时间线项默认折叠：命令结果点击后展开
+function isTimelineItemExpanded(msg, idx) {
+  if (!msg.timelineExpanded) return false
+  return msg.timelineExpanded[idx] === true
+}
+
+function toggleTimelineItem(msg, idx) {
+  if (!msg.timelineExpanded) msg.timelineExpanded = {}
+  msg.timelineExpanded[idx] = !isTimelineItemExpanded(msg, idx)
+}
+
+// 计算这是第几条命令（从 1 开始）
+function getCommandIndex(msg, idx) {
+  if (!msg.timeline) return idx + 1
+  let n = 0
+  for (let i = 0; i <= idx; i++) {
+    if (msg.timeline[i] && msg.timeline[i].type === 'command') n++
+  }
+  return n
+}
+
+// 工具名 -> 友好中文显示名
+const TOOL_DISPLAY_NAMES = {
+  grep_code: '查找文件',
+  list_directory: '查看目录',
+  read_file: '读取文件',
+  write_file: '写入文件',
+  run_python_code: '运行代码',
+  run_command: '执行命令',
+  http_request: '请求接口',
+  get_weather: '查询天气',
+  call_skill: '调用技能',
+}
+
+function toolDisplayName(name) {
+  if (!name) return ''
+  // 技能类工具 call_skill_xxx 也显示为"调用技能"
+  if (name.startsWith('call_skill_')) return '调用技能'
+  return TOOL_DISPLAY_NAMES[name] || name
+}
+
+// 思考耗时格式化：12s / 1m5s / --
+function formatThinkingDuration(sec) {
+  if (!sec || sec <= 0) return '--'
+  sec = Math.round(sec)
+  if (sec < 60) return `${sec}s`
+  return `${Math.floor(sec / 60)}m${sec % 60}s`
 }
 
 function renderMarkdown(text) {
@@ -935,6 +1018,16 @@ function fallbackPoll(task_id, aiMsg, s) {
         time: st.time || '',
         output: st.output || '',
       }))
+      // 捕获时间线（思考+命令+结果）
+      if (task.timeline && task.timeline.length) {
+        aiMsg.timeline = task.timeline
+        aiMsg.thinkingDuration = task.thinking_duration || 0
+        aiMsg.thinkingActive = task.status === 'running'
+      } else if (task.thinking) {
+        aiMsg.thinking = task.thinking
+        aiMsg.thinkingDuration = task.thinking_duration || 0
+        aiMsg.thinkingActive = task.status === 'running'
+      }
       const result = task.result
       if (result && typeof result === 'object' && result.type === 'report') {
         aiMsg.report = result
@@ -982,7 +1075,7 @@ async function sendAgent(s, text, images = []) {
   await scrollToBottom(true)
 
   // 2) 预占一条 AI 消息
-  s.messages.push({ role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: true, stepExpanded: {} })
+  s.messages.push({ role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: true, stepExpanded: {}, thinking: '', thinkingDuration: 0, thinkingActive: true, thinkingExpanded: true, timeline: [], timelineExpanded: {} })
   const aiMsg = s.messages[s.messages.length - 1]
   await scrollToBottom(true)
 
@@ -996,6 +1089,16 @@ async function sendAgent(s, text, images = []) {
       time: st.time || '',
       output: st.output || '',
     }))
+    // 捕获时间线（思考+命令+结果）
+    if (task.timeline && task.timeline.length) {
+      aiMsg.timeline = task.timeline
+      aiMsg.thinkingActive = task.status === 'running'
+      aiMsg.thinkingDuration = task.thinking_duration || 0
+    } else if (task.thinking) {
+      aiMsg.thinking = task.thinking
+      aiMsg.thinkingDuration = task.thinking_duration || 0
+      aiMsg.thinkingActive = task.status === 'running'
+    }
     const result = task.result
     if (result && typeof result === 'object' && result.type === 'report') {
       aiMsg.report = result
@@ -1014,6 +1117,16 @@ async function sendAgent(s, text, images = []) {
   }
 
   function finalizeTask(task) {
+    // 捕获最终时间线/思考内容
+    if (task.timeline && task.timeline.length) {
+      aiMsg.timeline = task.timeline
+      aiMsg.thinkingDuration = task.thinking_duration || 0
+      aiMsg.thinkingActive = false
+    } else if (task.thinking) {
+      aiMsg.thinking = task.thinking
+      aiMsg.thinkingDuration = task.thinking_duration || 0
+      aiMsg.thinkingActive = false
+    }
     if (task.status === 'completed') {
       const result = task.result
       if (result && typeof result === 'object' && result.type === 'report') {
@@ -2380,7 +2493,211 @@ function onFilePick(node) {
   margin-bottom: 2px;
 }
 
-/* ===== Agent 伪流式报告卡片 ===== */
+/* ===== 思考过程（合并进报告卡片内的内联区域） ===== */
+.chat-thinking-inline {
+  margin: 4px 0 12px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.04);
+  border: 1px solid rgba(139, 92, 246, 0.12);
+  overflow: hidden;
+}
+.chat-thinking-inline-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12.5px;
+  transition: background .15s;
+}
+.chat-thinking-inline-header:hover {
+  background: rgba(139, 92, 246, 0.06);
+}
+.chat-thinking-inline-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.chat-thinking-inline-title {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.chat-thinking-inline-title.active {
+  color: #8b5cf6;
+}
+.chat-thinking-duration {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+.chat-thinking-inline-body {
+  border-top: 1px solid rgba(139, 92, 246, 0.1);
+}
+
+/* ===== 时间线（思考+命令+结果） ===== */
+.chat-timeline {
+  padding: 4px 0;
+  position: relative;
+}
+.chat-timeline-item {
+  position: relative;
+  padding: 0 0 2px 26px;
+}
+.chat-timeline-item::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 18px;
+  bottom: -2px;
+  width: 1.5px;
+  background: linear-gradient(to bottom, rgba(139, 92, 246, 0.3), rgba(139, 92, 246, 0.05));
+}
+.chat-timeline-item:last-child::before {
+  display: none;
+}
+.timeline-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+.timeline-thinking-header,
+.timeline-command-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background .15s;
+  font-size: 12.5px;
+}
+.timeline-thinking-header:hover,
+.timeline-command-header:hover {
+  background: rgba(139, 92, 246, 0.07);
+}
+.timeline-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.timeline-command-name {
+  color: var(--text);
+  font-weight: 600;
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.1);
+  font-size: 11.5px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
+.timeline-arrow {
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform .18s ease;
+  flex-shrink: 0;
+}
+.timeline-arrow.expanded {
+  transform: rotate(90deg);
+}
+.timeline-thinking-content {
+  margin: 0 10px 8px 33px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  background: rgba(139, 92, 246, 0.05);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.timeline-command-result {
+  margin: 0 10px 8px 33px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.timeline-command-result pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* ===== 思考过程（任务运行初期独立卡片） ===== */
+.chat-thinking-card {
+  background: rgba(139, 92, 246, 0.04);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  animation: thinkingFadeIn .3s ease-out;
+}
+@keyframes thinkingFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.chat-thinking-header:hover {
+  background: rgba(139, 92, 246, 0.06);
+}
+.chat-thinking-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.chat-thinking-status {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  flex: 1;
+}
+.chat-thinking-status.active {
+  color: #8b5cf6;
+}
+.chat-thinking-arrow {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform .2s ease;
+  flex-shrink: 0;
+}
+.chat-thinking-arrow.expanded {
+  transform: rotate(180deg);
+}
+.chat-thinking-body {
+  border-top: 1px solid rgba(139, 92, 246, 0.1);
+}
+.thinking-dots span {
+  animation: thinkingBlink 1.4s infinite;
+  font-weight: bold;
+  font-size: 18px;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes thinkingBlink {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
+}
+
 .chat-report-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -2399,6 +2716,19 @@ function onFilePick(node) {
 .chat-report-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 10px;
+  gap: 8px;
+}
+.chat-report-collapse-arrow {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform .2s ease;
+  flex-shrink: 0;
+}
+.chat-report-collapse-arrow.expanded {
+  transform: rotate(180deg);
+}
+.chat-report-body {
+  animation: reportCardIn .2s ease-out;
 }
 .chat-report-badge {
   font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px;
@@ -2414,6 +2744,24 @@ function onFilePick(node) {
   cursor: pointer;
   padding: 2px 6px; border-radius: 4px;
   transition: background .12s, color .12s;
+}
+.chat-report-duration-toggle {
+  font-size: 11px; color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background .12s, color .12s;
+  user-select: none;
+}
+.chat-report-duration-toggle:hover {
+  background: rgba(139, 92, 246, 0.08);
+  color: var(--primary);
+}
+.chat-report-duration-toggle.expanded {
+  color: var(--primary);
 }
 .chat-report-duration:hover {
   background: rgba(139, 92, 246, 0.08);

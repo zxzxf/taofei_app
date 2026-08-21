@@ -94,17 +94,25 @@ def _build_skill_prompts(skills: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _sanitize_model_output(text: str) -> str:
-    """去除模型可能输出的 <tool_call>/<think>/<thinking> 等 XML 包装标签。
-    对思考类标签（<think>/<thinking>），直接移除标签及其内容，避免内部思考泄露到用户界面。
+def _sanitize_model_output(text: str) -> tuple[str, str]:
+    """去除模型可能输出的 XML 包装标签，同时提取思考内容。
+
+    返回 (clean_text, thinking_text)。思考类标签（<think>/<thinking>）的内容
+    会被提取到 thinking_text 中，不再泄露到用户界面正文。
     """
-    # 1) 先移除整个思考块（包括标签和内容）——豆包 reasoning 模型常用 <thinking>
-    text = re.sub(r"<thinking[>\s].*?</thinking>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    # 兼容单标签或不成对的开始标签
+    thinking_parts: list[str] = []
+
+    def _save_thinking(m: re.Match) -> str:
+        content = m.group(1).strip()
+        if content:
+            thinking_parts.append(content)
+        return ""
+
+    # 1) 提取整个思考块内容，然后移除标签
+    text = re.sub(r"<thinking[^>]*>(.*?)</thinking\s*>", _save_thinking, text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<thinking[^>]*>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"</thinking\s*>", "", text, flags=re.IGNORECASE)
-    # 兼容 <think> 标签（Qwen/其他模型）
-    text = re.sub(r"<think[>\s].*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<think[>\s](.*?)</think\s*>", _save_thinking, text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<think[^>]*>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"</think\s*>", "", text, flags=re.IGNORECASE)
     # 2) 移除 tool_call/tool_response 包装标签（保留内容）
@@ -112,7 +120,7 @@ def _sanitize_model_output(text: str) -> str:
     text = re.sub(r"</?tool_response>\s*", "", text)
     # 3) 去掉可能残留的 "♪" 等豆包思考链标记字符
     text = re.sub(r"^[♪\s]+", "", text)
-    return text.strip()
+    return text.strip(), "\n\n".join(thinking_parts)
 
 
 def _extract_json_objects(text: str) -> list[str]:
@@ -151,7 +159,7 @@ def _extract_json_objects(text: str) -> list[str]:
 
 def _parse_action(text: str) -> tuple[str, dict] | None:
     """从模型输出中解析 Action 和 Action Input。兼容 markdown 代码块、XML 包装、解释文字、tool_call JSON 等。"""
-    text = _sanitize_model_output(text)
+    text, _ = _sanitize_model_output(text)
 
     action_match = re.search(r"Action:\s*(\S+)", text)
     if action_match:
@@ -233,18 +241,19 @@ def _parse_action(text: str) -> tuple[str, dict] | None:
 
 
 def _has_final_answer(text: str) -> bool:
-    return "Final Answer:" in _sanitize_model_output(text)
+    text, _ = _sanitize_model_output(text)
+    return "Final Answer:" in text
 
 
 def _extract_final_answer(text: str) -> str:
-    text = _sanitize_model_output(text)
+    text, _ = _sanitize_model_output(text)
     match = re.search(r"Final Answer:\s*(.*)", text, re.DOTALL)
     return match.group(1).strip() if match else text.strip()
 
 
 def _extract_thought(text: str) -> str:
     """从模型输出中提取 Thought 内容（去掉前缀和 Action 之后的部分），用于前端展示。"""
-    text = _sanitize_model_output(text)
+    text, _ = _sanitize_model_output(text)
     # 匹配 Thought: ... 到 Action:/Final Answer: 之前
     match = re.search(r"Thought:\s*(.*?)(?=\n\s*(?:Action:|Final Answer:|Action Input:))", text, re.DOTALL | re.IGNORECASE)
     if match:
@@ -295,9 +304,7 @@ def _build_partial_report(steps: list[dict], user_request: str, status: str = "r
         except Exception:
             pass
     sections = []
-    if items:
-        sections.append({"heading": "执行步骤", "items": items})
-
+    # 不再生成"执行步骤"章节：执行过程已通过 timeline（思考过程）展示，避免重复
     return {
         "type": "report",
         "title": f"正在处理：{user_request[:30]}…",
@@ -382,6 +389,7 @@ def run_agent_task(
             notify_update()
 
     update(status="running")
+    task_start_time = time.time()
     emit_log("INFO", f"Agent 任务开始：{user_request[:80]}...", task_id)
 
     # 会话绑定技能：HTTP 技能注册为动态工具，Claude 技能 instructions 注入 system prompt
@@ -427,6 +435,7 @@ def run_agent_task(
                 near_limit_warned = True
 
             reply = None
+            step_start = time.time()
             try:
                 reply = llm_call(messages)
             except Exception as exc:
@@ -450,11 +459,29 @@ def run_agent_task(
                 else:
                     raise
 
+            # 从原始回复中提取思考内容（在 sanitize 之前）
+            raw_thinking = ""
+            if reply:
+                _, raw_thinking = _sanitize_model_output(reply)
+
+            # 累积思考时长
+            if raw_thinking:
+                with task_lock:
+                    if "thinking_start" not in task_store[task_id]:
+                        task_store[task_id]["thinking_start"] = step_start
+                    task_store[task_id]["thinking_duration"] = max(
+                        task_store[task_id].get("thinking_duration", 0),
+                        int(time.time() - task_store[task_id].get("thinking_start", step_start)),
+                    )
+                if notify_update:
+                    notify_update()
+
             add_step({
                 "id": f"step-{step_idx + 1}",
                 "name": f"思考第 {step_idx + 1} 步",
                 "status": "done",
                 "output": _extract_thought(reply),
+                "thinking": raw_thinking,
                 "time": time.strftime("%H:%M:%S"),
             })
 
@@ -528,6 +555,30 @@ def run_agent_task(
             })
             emit_log("INFO", f"工具 {action_name} 返回：{observation_text[:200]}", task_id)
 
+            # 构建 timeline：将思考和命令执行合并为统一时间线索引
+            with task_lock:
+                timeline = task_store[task_id].get("timeline", [])
+                # 添加思考项：优先用 <thinking> 标签内容，否则用 Thought 前缀内容
+                thinking_content = raw_thinking or _extract_thought(reply or "")
+                if thinking_content:
+                    timeline.append({
+                        "type": "thinking",
+                        "content": thinking_content,
+                        "time": time.strftime("%H:%M:%S"),
+                    })
+                # 添加命令执行项
+                timeline.append({
+                    "type": "command",
+                    "name": action_name,
+                    "args": args,
+                    "result": observation_text,
+                    "status": status,
+                    "time": time.strftime("%H:%M:%S"),
+                })
+                task_store[task_id]["timeline"] = timeline
+            if notify_update:
+                notify_update()
+
             # 把这一轮结果追加到 messages
             messages.append({"role": "assistant", "content": reply})
             messages.append({"role": "user", "content": f"Observation: {observation_text}"})
@@ -556,6 +607,10 @@ def run_agent_task(
         cancelled = is_cancelled()
         final_status = "cancelled" if cancelled else "completed"
         computed_report = _build_partial_report(steps, user_request, status=final_status)
+        # 思考耗时兜底：模型未返回 thinking 内容时，用任务总执行时长作为思考耗时
+        if not task_store[task_id].get("thinking_duration"):
+            with task_lock:
+                task_store[task_id]["thinking_duration"] = max(1, int(time.time() - task_start_time))
         if cancelled:
             final_report = computed_report
             final_report["title"] = f"已取消：{user_request[:30]}…"
