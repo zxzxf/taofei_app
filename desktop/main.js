@@ -84,7 +84,18 @@ function createSplash() {
   return splashWindow;
 }
 
-// 更新闪屏状态文案（窗口可能已关闭，需判空）
+// 更新闪屏进度与文案（平滑过渡；窗口可能已关闭，需判空）
+function setSplashProgress(pct, text) {
+  try {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.webContents.executeJavaScript(
+        `window.__setProgress && window.__setProgress(${Number(pct) || 0}, ${JSON.stringify(text || '')})`
+      ).catch(() => {});
+    }
+  } catch (_) { /* 忽略 */ }
+}
+
+// 兼容旧调用：仅更新文案，不改变进度
 function setSplashMsg(text) {
   try {
     if (splashWindow && !splashWindow.isDestroyed()) {
@@ -187,12 +198,18 @@ function startBackend() {
 // ---------------------------------------------------------------
 // 轮询健康检查，等待 HTTP 服务就绪
 // ---------------------------------------------------------------
-function waitForServer(port) {
+function waitForServer(port, onProgress) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const check = () => {
+      // 轮询期间平滑推进进度（45% → 85%），让用户看到"正在初始化"
+      if (onProgress) {
+        const elapsed = Date.now() - start;
+        onProgress(Math.min(85, 45 + Math.round(elapsed / 400)), '正在初始化界面…');
+      }
       const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
         res.resume();
+        if (onProgress) onProgress(88, '正在初始化界面…');
         resolve();
       });
       req.on('error', () => {
@@ -231,9 +248,12 @@ function createWindow(port) {
   Menu.setApplicationMenu(null);
 
   mainWindow.once('ready-to-show', () => {
-    // 主界面就绪：关闪屏、亮主窗，切换几乎无感
-    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
-    mainWindow.show();
+    // 主界面就绪：进度拉满 → 关闪屏 → 亮主窗，切换几乎无感
+    setSplashProgress(100, '加载完成');
+    setTimeout(() => {
+      if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+      mainWindow.show();
+    }, 150); // 短暂停留 150ms，让 100% 进度可见
   });
 
   // 阻止页面内跳转离开本地服务（例如误点外链时用系统浏览器打开）
@@ -270,11 +290,13 @@ function killBackend() {
 app.whenReady().then(async () => {
   // 双击后立刻出闪屏，给用户即时反馈
   createSplash();
+  setSplashProgress(5, '正在启动…');
   try {
     const port = await startBackend();
-    setSplashMsg('服务已启动，正在初始化界面…');
+    setSplashProgress(45, '本地服务已启动…');
     console.log(`[electron] backend ready on port ${port}, waiting for HTTP...`);
-    await waitForServer(port);
+    await waitForServer(port, (pct, text) => setSplashProgress(pct, text));
+    setSplashProgress(90, '正在打开工作台…');
     console.log('[electron] backend HTTP ready, opening window');
     createWindow(port);
   } catch (err) {
