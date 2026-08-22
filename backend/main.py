@@ -895,6 +895,7 @@ class AgentRunRequest(BaseModel):
     images: list[str] = []  # 多模态图片（data URL 或 URL），传给首条用户消息
     skill_ids: list[str] = []  # 会话绑定的技能 id（来自技能管理列表）
     knowledge_ids: list[str] = []  # 本次任务引用的知识库 id 列表（RAG）
+    memory_enabled: bool = True  # 是否启用跨会话记忆（召回 + 写入）
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -2174,7 +2175,7 @@ async def ws_endpoint(websocket: WebSocket):
 # ---------------------------------------------------------------
 # Agent（ReAct 循环）
 # ---------------------------------------------------------------
-def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None, knowledge_ids: list[str] | None = None):
+def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None, knowledge_ids: list[str] | None = None, workspace_id: str | None = None, memory_enabled: bool = True):
     """后台线程执行 ReAct Agent。"""
     try:
         with _tasks_lock:
@@ -2197,6 +2198,17 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     log_buffer.emit("INFO", "system", f"RAG 检索命中 {len(chunks)} 个片段", task_id)
             except Exception as exc:
                 log_buffer.emit("WARNING", "system", f"RAG 检索失败：{exc}", task_id)
+
+        # 跨会话记忆注入：同工作空间向量召回
+        if memory_enabled and workspace_id:
+            try:
+                import memory
+                memories = memory.recall_memory(user_request, workspace_id, top_k=5)
+                if memories:
+                    user_request = memory.build_memory_context(user_request, memories)
+                    log_buffer.emit("INFO", "system", f"已注入 {len(memories)} 条相关记忆", task_id)
+            except Exception as exc:
+                log_buffer.emit("WARNING", "system", f"记忆召回失败：{exc}", task_id)
 
         llm = _build_llm(model_preset_id)
         if llm is None:
@@ -2276,6 +2288,24 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             skills=bound_skills,
             cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
         )
+
+        # 跨会话记忆写入：仅 completed 且启用记忆时保存
+        if memory_enabled and workspace_id:
+            try:
+                import memory
+                with _tasks_lock:
+                    task = _tasks.get(task_id, {})
+                    if task.get("status") == "completed":
+                        result = task.get("result")
+                        final_text = result if isinstance(result, str) else ""
+                        if isinstance(result, dict):
+                            final_text = (result.get("summary") or result.get("content") or "")
+                if final_text:
+                    saved = memory.save_memory(llm_call, workspace_id, user_request, str(final_text))
+                    if saved:
+                        log_buffer.emit("INFO", "system", "已保存 1 条新记忆", task_id)
+            except Exception as exc:
+                log_buffer.emit("WARNING", "system", f"记忆保存失败：{exc}", task_id)
     except Exception as exc:
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"Agent 任务失败：{err_msg}", task_id)
@@ -2316,7 +2346,11 @@ def agent_run(req: AgentRunRequest):
     log_buffer.emit("INFO", "system", f"收到 Agent 任务：{req.request[:60]}", task_id)
     threading.Thread(
         target=_run_agent_async,
-        args=(task_id, req.request, workspace_path, req.model_preset_id, req.images or [], req.skill_ids or [], req.knowledge_ids or []),
+        args=(
+            task_id, req.request, workspace_path, req.model_preset_id,
+            req.images or [], req.skill_ids or [], req.knowledge_ids or [],
+            req.workspace_id or None, req.memory_enabled,
+        ),
         daemon=True,
     ).start()
     return {"task_id": task_id}
@@ -2398,6 +2432,28 @@ def list_knowledge_chunks(kb_id: str, limit: int = Query(20, ge=1, le=100)):
             (kb_id, limit),
         ).fetchall()
     return {"chunks": [dict(r) for r in rows]}
+
+
+# ---------------------------------------------------------------
+# 跨会话记忆
+# ---------------------------------------------------------------
+@app.get("/api/memory")
+def list_memory(workspace_id: str = Query(""), limit: int = Query(50, ge=1, le=200)):
+    """列出某工作空间的记忆（管理用）。"""
+    import memory
+    if not workspace_id:
+        return JSONResponse({"error": "workspace_id 不能为空"}, status_code=400)
+    return {"memories": memory.list_memories(workspace_id, limit)}
+
+
+@app.delete("/api/memory/{memory_id}")
+def delete_memory(memory_id: str):
+    """删除单条记忆。"""
+    import memory
+    ok = memory.delete_memory(memory_id)
+    if not ok:
+        return JSONResponse({"error": "记忆不存在"}, status_code=404)
+    return {"ok": True}
 
 
 @app.get("/api/git/status")
