@@ -31,6 +31,11 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+try:
+    import backend.db as db
+except ImportError:
+    import db
+
 # ---------------------------------------------------------------
 # 路径规划：
 #   - 开发模式：资源根目录 = 项目根目录（backend/..）
@@ -48,6 +53,9 @@ else:
 load_dotenv(EXE_DIR / ".env")  # 先读 exe 同目录 .env
 if not os.getenv("DEEPSEEK_API_KEY") and not PACKAGED:
     load_dotenv(BASE_DIR / ".env")  # 开发模式兜底再读项目根 .env
+
+# 初始化 SQLite 数据库（创建表 + 从旧 JSON 迁移数据）
+db.setup()
 
 # 注意：部分 crewai 版本（或安装方式）的顶级导出中不再包含独立的 LLM 类，
 # 也没有 crewai.llms 子模块；因此将核心类（Agent/Crew/Process/Task）与 LLM
@@ -75,14 +83,6 @@ except Exception:
 app = FastAPI(title="CrewAI Workbench", version="1.2.0")
 
 # ---------------------------------------------------------------
-# 模型配置（用户点击前端头像配置，持久化到 model_config.json）
-#   开发模式: 项目根目录/model_config.json
-#   打包模式: exe 同目录/model_config.json
-# ---------------------------------------------------------------
-MODEL_CONFIG_FILE = EXE_DIR / "model_config.json"
-WORKSPACES_FILE = EXE_DIR / "workspaces.json"
-MODEL_PRESETS_FILE = EXE_DIR / "model_presets.json"
-
 # 实际监听端口（main() 启动时写入），用于 Agent 自调用后端集成端点
 SERVER_PORT: int = 8000
 
@@ -96,58 +96,26 @@ DEFAULT_MODEL_CONFIG: dict[str, str] = {
 
 def _load_model_config() -> dict[str, str]:
     """读取模型配置，文件不存在时返回默认（DeepSeek）。"""
-    cfg = dict(DEFAULT_MODEL_CONFIG)
-    try:
-        if MODEL_CONFIG_FILE.exists():
-            with open(MODEL_CONFIG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                for k in DEFAULT_MODEL_CONFIG:
-                    if isinstance(data.get(k), str):
-                        cfg[k] = data[k].strip()
-    except Exception:
-        pass
-    return cfg
+    return db.load_model_config(DEFAULT_MODEL_CONFIG)
 
 
 def _save_model_config(cfg: dict[str, str]) -> None:
-    """保存模型配置到本地 JSON 文件。"""
-    try:
-        with open(MODEL_CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception as exc:  # noqa: BLE001
-        log_buffer.emit("ERROR", "system", f"保存模型配置失败：{exc}")
+    """保存模型配置到 SQLite。"""
+    db.save_model_config(cfg)
 
 
 # ---------------------------------------------------------------
 # 模型预设（多套配置，可命名保存、切换、删除）
-#   持久化到 model_presets.json
-#   结构：{"presets": [...], "active_id": "..."}
+#   持久化到 SQLite
 # ---------------------------------------------------------------
 def _load_presets() -> dict:
     """读取模型预设列表。"""
-    default: dict = {"presets": [], "active_id": ""}
-    try:
-        if MODEL_PRESETS_FILE.exists():
-            with open(MODEL_PRESETS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                if isinstance(data.get("presets"), list):
-                    default["presets"] = data["presets"]
-                if isinstance(data.get("active_id"), str):
-                    default["active_id"] = data["active_id"]
-    except Exception:
-        pass
-    return default
+    return db.load_presets()
 
 
 def _save_presets(data: dict) -> None:
-    """保存模型预设到本地 JSON 文件。"""
-    try:
-        with open(MODEL_PRESETS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as exc:  # noqa: BLE001
-        log_buffer.emit("ERROR", "system", f"保存模型预设失败：{exc}")
+    """保存模型预设到 SQLite。"""
+    db.save_presets(data)
 
 
 def _mask_api_key(key: str) -> str:
@@ -175,55 +143,19 @@ def _preset_to_public(p: dict) -> dict:
 
 # ---------------------------------------------------------------
 # 工作空间管理
-#   开发模式: 项目根目录/workspaces.json
-#   打包模式: exe 同目录/workspaces.json
+#   持久化到 SQLite
 # ---------------------------------------------------------------
 DEFAULT_WORKSPACE_ID: str | None = None
 
 
 def _load_workspaces() -> dict:
     """读取工作空间配置（含列表与当前选中项）。"""
-    default = {"current_id": None, "workspaces": []}
-    try:
-        if WORKSPACES_FILE.exists():
-            with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                if isinstance(data.get("workspaces"), list):
-                    # 按路径去重，保留最新创建的条目
-                    seen: dict[str, dict] = {}
-                    for ws in data["workspaces"]:
-                        if not isinstance(ws, dict):
-                            continue
-                        path = ws.get("path", "")
-                        if not path:
-                            continue
-                        # 后出现的覆盖先出现的（保留最新）
-                        seen[path] = ws
-                    deduped = list(seen.values())
-                    default["workspaces"] = deduped
-                    # 如果去重后数量变化了，写回文件
-                    if len(deduped) != len(data["workspaces"]):
-                        data["workspaces"] = deduped
-                        # 确保 current_id 仍然有效
-                        if data.get("current_id") not in {w.get("id") for w in deduped}:
-                            data["current_id"] = deduped[0]["id"] if deduped else None
-                        _save_workspaces(data)
-                        default["current_id"] = data.get("current_id")
-                if isinstance(data.get("current_id"), str) and default["current_id"] is None:
-                    default["current_id"] = data["current_id"]
-    except Exception:
-        pass
-    return default
+    return db.load_workspaces()
 
 
 def _save_workspaces(data: dict) -> None:
-    """保存工作空间配置到本地 JSON 文件。"""
-    try:
-        with open(WORKSPACES_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as exc:  # noqa: BLE001
-        log_buffer.emit("ERROR", "system", f"保存工作空间失败：{exc}")
+    """保存工作空间配置到 SQLite。"""
+    db.save_workspaces(data)
 
 
 def _normalize_workspace_path(path: str) -> str:
@@ -1611,30 +1543,17 @@ def list_integrations():
 
 
 # ---------------------------------------------------------------
-# 集成管理 - 技能管理（HTTP API 技能 + Claude 技能 SKILL.md，持久化到 skills.json）
+# 集成管理 - 技能管理（HTTP API 技能 + Claude 技能 SKILL.md，持久化到 SQLite）
 # ---------------------------------------------------------------
-SKILLS_FILE = EXE_DIR / "skills.json"
 CLAUDE_SKILLS_REPO = "anthropics/skills"
 
 
 def _load_skills() -> list[dict]:
-    try:
-        if SKILLS_FILE.exists():
-            with open(SKILLS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                return [s for s in data if isinstance(s, dict)]
-    except Exception:
-        pass
-    return []
+    return db.load_skills()
 
 
 def _save_skills(skills: list[dict]) -> None:
-    try:
-        with open(SKILLS_FILE, "w", encoding="utf-8") as f:
-            json.dump(skills, f, ensure_ascii=False, indent=2)
-    except Exception as exc:  # noqa: BLE001
-        log_buffer.emit("ERROR", "system", f"保存技能配置失败：{exc}")
+    db.save_skills(skills)
 
 
 class SkillRequest(BaseModel):
@@ -1868,9 +1787,8 @@ def import_claude_skills(req: ImportClaudeRequest):
 # ---------------------------------------------------------------
 # 任务编排 - 可视化工作流（自研引擎，架构对齐 Dify workflow）
 #   图 DAG + 变量池 + 节点执行器，支持导入 Dify DSL
+#   持久化到 SQLite
 # ---------------------------------------------------------------
-WORKFLOWS_FILE = EXE_DIR / "workflows.json"
-
 try:
     from wf_engine import WorkflowEngine  # noqa: E402
     from wf_engine.dsl import convert_dify_dsl  # noqa: E402
@@ -1890,20 +1808,11 @@ except ImportError:
 
 
 def _load_workflows() -> list[dict]:
-    try:
-        if WORKFLOWS_FILE.exists():
-            with open(WORKFLOWS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                return data
-    except Exception:
-        pass
-    return []
+    return db.load_workflows()
 
 
 def _save_workflows(items: list[dict]) -> None:
-    with open(WORKFLOWS_FILE, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
+    db.save_workflows(items)
 
 
 class WorkflowRequest(BaseModel):
