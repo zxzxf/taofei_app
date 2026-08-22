@@ -32,7 +32,12 @@
             </div>
             <div class="chat-session-meta">
               {{ formatTime(s.time) }} · {{ s.messages.length }} 条消息
-              <span class="session-memory-icon" :class="{ on: s.memoryEnabled !== false }" :title="s.memoryEnabled !== false ? '会话记忆已开启（跨会话自动召回）' : '会话记忆已关闭'">🧠</span>
+              <button
+                class="session-memory-icon"
+                :class="{ on: s.memoryEnabled !== false }"
+                :title="s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
+                @click.stop="toggleSessionMemory(s)"
+              >🧠</button>
             </div>
             <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
               <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
@@ -289,12 +294,6 @@
             <img :src="img.dataUrl" :alt="img.name">
             <button class="chat-input-image-del" @click="removePendingImage(i)" title="移除">✕</button>
           </div>
-        </div>
-        <div class="chat-memory-row">
-          <label class="chat-memory-chip" :class="{ disabled: !currentWorkspaceId }" :title="currentWorkspaceId ? '跨会话记忆：任务结束后自动记住结论，下次可召回' : '选择工作空间后可用记忆'">
-            <input type="checkbox" :checked="currentSession?.memoryEnabled !== false" :disabled="!currentWorkspaceId" @change="e => { if (currentSession) currentSession.memoryEnabled = e.target.checked; saveSessions() }" />
-            🧠 记忆：{{ currentSession?.memoryEnabled !== false && currentWorkspaceId ? '开' : '关' }}
-          </label>
         </div>
         <div v-if="knowledgeBases.length" class="chat-kb-row">
           <span class="chat-kb-label">📚 知识库</span>
@@ -681,6 +680,12 @@ function confirmSkillSelection() {
     saveSessions()
   }
   showSkillPicker.value = false
+}
+
+// 切换会话记忆开关（会话级，点击会话列表的 🧠 图标）
+function toggleSessionMemory(s) {
+  s.memoryEnabled = !(s.memoryEnabled !== false)
+  saveSessions()
 }
 
 async function deleteSession(id) {
@@ -2136,15 +2141,23 @@ function onFilePick(node) {
 .chat-model-menu-check { color: #22c55e; font-weight: 700; font-size: 14px; }
 
 .chat-session-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; align-items: center; }
-/* 会话记忆状态图标：开=高亮，关=置灰 */
+/* 会话记忆开关图标：开=高亮，关=置灰；可点击切换 */
 .session-memory-icon {
   display: inline-block;
   margin-left: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
   font-size: 11px;
+  line-height: 1;
   opacity: .35;
   filter: grayscale(1);
   vertical-align: -1px;
-  transition: opacity .15s;
+  cursor: pointer;
+  transition: opacity .15s, transform .15s;
+}
+.session-memory-icon:hover {
+  transform: scale(1.15);
 }
 .session-memory-icon.on {
   opacity: 1;
@@ -2451,42 +2464,6 @@ function onFilePick(node) {
   gap: 8px;
 }
 /* ===== 知识库选择条 ===== */
-.chat-memory-row {
-  display: flex;
-  align-items: center;
-  padding: 6px 4px 0;
-}
-.chat-memory-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 12px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--bg-soft);
-  font-size: 12px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all .15s;
-  user-select: none;
-}
-.chat-memory-chip:hover:not(.disabled) {
-  border-color: var(--primary);
-}
-.chat-memory-chip.disabled {
-  opacity: .45;
-  cursor: not-allowed;
-}
-.chat-memory-chip input {
-  accent-color: var(--primary);
-  margin: 0;
-  cursor: pointer;
-}
-.chat-memory-chip:has(input:checked) {
-  border-color: var(--primary);
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--primary);
-}
 .chat-kb-row {
   display: flex;
   align-items: center;
