@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -894,6 +894,12 @@ class AgentRunRequest(BaseModel):
     workspace_id: str | None = None
     images: list[str] = []  # 多模态图片（data URL 或 URL），传给首条用户消息
     skill_ids: list[str] = []  # 会话绑定的技能 id（来自技能管理列表）
+    knowledge_ids: list[str] = []  # 本次任务引用的知识库 id 列表（RAG）
+
+
+class KnowledgeBaseCreate(BaseModel):
+    name: str
+    description: str = ""
 
 
 class GitCommitRequest(BaseModel):
@@ -2168,7 +2174,7 @@ async def ws_endpoint(websocket: WebSocket):
 # ---------------------------------------------------------------
 # Agent（ReAct 循环）
 # ---------------------------------------------------------------
-def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None):
+def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None, knowledge_ids: list[str] | None = None):
     """后台线程执行 ReAct Agent。"""
     try:
         with _tasks_lock:
@@ -2179,6 +2185,18 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             raise RuntimeError("agent_runner 未安装")
         if not HAS_CREWAI:
             raise RuntimeError("LLM 功能不可用：crewai/langchain 未安装")
+
+        # RAG 上下文注入：检索知识库相关片段后改写 user_request
+        if knowledge_ids:
+            try:
+                import retriever
+                import rag_prompt
+                chunks = retriever.retrieve(user_request, knowledge_ids, top_k=5)
+                if chunks:
+                    user_request = rag_prompt.build_rag_context(user_request, chunks)
+                    log_buffer.emit("INFO", "system", f"RAG 检索命中 {len(chunks)} 个片段", task_id)
+            except Exception as exc:
+                log_buffer.emit("WARNING", "system", f"RAG 检索失败：{exc}", task_id)
 
         llm = _build_llm(model_preset_id)
         if llm is None:
@@ -2298,7 +2316,7 @@ def agent_run(req: AgentRunRequest):
     log_buffer.emit("INFO", "system", f"收到 Agent 任务：{req.request[:60]}", task_id)
     threading.Thread(
         target=_run_agent_async,
-        args=(task_id, req.request, workspace_path, req.model_preset_id, req.images or [], req.skill_ids or []),
+        args=(task_id, req.request, workspace_path, req.model_preset_id, req.images or [], req.skill_ids or [], req.knowledge_ids or []),
         daemon=True,
     ).start()
     return {"task_id": task_id}
@@ -2321,6 +2339,65 @@ def agent_cancel(task_id: str):
     _notify_task_update(task_id)
     log_buffer.emit("INFO", "system", f"用户请求取消任务：{task_id}", task_id)
     return {"ok": True, "message": "已收到取消请求，任务将在当前步骤结束后停止"}
+
+
+# ---------------------------------------------------------------
+# 知识库（RAG）
+# ---------------------------------------------------------------
+@app.get("/api/knowledge")
+def list_knowledge():
+    """列出所有知识库（含分块数）。"""
+    import knowledge
+    return {"knowledge_bases": knowledge.list_kbs()}
+
+
+@app.post("/api/knowledge")
+def create_knowledge(req: KnowledgeBaseCreate):
+    """创建知识库。"""
+    import knowledge
+    if not req.name.strip():
+        return JSONResponse({"error": "知识库名称不能为空"}, status_code=400)
+    return knowledge.create_kb(req.name.strip(), req.description)
+
+
+@app.delete("/api/knowledge/{kb_id}")
+def delete_knowledge(kb_id: str):
+    """删除知识库及其全部分块。"""
+    import knowledge
+    ok = knowledge.delete_kb(kb_id)
+    if not ok:
+        return JSONResponse({"error": "知识库不存在"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/knowledge/{kb_id}/upload")
+async def upload_knowledge_file(kb_id: str, file: UploadFile = File(...)):
+    """上传文件到知识库并触发入库（分块 + 向量化）。"""
+    import knowledge
+    if not file.filename:
+        return JSONResponse({"error": "文件名不能为空"}, status_code=400)
+    upload_dir = db.USER_DATA_DIR / "uploads" / kb_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / file.filename
+    with open(dest, "wb") as f:
+        f.write(await file.read())
+    try:
+        count = knowledge.upload_file(kb_id, str(dest))
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return {"ok": True, "chunks": count, "file": file.filename}
+
+
+@app.get("/api/knowledge/{kb_id}/chunks")
+def list_knowledge_chunks(kb_id: str, limit: int = Query(20, ge=1, le=100)):
+    """查看知识库的分块列表（调试用）。"""
+    import db
+    with db._get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, source_path, chunk_index, substr(content, 1, 200) AS preview FROM knowledge_chunks WHERE kb_id=? ORDER BY chunk_index LIMIT ?",
+            (kb_id, limit),
+        ).fetchall()
+    return {"chunks": [dict(r) for r in rows]}
 
 
 @app.get("/api/git/status")
