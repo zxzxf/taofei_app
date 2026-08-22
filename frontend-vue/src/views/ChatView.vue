@@ -182,7 +182,7 @@
                   @click="msg.thinkingExpanded = !msg.thinkingExpanded"
                   title="点击折叠/展开思考时间线"
                 >
-                  耗时 {{ formatThinkingDuration(msg.thinkingDuration) }}
+                  总耗时 {{ totalDurationSeconds(msg) }}秒
                   <span class="chat-report-collapse-arrow" :class="{ expanded: msg.thinkingExpanded !== false }">▼</span>
                 </span>
               </div>
@@ -546,6 +546,18 @@ function formatThinkingDuration(sec) {
   sec = Math.round(sec)
   if (sec < 60) return `${sec}s`
   return `${Math.floor(sec / 60)}m${sec % 60}s`
+}
+
+// 根据时间线索引项的 elapsed 计算任务总耗时（秒）
+function totalDurationSeconds(msg) {
+  let total = 0
+  if (msg.timeline && msg.timeline.length) {
+    for (const item of msg.timeline) {
+      if (item && item.elapsed && item.elapsed > total) total = item.elapsed
+    }
+  }
+  if (msg.thinkingDuration && msg.thinkingDuration > total) total = msg.thinkingDuration
+  return total
 }
 
 function renderMarkdown(text) {
