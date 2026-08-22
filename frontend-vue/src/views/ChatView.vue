@@ -204,6 +204,7 @@
                         <div class="timeline-thinking-header">
                           <span class="timeline-icon">💭</span>
                           <span class="timeline-label">思考中。。。</span>
+                          <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                         </div>
                         <div class="timeline-thinking-content">{{ item.content }}</div>
                       </div>
@@ -213,6 +214,7 @@
                           <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
                           <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
                           <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
+                          <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                           <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                         </div>
                         <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
@@ -250,6 +252,7 @@
                       <div class="timeline-thinking-header">
                         <span class="timeline-icon">💭</span>
                         <span class="timeline-label">思考中。。。</span>
+                        <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                       </div>
                       <div class="timeline-thinking-content">{{ item.content }}</div>
                     </div>
@@ -259,6 +262,7 @@
                         <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
                         <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
                         <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
+                        <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                         <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                       </div>
                       <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
@@ -2593,6 +2597,12 @@ function onFilePick(node) {
   background: rgba(139, 92, 246, 0.1);
   font-size: 11.5px;
   font-family: 'Cascadia Code', Consolas, monospace;
+}
+.timeline-elapsed {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .timeline-arrow {
   font-size: 9px;

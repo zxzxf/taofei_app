@@ -565,6 +565,7 @@ def run_agent_task(
                         "type": "thinking",
                         "content": thinking_content,
                         "time": time.strftime("%H:%M:%S"),
+                        "elapsed": int(time.time() - task_start_time),
                     })
                 # 添加命令执行项
                 timeline.append({
@@ -574,6 +575,7 @@ def run_agent_task(
                     "result": observation_text,
                     "status": status,
                     "time": time.strftime("%H:%M:%S"),
+                    "elapsed": int(time.time() - task_start_time),
                 })
                 task_store[task_id]["timeline"] = timeline
             if notify_update:
