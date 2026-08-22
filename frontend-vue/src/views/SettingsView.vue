@@ -58,6 +58,7 @@
                   <option value="qwen">通义千问</option>
                   <option value="glm">智谱 GLM</option>
                   <option value="moonshot">Moonshot</option>
+                  <option value="xunfei_codingplan">讯飞CodingPlan</option>
                   <option value="ollama">Ollama</option>
                   <option value="custom">自定义</option>
                 </select>
@@ -356,6 +357,7 @@ const providerList = [
   { key: 'qwen', name: '通义千问', icon: '🌟', model: 'qwen-plus', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   { key: 'glm', name: '智谱GLM', icon: '⚡', model: 'glm-4-flash', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
   { key: 'moonshot', name: 'Moonshot', icon: '🌙', model: 'moonshot-v1-8k', baseUrl: 'https://api.moonshot.cn/v1' },
+  { key: 'xunfei_codingplan', name: '讯飞CodingPlan', icon: '🚀', model: 'codingplan', baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3' },
   { key: 'ollama', name: 'Ollama', icon: '🦙', model: 'llama3.2', baseUrl: 'http://localhost:11434' },
 ]
 
