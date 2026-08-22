@@ -48,6 +48,7 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
+import { appConfirm } from '../utils/appDialog.js'
 
 const kbs = ref([])
 const newName = ref('')
@@ -106,7 +107,8 @@ async function createKb() {
 }
 
 async function deleteKb(id) {
-  if (!confirm('确定删除该知识库及其全部分块？此操作不可恢复。')) return
+  const ok = await appConfirm('确定删除该知识库及其全部分块？此操作不可恢复。')
+  if (!ok) return
   try {
     const res = await fetch(`/api/knowledge/${id}`, { method: 'DELETE' })
     if (!res.ok) {
