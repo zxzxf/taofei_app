@@ -195,52 +195,57 @@ def grep_code(
         total_matches = 0
         MAX_MATCHES = 200  # 最多匹配数，防止过多
 
-        # 遍历文件
-        for dirpath, dirnames, filenames in os.walk(search_root):
-            # 过滤掉忽略的目录（原地修改 dirnames，os.walk 就不会进去）
-            dirnames[:] = [d for d in dirnames if not _is_ignored_dir(d)]
+        # 收集待扫描文件：path 可以是目录（递归遍历）或单个文件
+        files_to_scan: list[str] = []
+        if search_root.is_file():
+            files_to_scan.append(str(search_root))
+        else:
+            for dirpath, dirnames, filenames in os.walk(search_root):
+                # 过滤掉忽略的目录（原地修改 dirnames，os.walk 就不会进去）
+                dirnames[:] = [d for d in dirnames if not _is_ignored_dir(d)]
+                for fname in filenames:
+                    files_to_scan.append(os.path.join(dirpath, fname))
 
-            for fname in filenames:
-                if not _is_code_file(fname):
-                    continue
-                if include_exts:
-                    ext_ok = any(fname.lower().endswith(ext) for ext in include_exts)
-                    if not ext_ok:
-                        continue
-
-                full_path = os.path.join(dirpath, fname)
-                # 跳过符号链接和过大的文件
-                try:
-                    if os.path.islink(full_path):
-                        continue
-                    size = os.path.getsize(full_path)
-                    if size > MAX_FILE_SIZE:
-                        continue
-                except OSError:
+        # 逐个文件扫描
+        for full_path in files_to_scan:
+            fname = os.path.basename(full_path)
+            if not _is_code_file(fname):
+                continue
+            if include_exts:
+                ext_ok = any(fname.lower().endswith(ext) for ext in include_exts)
+                if not ext_ok:
                     continue
 
-                try:
-                    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
-                        lines = f.readlines()
-                except OSError:
+            # 跳过符号链接和过大的文件
+            try:
+                if os.path.islink(full_path):
                     continue
+                size = os.path.getsize(full_path)
+                if size > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
 
-                file_matched = False
-                for line_idx, line in enumerate(lines):
-                    line_stripped = line.rstrip("\n").rstrip("\r")
-                    haystack = line_stripped if case_sensitive else line_stripped.lower()
-                    if search_pattern in haystack:
-                        # 计算相对路径
-                        rel_path = os.path.relpath(full_path, root)
-                        results.append((rel_path, line_idx + 1, line_stripped.strip()))
-                        total_matches += 1
-                        file_matched = True
-                        if total_matches >= MAX_MATCHES:
-                            break
-                if file_matched:
-                    file_count += 1
-                if total_matches >= MAX_MATCHES:
-                    break
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()
+            except OSError:
+                continue
+
+            file_matched = False
+            for line_idx, line in enumerate(lines):
+                line_stripped = line.rstrip("\n").rstrip("\r")
+                haystack = line_stripped if case_sensitive else line_stripped.lower()
+                if search_pattern in haystack:
+                    # 计算相对路径
+                    rel_path = os.path.relpath(full_path, root)
+                    results.append((rel_path, line_idx + 1, line_stripped.strip()))
+                    total_matches += 1
+                    file_matched = True
+                    if total_matches >= MAX_MATCHES:
+                        break
+            if file_matched:
+                file_count += 1
             if total_matches >= MAX_MATCHES:
                 break
 
