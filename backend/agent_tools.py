@@ -316,17 +316,21 @@ def _resolve_python_exe() -> str | None:
     打包（PyInstaller）环境下 sys.executable 是应用本体（CrewAIWorkbench.exe），
     不能当解释器用——直接 spawn 会拉起一个全新后端实例（该实例还会自动打开
     浏览器），这是「会话中心说'分析项目'就弹出 http://127.0.0.1:800x/chat
-    新建会话页面」的根源。此时改为在系统 PATH 中查找真实的 python。
+    新建会话页面」的根源。此时改为在系统 PATH 及常见安装目录中查找真实的 python。
     """
     if not getattr(sys, "frozen", False):
         return sys.executable
+
     candidates: list[str] = []
     seen: set[str] = set()
+
+    # 1) PATH 中的候选
     for name in ("python.exe", "python3.exe", "python", "python3", "py"):
         p = shutil.which(name)
         if p and p not in seen:
             seen.add(p)
             candidates.append(p)
+
     # which 只返回 PATH 中的第一个匹配；手动遍历 PATH，避免第一个命中
     # WindowsApps 别名后漏掉后面真实的 python。
     for name in ("python.exe", "python3.exe"):
@@ -337,6 +341,60 @@ def _resolve_python_exe() -> str | None:
             if p not in seen:
                 seen.add(p)
                 candidates.append(p)
+
+    # 2) 扫描常见 Python 安装目录（Windows 常见位置）
+    user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+    program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+    local_appdata = os.environ.get("LOCALAPPDATA", "C:\\Users\\" + user + "\\AppData\\Local")
+
+    common_dirs: list[str] = []
+    for major in (3,):
+        for minor in range(13, 6, -1):  # 3.13 -> 3.7
+            common_dirs.append(rf"C:\Python{major}{minor}")
+            common_dirs.append(rf"C:\Python{major}{minor}-32")
+            common_dirs.append(rf"C:\Python{major}{minor}-64")
+            common_dirs.append(os.path.join(program_files, rf"Python{major}{minor}"))
+            common_dirs.append(os.path.join(program_files_x86, rf"Python{major}{minor}"))
+            common_dirs.append(os.path.join(local_appdata, rf"Programs\Python\Python{major}{minor}"))
+            common_dirs.append(rf"C:\Users\{user}\AppData\Local\Programs\Python\Python{major}{minor}")
+
+    for d in common_dirs:
+        if not d:
+            continue
+        for name in ("python.exe", "python3.exe"):
+            p = os.path.join(d, name)
+            if p not in seen:
+                seen.add(p)
+                candidates.append(p)
+
+    # 3) 使用注册表查找 Windows 上通过官方安装程序安装的 Python（PEP 514）
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            def _enum_reg(root: int, key_path: str) -> None:
+                try:
+                    with winreg.OpenKey(root, key_path) as key:
+                        for i in range(winreg.QueryInfoKey(key)[0]):
+                            try:
+                                sub_name = winreg.EnumKey(key, i)
+                                with winreg.OpenKey(key, sub_name) as sub_key:
+                                    install_path, _ = winreg.QueryValueEx(sub_key, "ExecutablePath")
+                                    if install_path and os.path.isfile(install_path) and install_path not in seen:
+                                        seen.add(install_path)
+                                        candidates.append(install_path)
+                            except OSError:
+                                continue
+                except OSError:
+                    return
+
+            _enum_reg(winreg.HKEY_CURRENT_USER, r"Software\Python\PythonCore")
+            _enum_reg(winreg.HKEY_LOCAL_MACHINE, r"Software\Python\PythonCore")
+            _enum_reg(winreg.HKEY_LOCAL_MACHINE, r"Software\Wow6432Node\Python\PythonCore")
+        except Exception:
+            pass
+
     for cand in candidates:
         if _is_usable_python(cand):
             return cand
@@ -603,7 +661,15 @@ def build_skill_tools(skills: list[dict]) -> list[dict]:
 def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list[dict]], str], args: dict, skills: list[dict] | None = None) -> dict:
     """根据工具名分发执行。skills 提供动态注册的 HTTP 技能（call_skill_<id>）。"""
     if name == "read_file":
-        return read_file(workspace_path, args.get("path", ""))
+        try:
+            offset = int(args.get("offset", 1))
+        except Exception:
+            offset = 1
+        try:
+            limit = int(args.get("limit", 100))
+        except Exception:
+            limit = 100
+        return read_file(workspace_path, args.get("path", ""), offset=offset, limit=limit)
     if name == "grep_code":
         return grep_code(
             workspace_path,
