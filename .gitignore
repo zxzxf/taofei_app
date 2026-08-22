@@ -57,6 +57,7 @@ taofei_app.db
 # RAG runtime data
 data/uploads/
 data/models/
+uploads/
 
 # PyInstaller 构建时自动生成的版本文件（见 build/CrewAIWorkbench.spec）
 backend/_version.py
