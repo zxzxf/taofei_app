@@ -157,6 +157,19 @@ def init_db() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_kb ON knowledge_chunks(kb_id)")
 
+        # 跨会话记忆（按工作空间隔离）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_entries (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                created_at REAL,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_ws ON memory_entries(workspace_id)")
+
         conn.commit()
 
 
