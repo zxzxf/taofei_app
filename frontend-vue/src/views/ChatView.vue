@@ -30,7 +30,10 @@
               {{ s.title }}
               <span v-if="s.sending" class="session-running-dot" title="正在思考中"></span>
             </div>
-            <div class="chat-session-meta">{{ formatTime(s.time) }} · {{ s.messages.length }} 条消息</div>
+            <div class="chat-session-meta">
+              {{ formatTime(s.time) }} · {{ s.messages.length }} 条消息
+              <span class="session-memory-icon" :class="{ on: s.memoryEnabled !== false }" :title="s.memoryEnabled !== false ? '会话记忆已开启（跨会话自动召回）' : '会话记忆已关闭'">🧠</span>
+            </div>
             <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
               <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
                 🤖 {{ presetNameById(s.modelPresetId) }}
@@ -2133,6 +2136,20 @@ function onFilePick(node) {
 .chat-model-menu-check { color: #22c55e; font-weight: 700; font-size: 14px; }
 
 .chat-session-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; align-items: center; }
+/* 会话记忆状态图标：开=高亮，关=置灰 */
+.session-memory-icon {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: .35;
+  filter: grayscale(1);
+  vertical-align: -1px;
+  transition: opacity .15s;
+}
+.session-memory-icon.on {
+  opacity: 1;
+  filter: none;
+}
 .chat-session-model-chip {
   font-size: 10px; padding: 1px 7px; border-radius: 10px;
   background: rgba(59, 130, 246, 0.1); color: var(--primary);
