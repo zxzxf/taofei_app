@@ -289,8 +289,8 @@
         </div>
         <div class="chat-memory-row">
           <label class="chat-memory-chip" :class="{ disabled: !currentWorkspaceId }" :title="currentWorkspaceId ? '跨会话记忆：任务结束后自动记住结论，下次可召回' : '选择工作空间后可用记忆'">
-            <input type="checkbox" v-model="memoryEnabled" :disabled="!currentWorkspaceId" />
-            🧠 记忆：{{ memoryEnabled && currentWorkspaceId ? '开' : '关' }}
+            <input type="checkbox" :checked="currentSession?.memoryEnabled !== false" :disabled="!currentWorkspaceId" @change="e => { if (currentSession) currentSession.memoryEnabled = e.target.checked; saveSessions() }" />
+            🧠 记忆：{{ currentSession?.memoryEnabled !== false && currentWorkspaceId ? '开' : '关' }}
           </label>
         </div>
         <div v-if="knowledgeBases.length" class="chat-kb-row">
@@ -486,10 +486,6 @@ const imageInput = ref(null)
 const pendingImages = ref([])
 const knowledgeBases = ref([])
 const selectedKnowledgeIds = ref([])
-const memoryEnabled = ref(localStorage.getItem('memoryEnabled') !== 'false')
-watch(memoryEnabled, (v) => {
-  localStorage.setItem('memoryEnabled', String(v))
-})
 const MAX_IMAGES = 4
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
@@ -676,6 +672,7 @@ function confirmSkillSelection() {
       messages: [],
       skills: [...tempSelectedSkills.value],
       modelPresetId: globalDefaultPresetId.value || '',  // 新建会话时绑定当前默认模型
+      memoryEnabled: true,  // 每个新会话自动开启跨会话记忆
     })
     currentId.value = id
     saveSessions()
@@ -967,6 +964,7 @@ async function send() {
       messages: [],
       skills: [],
       modelPresetId: globalDefaultPresetId.value || '',
+      memoryEnabled: true,  // 自动开启会话记忆
       sending: false,
     }
     sessions.value.unshift(s)
@@ -1212,7 +1210,7 @@ async function sendAgent(s, text, images = []) {
         images: images.map(i => i.dataUrl),
         skill_ids: (s.skills || []).map(sk => sk.id),
         knowledge_ids: selectedKnowledgeIds.value,
-        memory_enabled: memoryEnabled.value && !!currentWorkspaceId.value,
+        memory_enabled: (s.memoryEnabled !== false) && !!currentWorkspaceId.value,
       }),
     })
     if (!startRes.ok) {
