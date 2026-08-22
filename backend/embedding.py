@@ -9,12 +9,25 @@
 - 首次调用时自动下载模型并缓存到 data/models/。
 """
 
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-MODEL_CACHE_DIR = BASE_DIR / "data" / "models"
+# 模型缓存目录：
+# - 开发模式：项目根 data/models/
+# - 打包模式：用户数据目录 data/models/（_MEIPASS 是只读临时目录，不可写）
+#   与 db.py 的 USER_DATA_DIR 保持一致，卸载应用后模型缓存不丢失。
+PACKAGED = hasattr(sys, "_MEIPASS")
+if PACKAGED:
+    _user_data = Path(
+        os.environ.get("APPDATA", Path.home() / "AppData/Roaming")
+    ) / "taofei_app"
+else:
+    _user_data = Path(__file__).resolve().parent.parent
+
+MODEL_CACHE_DIR = _user_data / "data" / "models"
 MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 LOCAL_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -34,6 +47,11 @@ def _load_local_model():
         raise RuntimeError("sentence-transformers 未安装，请执行 pip install sentence-transformers") from exc
     _local_model = SentenceTransformer(LOCAL_MODEL_NAME, cache_folder=str(MODEL_CACHE_DIR))
     return _local_model
+
+
+def is_loaded() -> bool:
+    """模型是否已加载到内存（供 /api/health 与前端启动 loading 使用）。"""
+    return _local_model is not None
 
 
 def get_embedding(text: str) -> list[float]:

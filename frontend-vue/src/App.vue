@@ -1,5 +1,14 @@
 <template>
-  <aside class="sidebar">
+  <!-- 启动 loading：初始化完成前显示，避免页面短暂空白/卡顿无反馈 -->
+  <div v-if="!bootReady" class="boot-loading">
+    <div class="boot-logo">淘飞<span>AI</span></div>
+    <div class="boot-sub">企业级 AI 智能体平台</div>
+    <div class="boot-spinner"></div>
+    <div class="boot-text">{{ bootText }}</div>
+  </div>
+
+  <template v-else>
+    <aside class="sidebar">
     <div class="brand">
       <div class="brand-logo">淘</div>
       <div class="brand-name">淘飞AI</div>
@@ -67,6 +76,7 @@
 
   <!-- 应用内自定义对话框（替代原生 confirm/alert/prompt，规避 Electron 焦点缺陷） -->
   <AppDialog />
+  </template>
 </template>
 
 <script setup>
@@ -89,6 +99,8 @@ const wsStatus = ref('disconnected')
 const isLight = ref(false)
 const toastVisible = ref(false)
 const toastMsg = ref('')
+const bootReady = ref(false)
+const bootText = ref('正在加载工作台…')
 
 const currentWsName = computed(() => {
   const ws = workspaces.value.find(w => w.id === currentWsId.value)
@@ -325,6 +337,20 @@ onMounted(async () => {
   wsManager.connect()
   wsStatus.value = wsManager.status
   wsUnsub = wsManager.onStatus((s) => { wsStatus.value = s })
+
+  // 启动 loading：等待健康检查 + 初始化完成后淡出
+  try {
+    const res = await fetch('/api/health')
+    if (res.ok) {
+      const data = await res.json()
+      if (data && data.embedding_warmup === false) {
+        bootText.value = '正在预热本地模型（首次启动可能需要 1-2 分钟）…'
+      }
+    }
+  } catch { /* 健康检查失败不阻塞进入 */ }
+  // 至少展示片刻，避免 loading 一闪而过
+  await new Promise((r) => setTimeout(r, 700))
+  bootReady.value = true
 })
 
 let wsUnsub = null
@@ -335,3 +361,48 @@ onUnmounted(() => {
   }
 })
 </script>
+
+<style scoped>
+/* 启动 loading：与 Electron splash 呼应，页面初始化完成前显示 */
+.boot-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg, #05080f);
+  color: var(--text-secondary, #94a3b8);
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+.boot-logo {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--text, #e2e8f0);
+  margin-bottom: 6px;
+}
+.boot-logo span { color: var(--primary, #3b82f6); }
+.boot-sub {
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  margin-bottom: 28px;
+}
+.boot-spinner {
+  width: 30px;
+  height: 30px;
+  margin-bottom: 18px;
+  border: 3px solid rgba(139, 92, 246, 0.18);
+  border-top-color: var(--primary, #3b82f6);
+  border-radius: 50%;
+  animation: boot-spin 0.9s linear infinite;
+}
+@keyframes boot-spin {
+  to { transform: rotate(360deg); }
+}
+.boot-text {
+  font-size: 12.5px;
+  color: var(--text-muted, #64748b);
+}
+</style>

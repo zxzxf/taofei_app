@@ -928,11 +928,19 @@ def health():
     cfg = _load_model_config()
     key_ok = bool(cfg.get("api_key")) or bool(os.getenv("DEEPSEEK_API_KEY"))
     current_ws = _get_current_workspace()
+    # embedding 模型预热状态（供前端启动 loading 展示文案）
+    embedding_warmup = True
+    try:
+        import embedding
+        embedding_warmup = embedding.is_loaded()
+    except Exception:
+        pass
     return {
         "status": "ok",
         "api_key_configured": key_ok,
         "provider": cfg.get("provider", ""),
         "model": cfg.get("model", ""),
+        "embedding_warmup": embedding_warmup,
         "workspace": {
             "id": current_ws.get("id") if current_ws else None,
             "name": current_ws.get("name") if current_ws else None,
@@ -2978,6 +2986,21 @@ async def spa_fallback(full_path: str):
 # ---------------------------------------------------------------
 # 启动入口
 # ---------------------------------------------------------------
+def _warmup_embedding() -> None:
+    """后台预热本地 embedding 模型。
+
+    打包后首次调用 embedding 需从磁盘加载约 90MB 模型（同步可能阻塞数秒到
+    数十秒，表现为「启动后第一次用知识库/记忆时卡住」）。应用启动时提前在
+    后台线程加载，让模型常驻内存，首次实际操作即可直接使用。
+    """
+    try:
+        import embedding
+        embedding._load_local_model()
+        log_buffer.emit("INFO", "system", "Embedding 模型预热完成")
+    except Exception as exc:  # noqa: BLE001
+        log_buffer.emit("WARNING", "system", f"Embedding 模型预热失败：{exc}")
+
+
 def main():
     import socket
     import webbrowser
@@ -3023,6 +3046,12 @@ def main():
 
     global SERVER_PORT
     SERVER_PORT = port
+
+    # 后台预热 embedding 模型（不阻塞服务启动，避免首次用知识库/记忆时卡住）
+    try:
+        threading.Thread(target=_warmup_embedding, daemon=True).start()
+    except Exception:
+        pass
 
     if not no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
