@@ -287,6 +287,12 @@
             <button class="chat-input-image-del" @click="removePendingImage(i)" title="移除">✕</button>
           </div>
         </div>
+        <div class="chat-memory-row">
+          <label class="chat-memory-chip" :class="{ disabled: !currentWorkspaceId }" :title="currentWorkspaceId ? '跨会话记忆：任务结束后自动记住结论，下次可召回' : '选择工作空间后可用记忆'">
+            <input type="checkbox" v-model="memoryEnabled" :disabled="!currentWorkspaceId" />
+            🧠 记忆：{{ memoryEnabled && currentWorkspaceId ? '开' : '关' }}
+          </label>
+        </div>
         <div v-if="knowledgeBases.length" class="chat-kb-row">
           <span class="chat-kb-label">📚 知识库</span>
           <label v-for="kb in knowledgeBases" :key="kb.id" class="chat-kb-chip">
@@ -480,6 +486,10 @@ const imageInput = ref(null)
 const pendingImages = ref([])
 const knowledgeBases = ref([])
 const selectedKnowledgeIds = ref([])
+const memoryEnabled = ref(localStorage.getItem('memoryEnabled') !== 'false')
+watch(memoryEnabled, (v) => {
+  localStorage.setItem('memoryEnabled', String(v))
+})
 const MAX_IMAGES = 4
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
@@ -1202,6 +1212,7 @@ async function sendAgent(s, text, images = []) {
         images: images.map(i => i.dataUrl),
         skill_ids: (s.skills || []).map(sk => sk.id),
         knowledge_ids: selectedKnowledgeIds.value,
+        memory_enabled: memoryEnabled.value && !!currentWorkspaceId.value,
       }),
     })
     if (!startRes.ok) {
@@ -2425,6 +2436,42 @@ function onFilePick(node) {
   gap: 8px;
 }
 /* ===== 知识库选择条 ===== */
+.chat-memory-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 4px 0;
+}
+.chat-memory-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-soft);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all .15s;
+  user-select: none;
+}
+.chat-memory-chip:hover:not(.disabled) {
+  border-color: var(--primary);
+}
+.chat-memory-chip.disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.chat-memory-chip input {
+  accent-color: var(--primary);
+  margin: 0;
+  cursor: pointer;
+}
+.chat-memory-chip:has(input:checked) {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--primary);
+}
 .chat-kb-row {
   display: flex;
   align-items: center;
