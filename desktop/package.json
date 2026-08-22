@@ -29,6 +29,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "splash.html",
       "package.json"
     ],
     "extraResources": [
@@ -39,6 +40,10 @@
       {
         "from": "../.env",
         "to": "backend/.env"
+      },
+      {
+        "from": "splash.html",
+        "to": "splash.html"
       }
     ],
     "win": {

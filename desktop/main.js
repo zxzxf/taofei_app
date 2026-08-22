@@ -40,63 +40,46 @@ let quitting = false;
 
 // ---------------------------------------------------------------
 // 启动闪屏：双击后立即出现，避免「等待后端期间屏幕上什么都没有」
+// 说明：splash 改用本地 HTML 文件（而非 data: URL），并等 ready-to-show
+//       再显示。首次启动时 CPU 被 PyInstaller 冷启动/杀软扫描占用，
+//       data: URL 渲染可能延迟，导致窗口先显示为空白框。
 // ---------------------------------------------------------------
+function getSplashPath() {
+  // 打包模式：splash.html 随 extraResources 打进 resources/ 根目录
+  if (isDev) return path.join(__dirname, 'splash.html');
+  return path.join(process.resourcesPath, 'splash.html');
+}
+
 function createSplash() {
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body {
-    width: 100%; height: 100%; overflow: hidden;
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0f766e 100%);
-    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-    color: #e2e8f0;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    -webkit-app-region: drag;
-  }
-  .logo {
-    font-size: 34px; font-weight: 700; letter-spacing: 2px;
-    color: #ffffff; margin-bottom: 6px;
-  }
-  .logo span { color: #2dd4bf; }
-  .sub { font-size: 13px; color: #94a3b8; margin-bottom: 34px; }
-  .spinner {
-    width: 34px; height: 34px; margin-bottom: 22px;
-    border: 3px solid rgba(255,255,255,.15);
-    border-top-color: #2dd4bf; border-radius: 50%;
-    animation: spin .9s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  #msg { font-size: 13px; color: #cbd5e1; }
-  #tip { font-size: 11px; color: #64748b; margin-top: 10px; }
-</style>
-</head>
-<body>
-  <div class="logo">淘飞<span>AI</span></div>
-  <div class="sub">企业级 AI 智能体平台</div>
-  <div class="spinner"></div>
-  <div id="msg">正在启动本地服务…</div>
-  <div id="tip">首次启动需进行安全扫描，可能需要 1-2 分钟，请稍候</div>
-  <script>
-    window.__setMsg = function (t) { document.getElementById("msg").textContent = t; };
-  </script>
-</body>
-</html>`;
+  const splashHtml = getSplashPath();
   splashWindow = new BrowserWindow({
     width: 460,
     height: 340,
     frame: false,
     resizable: false,
     center: true,
-    show: true,
+    show: false, // 等页面渲染完成再显示，避免首次启动出现空白框
     backgroundColor: '#0f172a',
     icon: path.join(__dirname, 'icon.ico'),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splashWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+
+  // 渲染完成后再显示：保证用户看到的是完整闪屏而不是空白
+  splashWindow.once('ready-to-show', () => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  });
+
+  // 加载失败兜底：本地 HTML 异常时也显示窗口，避免永远看不到任何反馈
+  splashWindow.webContents.on('did-fail-load', () => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  });
+
+  if (fs.existsSync(splashHtml)) {
+    splashWindow.loadFile(splashHtml);
+  } else {
+    // 兜底：HTML 文件缺失时显示纯色窗口（至少不是白屏）
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  }
   splashWindow.on('closed', () => { splashWindow = null; });
   return splashWindow;
 }
