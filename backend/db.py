@@ -129,6 +129,34 @@ def init_db() -> None:
             )
         """)
 
+        # 知识库
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_bases (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                status TEXT DEFAULT 'ready',
+                created_at REAL,
+                updated_at REAL
+            )
+        """)
+
+        # 文档分块
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                id TEXT PRIMARY KEY,
+                kb_id TEXT NOT NULL,
+                source_path TEXT,
+                chunk_index INTEGER,
+                content TEXT NOT NULL,
+                meta TEXT,
+                embedding TEXT,
+                created_at REAL,
+                FOREIGN KEY (kb_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_kb ON knowledge_chunks(kb_id)")
+
         conn.commit()
 
 
