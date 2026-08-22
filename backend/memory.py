@@ -9,9 +9,12 @@
 """
 
 import json
+import time
+import uuid
 
 import db
 import embedding
+import prompts
 
 
 def _decode_vec(raw) -> list[float] | None:
@@ -82,3 +85,37 @@ def delete_memory(memory_id: str) -> bool:
         cur = conn.execute("DELETE FROM memory_entries WHERE id=?", (memory_id,))
         conn.commit()
     return cur.rowcount > 0
+
+
+def save_memory(llm_call, workspace_id: str, user_request: str, final_answer: str) -> bool:
+    """任务完成后调用：LLM 摘要 → 向量化 → 入库。失败返回 False，不抛出。"""
+    if not workspace_id or not user_request:
+        return False
+    try:
+        raw = llm_call(prompts.build_memory_summary_messages(user_request, final_answer))
+        raw = (raw or "").strip()
+        # 兼容 LLM 输出被代码块包裹
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return False
+        summary = (data.get("summary") or "").strip()
+        facts = data.get("facts")
+        if not summary:
+            return False
+        if isinstance(facts, list):
+            summary += "\n" + "；".join(str(f) for f in facts if f)
+        vec = embedding.get_embedding(summary)
+        now = time.time()
+        with db._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO memory_entries (id, workspace_id, summary, embedding, created_at) VALUES (?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), workspace_id, summary, json.dumps(vec, ensure_ascii=False), now),
+            )
+            conn.commit()
+        return True
+    except Exception:
+        return False

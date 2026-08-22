@@ -85,3 +85,38 @@ def test_list_and_delete_memory(tmp_path: Path):
     assert memory.delete_memory("m1") is True
     assert memory.list_memories("ws-1") == []
     assert memory.delete_memory("nope") is False
+
+
+def _fake_llm(content: str):
+    def llm_call(messages):
+        return content
+    return llm_call
+
+
+def test_save_memory_success(tmp_path: Path):
+    _setup(tmp_path)
+    llm = _fake_llm(json.dumps({"summary": "项目用 FastAPI", "facts": ["后端在 backend/main.py"]}, ensure_ascii=False))
+    with patch("memory.embedding.get_embedding", return_value=_vec(0)):
+        ok = memory.save_memory(llm, "ws-1", "分析技术栈", "结论：FastAPI")
+    assert ok is True
+    items = memory.list_memories("ws-1")
+    assert len(items) == 1
+    assert "FastAPI" in items[0]["summary"]
+    assert "backend/main.py" in items[0]["summary"]
+
+
+def test_save_memory_invalid_json(tmp_path: Path):
+    _setup(tmp_path)
+    llm = _fake_llm("这不是 JSON")
+    with patch("memory.embedding.get_embedding", return_value=_vec(0)):
+        ok = memory.save_memory(llm, "ws-1", "q", "a")
+    assert ok is False
+    assert memory.list_memories("ws-1") == []
+
+
+def test_save_memory_missing_workspace(tmp_path: Path):
+    _setup(tmp_path)
+    llm = _fake_llm(json.dumps({"summary": "x", "facts": []}))
+    with patch("memory.embedding.get_embedding", return_value=_vec(0)):
+        ok = memory.save_memory(llm, "", "q", "a")
+    assert ok is False
