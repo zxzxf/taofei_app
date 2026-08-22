@@ -9,12 +9,38 @@
 - 📄 结果实时展示（Markdown 渲染，可一键复制）
 - 📦 支持 PyInstaller 打包为独立 exe
 
+## 技术栈
+
+| 层 | 技术 | 说明 |
+|----|------|------|
+| 后端框架 | **FastAPI** + **Uvicorn** | 异步 Web 框架 + ASGI 服务器，提供任务 API / 日志 API / WebSocket / 静态页面 |
+| 数据校验 | **Pydantic** | 请求/响应模型与日志记录校验 |
+| AI 智能体 | **CrewAI** | Agent / Crew / Process / Task 多智能体协作框架 |
+| LLM 兼容层 | **LangChain**（langchain-openai / langchain-core） | crewai.LLM 缺失时基于 ChatOpenAI 的兼容适配器 |
+| LLM 直连 | **httpx** | Anthropic Messages API 兼容端点原生调用（阿里云 MaaS、DeepSeek /anthropic） |
+| 持久化 | **SQLite**（标准库 sqlite3） | 模型配置、预设、工作区、技能、工作流、任务历史，零 ORM 依赖 |
+| 配置管理 | **python-dotenv** | 读取 .env 环境变量（API Key 等） |
+| 工作流引擎 | 自研 **wf_engine** + **PyYAML** | DAG 解析、变量池、节点执行器、Dify DSL 导入 |
+| 实时通信 | **WebSocket**（FastAPI） | 任务日志流式推送（ws_manager.py） |
+| 并发 | threading / asyncio / concurrent.futures | 后台任务、线程安全日志缓冲、线程池节点执行 |
+| 前端框架 | **Vue 3** + **Vue Router 4** | 8 个页面（Task/Agents/Chat/Dashboard/Analysis/Integration/Knowledge/Settings） |
+| 前端构建 | **Vite 6** + **@vitejs/plugin-vue** | 构建输出到根目录 frontend/ |
+| 桌面端 | **Electron 33** + **electron-builder 25** | 原生窗口壳，NSIS 安装包，自动拉起/清理后端进程 |
+| 打包 | **PyInstaller** | 后端 + 前端静态资源打包为独立 exe |
+| 模型提供商 | **DeepSeek**（默认）/ OpenAI 兼容 / Anthropic 兼容 | 多预设切换，支持自定义 base_url 与 API Key |
+| 脚本工具 | PowerShell（browse_directory.ps1） | Windows 目录浏览辅助 |
+
 ## 项目结构
 
 ```
 crewai_app/
 ├── backend/
-│   └── main.py          # FastAPI 后端：crewAI 封装 + 任务 API + 静态页面
+│   ├── main.py          # FastAPI 后端：crewAI 封装 + 任务 API + 静态页面
+│   ├── agent_runner.py  # Agent 任务执行器（ReAct 循环）
+│   ├── agent_tools.py   # Agent 工具集（文件/目录/HTTP 等本地工具）
+│   ├── db.py            # SQLite 持久化层（模型配置/预设/工作区/技能/工作流）
+│   ├── ws_manager.py    # WebSocket 连接管理（日志实时推送）
+│   └── wf_engine/       # 自研工作流引擎（DSL 解析 + DAG 执行 + 变量池）
 ├── frontend-vue/        # Vue 3 + Vite 前端源码
 │   ├── src/views/       # 8 个页面（Task/Agents/Chat/Dashboard/Analysis/Integration/Knowledge/Settings）
 │   ├── src/router/index.js
