@@ -50,5 +50,9 @@ model_presets.json
 skills.json
 workflows.json
 
+# Runtime backups and SQLite database
+*.backup.json
+taofei_app.db
+
 # PyInstaller 构建时自动生成的版本文件（见 build/CrewAIWorkbench.spec）
 backend/_version.py
