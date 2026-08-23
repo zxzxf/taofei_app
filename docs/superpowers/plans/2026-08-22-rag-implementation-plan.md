@@ -1,6 +1,6 @@
 # RAG 知识库 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 在 TaofeiAI Workbench 中实现基于 SQLite + 本地/远程 embedding 的 RAG 知识库：用户可以创建知识库、上传文档、Agent 运行时自动检索相关片段作为上下文。
 
@@ -29,7 +29,7 @@
 - Consumes: existing `init_db()` pattern.
 - Produces: `knowledge_bases` and `knowledge_chunks` tables exist after `db.setup()`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 import sqlite3
@@ -50,12 +50,12 @@ def test_rag_tables_exist():
         db.DB_FILE.unlink(missing_ok=True)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `.venv\Scripts\python.exe -m pytest backend/tests/test_db_rag_tables.py -v`
 Expected: FAIL with `AssertionError` (tables missing).
 
-- [ ] **Step 3: Add tables in `backend/db.py`**
+- [x] **Step 3: Add tables in `backend/db.py`**
 
 Insert before `conn.commit()` in `init_db()`:
 
@@ -85,12 +85,12 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_kb ON knowledge_chunks(kb_id);
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `.venv\Scripts\python.exe -m pytest backend/tests/test_db_rag_tables.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/db.py backend/tests/test_db_rag_tables.py
@@ -109,7 +109,7 @@ git commit -m "feat(db): add knowledge_bases and knowledge_chunks tables"
 - Consumes: `.env` model config / model presets (via `db.load_model_config`).
 - Produces: `get_embedding(text: str) -> list[float]` and `cosine_similarity(a, b) -> float`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 import numpy as np
@@ -127,12 +127,12 @@ def test_get_embedding_returns_384_dim_list():
     assert all(isinstance(v, float) for v in vec)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `.venv\Scripts\python.exe -m pytest backend/tests/test_embedding.py -v`
 Expected: FAIL (`ModuleNotFoundError` or function missing).
 
-- [ ] **Step 3: Implement `backend/embedding.py`**
+- [x] **Step 3: Implement `backend/embedding.py`**
 
 ```python
 import json
@@ -182,7 +182,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return float(np.dot(a, b) / norm)
 ```
 
-- [ ] **Step 4: Install dependency and run test**
+- [x] **Step 4: Install dependency and run test**
 
 Run:
 
@@ -193,7 +193,7 @@ Run:
 
 Expected: PASS (首次会自动下载模型，约几十 MB)。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/embedding.py backend/tests/test_embedding.py
@@ -213,7 +213,7 @@ git commit -m "feat(rag): add local embedding module"
 **Interfaces:**
 - Produces: `parse_document(file_path: str | Path) -> str`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 from pathlib import Path
@@ -230,7 +230,7 @@ def test_parse_unsupported(tmp_path):
     assert dp.parse_document(f) == ""
 ```
 
-- [ ] **Step 2: Implement `backend/document_parser.py`**
+- [x] **Step 2: Implement `backend/document_parser.py`**
 
 ```python
 import json
@@ -267,12 +267,12 @@ def parse_document(file_path: str | Path) -> str:
     return ""
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `.venv\Scripts\python.exe -m pytest backend/tests/test_document_parser.py -v`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add backend/document_parser.py backend/tests/test_document_parser.py
@@ -291,7 +291,7 @@ git commit -m "feat(rag): add document parser"
 - Consumes: `db.py`, `embedding.py`, `document_parser.py`.
 - Produces: `ingest_file(kb_id: str, file_path: str, chunk_size=500, overlap=50) -> int` returning number of chunks.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 from pathlib import Path
@@ -310,7 +310,7 @@ def test_ingest_file(tmp_path):
     assert len(rows) == count
 ```
 
-- [ ] **Step 2: Implement `backend/ingest.py`**
+- [x] **Step 2: Implement `backend/ingest.py`**
 
 ```python
 import json
@@ -375,12 +375,12 @@ def ingest_file(kb_id: str, file_path: str, chunk_size: int = 500, overlap: int 
     return len(chunks)
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `.venv\Scripts\python.exe -m pytest backend/tests/test_ingest.py -v`
 Expected: PASS (模型首次加载会较慢)。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add backend/ingest.py backend/tests/test_ingest.py
@@ -398,7 +398,7 @@ git commit -m "feat(rag): add file ingest and chunking"
 **Interfaces:**
 - Produces: `create_kb(name, description="")`, `list_kbs()`, `delete_kb(kb_id)`, `upload_file(kb_id, file_path)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 from pathlib import Path
@@ -415,7 +415,7 @@ def test_create_list_delete_kb(tmp_path):
     assert len(knowledge.list_kbs()) == 0
 ```
 
-- [ ] **Step 2: Implement `backend/knowledge.py`**
+- [x] **Step 2: Implement `backend/knowledge.py`**
 
 ```python
 import time
@@ -468,12 +468,12 @@ def upload_file(kb_id: str, file_path: str) -> int:
     return ingest.ingest_file(kb_id, str(p))
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `.venv\Scripts\python.exe -m pytest backend/tests/test_knowledge.py -v`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add backend/knowledge.py backend/tests/test_knowledge.py
@@ -491,7 +491,7 @@ git commit -m "feat(rag): add knowledge base CRUD"
 **Interfaces:**
 - Produces: `retrieve(query, kb_ids, top_k=5) -> list[dict]` and `build_rag_context(query, chunks) -> str`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 import db
@@ -506,7 +506,7 @@ def test_retrieve_ranking(tmp_path):
     assert isinstance(results, list)
 ```
 
-- [ ] **Step 2: Implement `backend/retriever.py`**
+- [x] **Step 2: Implement `backend/retriever.py`**
 
 ```python
 import json
@@ -545,7 +545,7 @@ def retrieve(query: str, kb_ids: list[str], top_k: int = 5) -> list[dict]:
     return [item for _, item in scored[:top_k]]
 ```
 
-- [ ] **Step 3: Implement `backend/rag_prompt.py`**
+- [x] **Step 3: Implement `backend/rag_prompt.py`**
 
 ```python
 def build_rag_context(query: str, chunks: list[dict]) -> str:
@@ -561,12 +561,12 @@ def build_rag_context(query: str, chunks: list[dict]) -> str:
     return "\n".join(parts)
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `.venv\Scripts\python.exe -m pytest backend/tests/test_retriever.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/retriever.py backend/rag_prompt.py backend/tests/test_retriever.py
@@ -584,7 +584,7 @@ git commit -m "feat(rag): add vector retriever and context builder"
 - Consumes: `knowledge.create_kb`, `knowledge.list_kbs`, `knowledge.delete_kb`, `knowledge.upload_file`, `retriever.retrieve`, `rag_prompt.build_rag_context`.
 - Produces: REST endpoints `/api/knowledge` and `/api/knowledge/{id}/upload`; AgentRunRequest accepts `knowledge_ids: list[str]`.
 
-- [ ] **Step 1: Add Pydantic models**
+- [x] **Step 1: Add Pydantic models**
 
 Add after `class AgentRunRequest`:
 
@@ -601,7 +601,7 @@ class KnowledgeBaseResponse(BaseModel):
     chunk_count: int = 0
 ```
 
-- [ ] **Step 2: Extend `AgentRunRequest`**
+- [x] **Step 2: Extend `AgentRunRequest`**
 
 ```python
 class AgentRunRequest(BaseModel):
@@ -613,7 +613,7 @@ class AgentRunRequest(BaseModel):
     knowledge_ids: list[str] = []   # <-- 新增
 ```
 
-- [ ] **Step 3: Modify `_run_agent_async` signature and body**
+- [x] **Step 3: Modify `_run_agent_async` signature and body**
 
 Signature change:
 
@@ -644,7 +644,7 @@ Inside `_run_agent_async`, before calling `run_agent_task`:
             log_buffer.emit("WARNING", "system", f"RAG 检索失败：{exc}", task_id)
 ```
 
-- [ ] **Step 4: Update `/api/agent/run` thread args**
+- [x] **Step 4: Update `/api/agent/run` thread args**
 
 ```python
         threading.Thread(
@@ -657,7 +657,7 @@ Inside `_run_agent_async`, before calling `run_agent_task`:
         ).start()
 ```
 
-- [ ] **Step 5: Add routes**
+- [x] **Step 5: Add routes**
 
 Add after `/api/agent/cancel`:
 
@@ -693,7 +693,7 @@ async def upload_knowledge_file(kb_id: str, file: UploadFile = File(...)):
     return {"ok": True, "chunks": count}
 ```
 
-- [ ] **Step 6: Run backend and smoke test**
+- [x] **Step 6: Run backend and smoke test**
 
 Run backend, use curl:
 
@@ -705,7 +705,7 @@ curl http://127.0.0.1:8000/api/knowledge
 
 Expected: JSON returns knowledge base and chunk count.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/main.py
@@ -722,7 +722,7 @@ git commit -m "feat(rag): expose knowledge endpoints and wire into agent run"
 **Interfaces:**
 - Consumes: `/api/knowledge` GET/POST/DELETE, `/api/knowledge/{id}/upload`.
 
-- [ ] **Step 1: Create full KnowledgeView.vue**
+- [x] **Step 1: Create full KnowledgeView.vue**
 
 Replace placeholder with a component that includes:
 
@@ -816,13 +816,13 @@ onMounted(loadKbs)
 </style>
 ```
 
-- [ ] **Step 2: Verify UI in dev mode**
+- [x] **Step 2: Verify UI in dev mode**
 
 Run frontend `npm run dev`, navigate to `/knowledge`, create a KB and upload a `.md` file.
 
 Expected: List updates, chunk count increases.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add frontend-vue/src/views/KnowledgeView.vue
@@ -840,7 +840,7 @@ git commit -m "feat(rag): implement knowledge base UI"
 - Consumes: `/api/knowledge` (already exposed).
 - Produces: `selectedKnowledgeIds` passed to `/api/agent/run`.
 
-- [ ] **Step 1: Add state and load knowledge bases**
+- [x] **Step 1: Add state and load knowledge bases**
 
 Add near other `ref` declarations:
 
@@ -860,7 +860,7 @@ async function loadKnowledgeBases() {
 onMounted(loadKnowledgeBases)
 ```
 
-- [ ] **Step 2: Add UI selector in input area**
+- [x] **Step 2: Add UI selector in input area**
 
 Add near the send button or above the textarea:
 
@@ -873,7 +873,7 @@ Add near the send button or above the textarea:
 </div>
 ```
 
-- [ ] **Step 3: Pass `knowledge_ids` in `/api/agent/run`**
+- [x] **Step 3: Pass `knowledge_ids` in `/api/agent/run`**
 
 In `sendAgent`, update the request body:
 
@@ -888,11 +888,11 @@ body: JSON.stringify({
 }),
 ```
 
-- [ ] **Step 4: Verify end-to-end**
+- [x] **Step 4: Verify end-to-end**
 
 Start a chat with a selected knowledge base, ask a question related to the uploaded doc. Agent response should reference doc content.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend-vue/src/views/ChatView.vue
@@ -907,7 +907,7 @@ git commit -m "feat(rag): add knowledge selector in chat"
 - Modify: `.gitignore`
 - Modify: `build/TaofeiAPI.spec`
 
-- [ ] **Step 1: Add data directories to `.gitignore`**
+- [x] **Step 1: Add data directories to `.gitignore`**
 
 Append:
 
@@ -917,7 +917,7 @@ data/uploads/
 data/models/
 ```
 
-- [ ] **Step 2: Ensure PyInstaller collects sentence-transformers cache path**
+- [x] **Step 2: Ensure PyInstaller collects sentence-transformers cache path**
 
 In `build/TaofeiAPI.spec`, confirm hidden imports include `sentence_transformers` and `numpy`. Add if absent:
 
@@ -930,7 +930,7 @@ hiddenimports=[
 ]
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .gitignore build/TaofeiAPI.spec
@@ -944,7 +944,7 @@ git commit -m "chore(rag): ignore data dirs and include embedding deps in build"
 **Files:**
 - Modify: `requirements.txt`
 
-- [ ] **Step 1: Pin new dependencies**
+- [x] **Step 1: Pin new dependencies**
 
 Add:
 
@@ -954,7 +954,7 @@ numpy>=1.26.0
 PyPDF2>=3.0.0
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add requirements.txt
@@ -968,7 +968,7 @@ git commit -m "chore(deps): add sentence-transformers numpy pypdf2 for rag"
 **Files:**
 - Create script: `scripts/smoke_rag.py`
 
-- [ ] **Step 1: Write smoke test**
+- [x] **Step 1: Write smoke test**
 
 ```python
 import requests, sys, time, os
@@ -989,11 +989,11 @@ assert r.ok, r.text
 print("smoke ok")
 ```
 
-- [ ] **Step 2: Run smoke test**
+- [x] **Step 2: Run smoke test**
 
 Run with backend and frontend dev servers up. Expected output: `smoke ok`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/smoke_rag.py

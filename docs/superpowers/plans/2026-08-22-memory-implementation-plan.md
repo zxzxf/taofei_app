@@ -1,6 +1,6 @@
 # 跨会话向量记忆 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 在 TaofeiAI Workbench 中实现按工作空间隔离的跨会话向量记忆：任务完成后自动摘要入库，新任务按相似度召回历史记忆注入 prompt。
 
@@ -29,7 +29,7 @@
 - Consumes: 现有 `init_db()` / `_get_conn()` 模式。
 - Produces: `db.setup()` 后 `memory_entries` 表与 `idx_memory_ws` 索引存在。
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 from pathlib import Path
@@ -64,12 +64,12 @@ def test_memory_table_exists():
             pass
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `$env:PYTHONPATH='d:\workspaces\taofei_plateform\taofei_app\backend'; .venv\Scripts\python.exe -m pytest backend/tests/test_db_memory_table.py -v`
 Expected: FAIL（`memory_entries` 不在 tables 集合中）。
 
-- [ ] **Step 3: Add table in `backend/db.py`**
+- [x] **Step 3: Add table in `backend/db.py`**
 
 在 `init_db()` 的 `knowledge_chunks` 建表之后、`conn.commit()` 之前插入：
 
@@ -88,12 +88,12 @@ Expected: FAIL（`memory_entries` 不在 tables 集合中）。
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_ws ON memory_entries(workspace_id)")
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: 同 Step 2
 Expected: PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/db.py backend/tests/test_db_memory_table.py
@@ -116,7 +116,7 @@ git commit -m "feat(memory): add memory_entries table"
   - `list_memories(workspace_id: str, limit: int = 50) -> list[dict]`
   - `delete_memory(memory_id: str) -> bool`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 import json
@@ -202,12 +202,12 @@ def test_list_and_delete_memory(tmp_path: Path):
     assert memory.delete_memory("nope") is False
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `$env:PYTHONPATH='d:\workspaces\taofei_plateform\taofei_app\backend'; .venv\Scripts\python.exe -m pytest backend/tests/test_memory.py -v`
 Expected: FAIL（`memory` 模块不存在）。
 
-- [ ] **Step 3: Implement `backend/memory.py`**
+- [x] **Step 3: Implement `backend/memory.py`**
 
 ```python
 """跨会话向量记忆模块。
@@ -291,12 +291,12 @@ def delete_memory(memory_id: str) -> bool:
     return cur.rowcount > 0
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: 同 Step 2
 Expected: 6 个测试全部 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/memory.py backend/tests/test_memory.py
@@ -316,7 +316,7 @@ git commit -m "feat(memory): add recall, context builder, list and delete"
 - Consumes: `llm_call(messages: list[dict]) -> str`（现有闭包，线程池超时保护）、`embedding.get_embedding()`、`db._get_conn()`。
 - Produces: `save_memory(llm_call, workspace_id: str, user_request: str, final_answer: str) -> bool`
 
-- [ ] **Step 1: Create `backend/prompts.py`**
+- [x] **Step 1: Create `backend/prompts.py`**
 
 ```python
 """集中管理的 prompt 模板（与 rag_prompt.py 分离，避免 main.py 膨胀）。"""
@@ -341,7 +341,7 @@ def build_memory_summary_messages(user_request: str, final_answer: str) -> list[
     ]
 ```
 
-- [ ] **Step 2: Write the failing tests（追加到 `backend/tests/test_memory.py`）**
+- [x] **Step 2: Write the failing tests（追加到 `backend/tests/test_memory.py`）**
 
 ```python
 import json as _json
@@ -382,12 +382,12 @@ def test_save_memory_missing_workspace(tmp_path: Path):
     assert ok is False
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `$env:PYTHONPATH='d:\workspaces\taofei_plateform\taofei_app\backend'; .venv\Scripts\python.exe -m pytest backend/tests/test_memory.py -v`
 Expected: 新增 3 个用例 FAIL（`save_memory` 未定义）。
 
-- [ ] **Step 4: Implement `save_memory`（追加到 `backend/memory.py`）**
+- [x] **Step 4: Implement `save_memory`（追加到 `backend/memory.py`）**
 
 ```python
 import json
@@ -433,12 +433,12 @@ def save_memory(llm_call, workspace_id: str, user_request: str, final_answer: st
 
 > 注意：`prompts` 是 `backend/` 下的新模块，测试与 `main.py` 均以 `PYTHONPATH=backend` 或 `sys.path` 方式导入，与 `db`/`embedding` 一致。
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: 同 Step 3
 Expected: 全部 PASS（含 Task 2 的 6 个用例）。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/prompts.py backend/memory.py backend/tests/test_memory.py
@@ -456,13 +456,13 @@ git commit -m "feat(memory): add save_memory with LLM summary"
 - Consumes: `memory.recall_memory`、`memory.build_memory_context`、`memory.save_memory`、`memory.list_memories`、`memory.delete_memory`。
 - Produces: `AgentRunRequest.memory_enabled: bool = True`；`_run_agent_async(..., knowledge_ids=None, workspace_id=None, memory_enabled=True)`；路由 `/api/memory` GET/DELETE。
 
-- [ ] **Step 1: Extend `AgentRunRequest`（`main.py` 中 `knowledge_ids` 之后）**
+- [x] **Step 1: Extend `AgentRunRequest`（`main.py` 中 `knowledge_ids` 之后）**
 
 ```python
     memory_enabled: bool = True  # 是否启用跨会话记忆（召回 + 写入）
 ```
 
-- [ ] **Step 2: Extend `_run_agent_async` 签名与记忆注入**
+- [x] **Step 2: Extend `_run_agent_async` 签名与记忆注入**
 
 签名改为：
 
@@ -485,7 +485,7 @@ def _run_agent_async(task_id, user_request, workspace_path, model_preset_id, ima
                 log_buffer.emit("WARNING", "system", f"记忆召回失败：{exc}", task_id)
 ```
 
-- [ ] **Step 3: 在 `run_agent_task(...)` 调用之后追加记忆写入**
+- [x] **Step 3: 在 `run_agent_task(...)` 调用之后追加记忆写入**
 
 ```python
         run_agent_task(
@@ -521,7 +521,7 @@ def _run_agent_async(task_id, user_request, workspace_path, model_preset_id, ima
                 log_buffer.emit("WARNING", "system", f"记忆保存失败：{exc}", task_id)
 ```
 
-- [ ] **Step 4: Update `agent_run` 线程参数**
+- [x] **Step 4: Update `agent_run` 线程参数**
 
 ```python
     threading.Thread(
@@ -535,7 +535,7 @@ def _run_agent_async(task_id, user_request, workspace_path, model_preset_id, ima
     ).start()
 ```
 
-- [ ] **Step 5: Add `/api/memory` routes（知识库路由之后）**
+- [x] **Step 5: Add `/api/memory` routes（知识库路由之后）**
 
 ```python
 # ---------------------------------------------------------------
@@ -560,12 +560,12 @@ def delete_memory(memory_id: str):
     return {"ok": True}
 ```
 
-- [ ] **Step 6: 语法与导入验证**
+- [x] **Step 6: 语法与导入验证**
 
 Run: `.venv\Scripts\python.exe -c "import sys; sys.path.insert(0, r'd:\workspaces\taofei_plateform\taofei_app\backend'); import main; print('ok')"`
 Expected: 输出 `ok`，无异常。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/main.py
@@ -583,7 +583,7 @@ git commit -m "feat(memory): wire memory recall and save into agent run"
 - Consumes: `/api/agent/run`（已支持 `memory_enabled`）。
 - Produces: 输入区「🧠 记忆」开关；请求体携带 `memory_enabled`。
 
-- [ ] **Step 1: Add state（`selectedKnowledgeIds` 声明之后）**
+- [x] **Step 1: Add state（`selectedKnowledgeIds` 声明之后）**
 
 ```js
 const memoryEnabled = ref(localStorage.getItem('memoryEnabled') !== 'false')
@@ -594,7 +594,7 @@ watch(memoryEnabled, (v) => {
 
 > 确认 `watch` 已在 `import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue'` 中（已在）。
 
-- [ ] **Step 2: Add toggle UI（知识库选择条上方）**
+- [x] **Step 2: Add toggle UI（知识库选择条上方）**
 
 在 `<div v-if="knowledgeBases.length" class="chat-kb-row">` 之前插入：
 
@@ -607,7 +607,7 @@ watch(memoryEnabled, (v) => {
         </div>
 ```
 
-- [ ] **Step 3: Pass `memory_enabled` in `/api/agent/run` 请求体**
+- [x] **Step 3: Pass `memory_enabled` in `/api/agent/run` 请求体**
 
 ```js
       body: JSON.stringify({
@@ -621,7 +621,7 @@ watch(memoryEnabled, (v) => {
       }),
 ```
 
-- [ ] **Step 4: Add styles（`chat-kb-row` 样式块附近）**
+- [x] **Step 4: Add styles（`chat-kb-row` 样式块附近）**
 
 ```css
 .chat-memory-row {
@@ -662,12 +662,12 @@ watch(memoryEnabled, (v) => {
 }
 ```
 
-- [ ] **Step 5: Verify build**
+- [x] **Step 5: Verify build**
 
 Run: `cd frontend-vue; npm run build`
 Expected: `✓ built` 无报错。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend-vue/src/views/ChatView.vue
@@ -685,7 +685,7 @@ git commit -m "feat(memory): add memory toggle in chat input"
 - Consumes: `db`、`memory`、`embedding`（直接模块级调用，无需起服务）。
 - Produces: 验证「保存 → 召回 → 注入 → 隔离」全链路。
 
-- [ ] **Step 1: Write the smoke script**
+- [x] **Step 1: Write the smoke script**
 
 ```python
 """记忆功能集成冒烟测试（模块级，无需启动服务）。
@@ -744,17 +744,17 @@ print("  ok: 上下文拼装正常，删除成功")
 print("\nSMOKE OK")
 ```
 
-- [ ] **Step 2: Run the smoke script**
+- [x] **Step 2: Run the smoke script**
 
 Run: `.venv\Scripts\python.exe scripts/smoke_memory.py`
 Expected: 输出 `SMOKE OK`（embedding 模型首次加载会慢，属正常）。
 
-- [ ] **Step 3: Run full unit tests**
+- [x] **Step 3: Run full unit tests**
 
 Run: `$env:PYTHONPATH='d:\workspaces\taofei_plateform\taofei_app\backend'; .venv\Scripts\python.exe -m pytest backend/tests/ -v`
 Expected: 全部 PASS（原有 RAG 用例 + 新增 memory 用例）。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/smoke_memory.py
