@@ -87,7 +87,7 @@ def main():
     # 防止「分析项目」类任务在会话中心弹出 http://127.0.0.1:800x/ 浏览器窗口
     no_browser = "--no-browser" in sys.argv or os.getenv("TAOFEI_AGENT_CHILD") == "1"
 
-    port = int(os.getenv("CREWAI_APP_PORT", "8000"))
+    port = int(os.getenv("TAOFEI_APP_PORT", "8000"))
 
     # 检查端口占用，被占用则自动 +1
     while True:
@@ -98,7 +98,7 @@ def main():
 
     url = f"http://127.0.0.1:{port}"
     print("=" * 56)
-    print("  CrewAI Workbench 已启动")
+    print("  TaofeiAI Workbench 已启动")
     print(f"  访问地址: {url}")
     print(f"  API Key  : {'已配置' if os.getenv('DEEPSEEK_API_KEY') else '未配置（请在 .env 中填写）'}")
     print("  按 Ctrl+C 停止服务")

@@ -380,6 +380,14 @@ const filteredPresets = computed(() => {
   let list = presets.value
   if (filterTab.value === 'active') list = list.filter(p => p.id === activePresetId.value)
   else if (filterTab.value === 'other') list = list.filter(p => p.id !== activePresetId.value)
+  else {
+    // 「全部」视图：当前使用的模型置顶（首位），其余保持原有顺序
+    list = [...list].sort((a, b) => {
+      if (a.id === activePresetId.value) return -1
+      if (b.id === activePresetId.value) return 1
+      return 0
+    })
+  }
   const q = searchQuery.value.trim().toLowerCase()
   if (q) list = list.filter(p =>
     (p.name || '').toLowerCase().includes(q) ||
@@ -427,11 +435,8 @@ async function loadPresets() {
     const data = await res.json()
     presets.value = data.presets || []
     activePresetId.value = data.active_id || ''
-    // 跳转到包含当前激活预设的页
-    if (activePresetId.value) {
-      const idx = presets.value.findIndex(p => p.id === activePresetId.value)
-      if (idx >= 0) currentPage.value = Math.floor(idx / pageSize) + 1
-    }
+    // 当前使用的模型已置顶（见 filteredPresets），直接定位到第 1 页
+    currentPage.value = 1
   } catch (e) {
     console.error('加载预设列表失败', e)
   } finally {

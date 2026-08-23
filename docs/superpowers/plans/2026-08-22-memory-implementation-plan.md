@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 CrewAI Workbench 中实现按工作空间隔离的跨会话向量记忆：任务完成后自动摘要入库，新任务按相似度召回历史记忆注入 prompt。
+**Goal:** 在 TaofeiAI Workbench 中实现按工作空间隔离的跨会话向量记忆：任务完成后自动摘要入库，新任务按相似度召回历史记忆注入 prompt。
 
 **Architecture:** 复用 RAG 基建（`embedding.py` 384 维向量 + SQLite 向量存储 + 余弦召回）；新增 `memory_entries` 表和 `memory.py` 模块；`_run_agent_async` 任务开始前召回注入、完成后写入；前端 ChatView 增加记忆开关。
 
@@ -718,16 +718,16 @@ conn.close()
 
 print("[1/4] 保存记忆（mock LLM 摘要）")
 def fake_llm(messages):
-    return json.dumps({"summary": "taofei_app 使用 CrewAI + FastAPI", "facts": ["SQLite 持久化", "RAG 已实现"]}, ensure_ascii=False)
+    return json.dumps({"summary": "taofei_app 使用 taofei_api + FastAPI", "facts": ["SQLite 持久化", "RAG 已实现"]}, ensure_ascii=False)
 
-ok = memory.save_memory(fake_llm, "ws-a", "分析技术栈", "结论：CrewAI + FastAPI")
+ok = memory.save_memory(fake_llm, "ws-a", "分析技术栈", "结论：taofei_api + FastAPI")
 assert ok, "保存失败"
 print("  ok: 已保存 1 条")
 
 print("[2/4] 同工作空间召回")
 hits = memory.recall_memory("项目用什么框架", "ws-a", top_k=5)
-assert hits and "CrewAI" in hits[0]["summary"], hits
-print(f"  ok: 命中 {len(hits)} 条，首条含 CrewAI")
+assert hits and "taofei_api" in hits[0]["summary"], hits
+print(f"  ok: 命中 {len(hits)} 条，首条含 taofei_api")
 
 print("[3/4] 跨工作空间隔离")
 hits_b = memory.recall_memory("项目用什么框架", "ws-b", top_k=5)
@@ -736,7 +736,7 @@ print("  ok: ws-b 未召回 ws-a 的记忆")
 
 print("[4/4] 上下文拼装与清理")
 ctx = memory.build_memory_context("继续优化", hits)
-assert "继续优化" in ctx and "CrewAI" in ctx
+assert "继续优化" in ctx and "taofei_api" in ctx
 memory.delete_memory(hits[0]["id"])
 assert memory.list_memories("ws-a") == []
 print("  ok: 上下文拼装正常，删除成功")

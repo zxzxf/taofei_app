@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 CrewAI Workbench 中实现基于 SQLite + 本地/远程 embedding 的 RAG 知识库：用户可以创建知识库、上传文档、Agent 运行时自动检索相关片段作为上下文。
+**Goal:** 在 TaofeiAI Workbench 中实现基于 SQLite + 本地/远程 embedding 的 RAG 知识库：用户可以创建知识库、上传文档、Agent 运行时自动检索相关片段作为上下文。
 
 **Architecture:** 后端新增 embedding/ingest/retriever/knowledge 模块，SQLite 存储知识库元数据和文档分块向量；前端在 KnowledgeView 管理库、在 ChatView 选择引用库；运行时把检索到的 Top-K 片段拼入 Agent 的 user_request。
 
@@ -905,7 +905,7 @@ git commit -m "feat(rag): add knowledge selector in chat"
 
 **Files:**
 - Modify: `.gitignore`
-- Modify: `build/CrewAIWorkbench.spec`
+- Modify: `build/TaofeiAPI.spec`
 
 - [ ] **Step 1: Add data directories to `.gitignore`**
 
@@ -919,7 +919,7 @@ data/models/
 
 - [ ] **Step 2: Ensure PyInstaller collects sentence-transformers cache path**
 
-In `build/CrewAIWorkbench.spec`, confirm hidden imports include `sentence_transformers` and `numpy`. Add if absent:
+In `build/TaofeiAPI.spec`, confirm hidden imports include `sentence_transformers` and `numpy`. Add if absent:
 
 ```python
 hiddenimports=[
@@ -933,7 +933,7 @@ hiddenimports=[
 - [ ] **Step 3: Commit**
 
 ```bash
-git add .gitignore build/CrewAIWorkbench.spec
+git add .gitignore build/TaofeiAPI.spec
 git commit -m "chore(rag): ignore data dirs and include embedding deps in build"
 ```
 
