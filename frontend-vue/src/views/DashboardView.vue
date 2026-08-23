@@ -25,18 +25,18 @@
           <div class="card-head">
             <div class="card-title">🔄 智能体编排</div>
           </div>
-          <div class="flow-diagram">
-            <div class="flow-node primary"><div class="node-title">用户触发</div><div class="node-desc">自然语言输入</div></div>
-            <span class="flow-arrow">→</span>
-            <div class="flow-node"><div class="node-title">需求理解</div><div class="node-desc">意图识别分析</div></div>
-            <span class="flow-arrow">→</span>
-            <div class="flow-node"><div class="node-title">知识检索</div><div class="node-desc">企业知识库</div></div>
-            <span class="flow-arrow">→</span>
-            <div class="flow-node"><div class="node-title">规划分析</div><div class="node-desc">多智能体协同</div></div>
-            <span class="flow-arrow">→</span>
-            <div class="flow-node"><div class="node-title">任务执行</div><div class="node-desc">调用工具/流程</div></div>
-            <span class="flow-arrow">→</span>
-            <div class="flow-node primary"><div class="node-title">输出结果</div><div class="node-desc">结构化交付</div></div>
+          <div class="dash-flow-diagram">
+            <div class="dash-flow-node primary"><div class="dash-node-title">用户触发</div><div class="dash-node-desc">自然语言输入</div></div>
+            <span class="dash-flow-arrow">→</span>
+            <div class="dash-flow-node"><div class="dash-node-title">需求理解</div><div class="dash-node-desc">意图识别分析</div></div>
+            <span class="dash-flow-arrow">→</span>
+            <div class="dash-flow-node"><div class="dash-node-title">知识检索</div><div class="dash-node-desc">企业知识库</div></div>
+            <span class="dash-flow-arrow">→</span>
+            <div class="dash-flow-node"><div class="dash-node-title">规划分析</div><div class="dash-node-desc">多智能体协同</div></div>
+            <span class="dash-flow-arrow">→</span>
+            <div class="dash-flow-node"><div class="dash-node-title">任务执行</div><div class="dash-node-desc">调用工具/流程</div></div>
+            <span class="dash-flow-arrow">→</span>
+            <div class="dash-flow-node primary"><div class="dash-node-title">输出结果</div><div class="dash-node-desc">结构化交付</div></div>
           </div>
         </div>
       </div>
@@ -107,51 +107,133 @@ const stats = ref([
   { label: '节省人效', value: '0h', trend: 0, color: 'purple' },
 ])
 
-const agents = ref([
-  { icon: '🔬', name: '研究员', desc: '深度调研指定主题，整理行业信息', uses: 128 },
-  { icon: '📊', name: '分析师', desc: '数据驱动的分析与决策支持', uses: 96 },
-  { icon: '✍️', name: '文案师', desc: '品牌营销内容与创意文案生成', uses: 72 },
-  { icon: '🔍', name: '检索员', desc: '知识库语义检索与精准问答', uses: 54 },
-])
+const agents = ref([])
+const trendData = ref({ labels: [], data: [] })
+const activities = ref([])
 
-const activities = ref([
-  { text: '研究员完成「AI智能体框架」调研', tag: '任务', color: '#3b82f6' },
-  { text: '新增技能「天气查询」已接入', tag: '集成', color: '#10b981' },
-  { text: 'DeepSeek 模型连接正常', tag: '系统', color: '#64748b' },
-])
+async function loadStats() {
+  try {
+    const res = await fetch('/api/dashboard/stats')
+    if (!res.ok) return
+    const d = await res.json()
+    stats.value = [
+      { label: '任务总数', value: d.total ?? 0, trend: d.success_rate ?? 0, color: '' },
+      { label: '智能体数量', value: d.agents ?? 0, trend: d.success_rate ?? 0, color: 'cyan' },
+      { label: '知识文档', value: d.completed ?? 0, trend: d.success_rate ?? 0, color: 'green' },
+      { label: '节省人效', value: (d.saved_hours ?? 0) + 'h', trend: d.success_rate ?? 0, color: 'purple' },
+    ]
+  } catch (e) { console.warn('dashboard stats failed', e) }
+}
+
+async function loadTrend() {
+  try {
+    const res = await fetch('/api/dashboard/trend')
+    if (!res.ok) return
+    const d = await res.json()
+    trendData.value = d
+    if (section.value === 'trend') {
+      nextTick(() => drawTrendChart())
+    }
+  } catch (e) { console.warn('dashboard trend failed', e) }
+}
+
+async function loadAgents() {
+  try {
+    const res = await fetch('/api/dashboard/agents')
+    if (!res.ok) return
+    const d = await res.json()
+    agents.value = (d.agents || []).map(a => ({
+      icon: a.icon, name: a.name, desc: a.desc, uses: a.runs,
+    }))
+  } catch (e) { console.warn('dashboard agents failed', e) }
+}
+
+async function loadActivities() {
+  try {
+    const res = await fetch('/api/dashboard/activities?limit=10')
+    if (!res.ok) return
+    const d = await res.json()
+    activities.value = (d.activities || []).map(a => ({
+      text: a.text, tag: a.tag, color: a.color,
+    }))
+  } catch (e) { console.warn('dashboard activities failed', e) }
+}
 
 function drawTrendChart() {
   const canvas = chartRef.value
   if (!canvas) return
-  const ctx = canvas.getContext('2d')
-  const w = canvas.offsetWidth, h = canvas.offsetHeight
+  const w = canvas.offsetWidth
+  const h = canvas.offsetHeight
+  if (!w || !h) return
   canvas.width = w; canvas.height = h
+  const ctx = canvas.getContext('2d')
   ctx.clearRect(0, 0, w, h)
-  const data = [3, 5, 4, 7, 6, 9, 8]
+  const data = trendData.value.data || []
+  if (!data.length) return
   const max = Math.max(...data, 1)
-  const pw = w / data.length
+  const padTop = 15, padBottom = 25, padLeft = 5, padRight = 5
+  const chartH = h - padTop - padBottom
+  const chartW = w - padLeft - padRight
+  const step = chartW / data.length
+
+  // grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+  ctx.lineWidth = 1
+  for (let i = 0; i <= 4; i++) {
+    const y = padTop + (chartH / 4) * i
+    ctx.beginPath()
+    ctx.moveTo(padLeft, y)
+    ctx.lineTo(w - padRight, y)
+    ctx.stroke()
+  }
+
+  // area fill
+  ctx.fillStyle = 'rgba(59, 130, 246, 0.15)'
+  ctx.beginPath()
+  data.forEach((v, i) => {
+    const x = padLeft + step * (i + 0.5)
+    const y = padTop + chartH - (v / max) * chartH
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+  })
+  ctx.lineTo(padLeft + chartW, padTop + chartH)
+  ctx.lineTo(padLeft, padTop + chartH)
+  ctx.closePath()
+  ctx.fill()
+
+  // line
   ctx.strokeStyle = '#3b82f6'
   ctx.lineWidth = 2
   ctx.beginPath()
   data.forEach((v, i) => {
-    const x = pw * (i + 0.5)
-    const y = h - (v / max) * (h - 20) - 10
+    const x = padLeft + step * (i + 0.5)
+    const y = padTop + chartH - (v / max) * chartH
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
   })
   ctx.stroke()
-  ctx.fillStyle = 'rgba(59, 130, 246, 0.1)'
-  ctx.beginPath()
+
+  // dots
+  ctx.fillStyle = '#3b82f6'
   data.forEach((v, i) => {
-    const x = pw * (i + 0.5)
-    const y = h - (v / max) * (h - 20) - 10
-    if (i === 0) ctx.moveTo(x, h); else ctx.lineTo(x, y)
+    const x = padLeft + step * (i + 0.5)
+    const y = padTop + chartH - (v / max) * chartH
+    ctx.beginPath()
+    ctx.arc(x, y, 3.5, 0, Math.PI * 2)
+    ctx.fill()
   })
-  ctx.lineTo(w - pw * 0.5, h)
-  ctx.closePath()
-  ctx.fill()
+
+  // value labels
+  ctx.fillStyle = '#94a3b8'
+  ctx.font = '11px sans-serif'
+  ctx.textAlign = 'center'
+  data.forEach((v, i) => {
+    const x = padLeft + step * (i + 0.5)
+    const y = padTop + chartH - (v / max) * chartH
+    ctx.fillText(String(v), x, y - 8)
+  })
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await Promise.all([loadStats(), loadTrend(), loadAgents(), loadActivities()])
   nextTick(() => { if (section.value === 'trend') drawTrendChart() })
 })
 
