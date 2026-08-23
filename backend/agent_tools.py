@@ -195,52 +195,57 @@ def grep_code(
         total_matches = 0
         MAX_MATCHES = 200  # 最多匹配数，防止过多
 
-        # 遍历文件
-        for dirpath, dirnames, filenames in os.walk(search_root):
-            # 过滤掉忽略的目录（原地修改 dirnames，os.walk 就不会进去）
-            dirnames[:] = [d for d in dirnames if not _is_ignored_dir(d)]
+        # 收集待扫描文件：path 可以是目录（递归遍历）或单个文件
+        files_to_scan: list[str] = []
+        if search_root.is_file():
+            files_to_scan.append(str(search_root))
+        else:
+            for dirpath, dirnames, filenames in os.walk(search_root):
+                # 过滤掉忽略的目录（原地修改 dirnames，os.walk 就不会进去）
+                dirnames[:] = [d for d in dirnames if not _is_ignored_dir(d)]
+                for fname in filenames:
+                    files_to_scan.append(os.path.join(dirpath, fname))
 
-            for fname in filenames:
-                if not _is_code_file(fname):
-                    continue
-                if include_exts:
-                    ext_ok = any(fname.lower().endswith(ext) for ext in include_exts)
-                    if not ext_ok:
-                        continue
-
-                full_path = os.path.join(dirpath, fname)
-                # 跳过符号链接和过大的文件
-                try:
-                    if os.path.islink(full_path):
-                        continue
-                    size = os.path.getsize(full_path)
-                    if size > MAX_FILE_SIZE:
-                        continue
-                except OSError:
+        # 逐个文件扫描
+        for full_path in files_to_scan:
+            fname = os.path.basename(full_path)
+            if not _is_code_file(fname):
+                continue
+            if include_exts:
+                ext_ok = any(fname.lower().endswith(ext) for ext in include_exts)
+                if not ext_ok:
                     continue
 
-                try:
-                    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
-                        lines = f.readlines()
-                except OSError:
+            # 跳过符号链接和过大的文件
+            try:
+                if os.path.islink(full_path):
                     continue
+                size = os.path.getsize(full_path)
+                if size > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
 
-                file_matched = False
-                for line_idx, line in enumerate(lines):
-                    line_stripped = line.rstrip("\n").rstrip("\r")
-                    haystack = line_stripped if case_sensitive else line_stripped.lower()
-                    if search_pattern in haystack:
-                        # 计算相对路径
-                        rel_path = os.path.relpath(full_path, root)
-                        results.append((rel_path, line_idx + 1, line_stripped.strip()))
-                        total_matches += 1
-                        file_matched = True
-                        if total_matches >= MAX_MATCHES:
-                            break
-                if file_matched:
-                    file_count += 1
-                if total_matches >= MAX_MATCHES:
-                    break
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()
+            except OSError:
+                continue
+
+            file_matched = False
+            for line_idx, line in enumerate(lines):
+                line_stripped = line.rstrip("\n").rstrip("\r")
+                haystack = line_stripped if case_sensitive else line_stripped.lower()
+                if search_pattern in haystack:
+                    # 计算相对路径
+                    rel_path = os.path.relpath(full_path, root)
+                    results.append((rel_path, line_idx + 1, line_stripped.strip()))
+                    total_matches += 1
+                    file_matched = True
+                    if total_matches >= MAX_MATCHES:
+                        break
+            if file_matched:
+                file_count += 1
             if total_matches >= MAX_MATCHES:
                 break
 
@@ -313,16 +318,38 @@ def _is_usable_python(path: str) -> bool:
 def _resolve_python_exe() -> str | None:
     """返回可用于执行代码的 Python 解释器路径。
 
-    打包（PyInstaller）环境下 sys.executable 是应用本体（CrewAIWorkbench.exe），
+    打包（PyInstaller）环境下 sys.executable 是应用本体（TaofeiAPI.exe），
     不能当解释器用——直接 spawn 会拉起一个全新后端实例（该实例还会自动打开
     浏览器），这是「会话中心说'分析项目'就弹出 http://127.0.0.1:800x/chat
-    新建会话页面」的根源。此时改为在系统 PATH 及常见安装目录中查找真实的 python。
+    新建会话页面」的根源。此时按以下顺序查找真实 python：
+      0) exe 邻近的应用自带环境（.venv / 同目录 python）——优先
+      1) 系统 PATH
+      2) 常见安装目录
+      3) 注册表（PEP 514）
     """
     if not getattr(sys, "frozen", False):
         return sys.executable
 
     candidates: list[str] = []
     seen: set[str] = set()
+
+    # 0) 应用自带 Python 环境：exe 同目录 / 上级目录 / 上上级目录（部署根）
+    #    （Electron 打包结构：部署根\resources\backend\exe，.venv 在部署根）
+    #    以及 exe 同目录的 python.exe（部分打包方案会随带解释器）。
+    #    这类环境依赖完整、版本与应用匹配，优先级最高。
+    exe_dir = Path(sys.executable).resolve().parent
+    for base in (exe_dir, exe_dir.parent, exe_dir.parent.parent):
+        p = base / ".venv" / "Scripts" / "python.exe"
+        if p.is_file() and str(p) not in seen:
+            seen.add(str(p))
+            candidates.append(str(p))
+    for p in (
+        exe_dir / "python.exe",
+        exe_dir / "python" / "python.exe",
+    ):
+        if p.is_file() and str(p) not in seen:
+            seen.add(str(p))
+            candidates.append(str(p))
 
     # 1) PATH 中的候选
     for name in ("python.exe", "python3.exe", "python", "python3", "py"):

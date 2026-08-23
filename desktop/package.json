@@ -29,16 +29,21 @@
     "files": [
       "main.js",
       "preload.js",
+      "splash.html",
       "package.json"
     ],
     "extraResources": [
       {
-        "from": "../dist/CrewAIWorkbench.exe",
-        "to": "backend/CrewAIWorkbench.exe"
+        "from": "../dist/TaofeiAPI.exe",
+        "to": "backend/TaofeiAPI.exe"
       },
       {
         "from": "../.env",
         "to": "backend/.env"
+      },
+      {
+        "from": "splash.html",
+        "to": "splash.html"
       }
     ],
     "win": {

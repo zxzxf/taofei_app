@@ -13,8 +13,8 @@ __pycache__/
 .eggs/
 dist/
 build/[!.]*
-!build/CrewAIWorkbench.spec
-build/CrewAIWorkbench/
+!build/TaofeiAPI.spec
+build/TaofeiAPI/
 build/_noop_site/
 
 # Frontend build output (regenerate via frontend-vue/npm run build)
@@ -54,5 +54,10 @@ workflows.json
 *.backup.json
 taofei_app.db
 
-# PyInstaller 构建时自动生成的版本文件（见 build/CrewAIWorkbench.spec）
+# RAG runtime data
+data/uploads/
+data/models/
+uploads/
+
+# PyInstaller 构建时自动生成的版本文件（见 build/TaofeiAPI.spec）
 backend/_version.py

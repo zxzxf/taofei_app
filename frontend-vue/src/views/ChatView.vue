@@ -30,7 +30,15 @@
               {{ s.title }}
               <span v-if="s.sending" class="session-running-dot" title="正在思考中"></span>
             </div>
-            <div class="chat-session-meta">{{ formatTime(s.time) }} · {{ s.messages.length }} 条消息</div>
+            <div class="chat-session-meta">
+              {{ formatTime(s.time) }} · {{ s.messages.length }} 条消息
+              <button
+                class="session-memory-icon"
+                :class="{ on: s.memoryEnabled !== false }"
+                :title="s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
+                @click.stop="toggleSessionMemory(s)"
+              >🧠</button>
+            </div>
             <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
               <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
                 🤖 {{ presetNameById(s.modelPresetId) }}
@@ -182,7 +190,7 @@
                   @click="msg.thinkingExpanded = !msg.thinkingExpanded"
                   title="点击折叠/展开思考时间线"
                 >
-                  耗时 {{ formatThinkingDuration(msg.thinkingDuration) }}
+                  总耗时 {{ totalDurationSeconds(msg) }}秒
                   <span class="chat-report-collapse-arrow" :class="{ expanded: msg.thinkingExpanded !== false }">▼</span>
                 </span>
               </div>
@@ -204,6 +212,7 @@
                         <div class="timeline-thinking-header">
                           <span class="timeline-icon">💭</span>
                           <span class="timeline-label">思考中。。。</span>
+                          <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                         </div>
                         <div class="timeline-thinking-content">{{ item.content }}</div>
                       </div>
@@ -213,6 +222,7 @@
                           <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
                           <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
                           <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
+                          <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                           <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                         </div>
                         <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
@@ -250,6 +260,7 @@
                       <div class="timeline-thinking-header">
                         <span class="timeline-icon">💭</span>
                         <span class="timeline-label">思考中。。。</span>
+                        <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                       </div>
                       <div class="timeline-thinking-content">{{ item.content }}</div>
                     </div>
@@ -259,6 +270,7 @@
                         <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
                         <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
                         <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
+                        <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                         <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                       </div>
                       <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
@@ -282,6 +294,14 @@
             <img :src="img.dataUrl" :alt="img.name">
             <button class="chat-input-image-del" @click="removePendingImage(i)" title="移除">✕</button>
           </div>
+        </div>
+        <div v-if="knowledgeBases.length" class="chat-kb-row">
+          <span class="chat-kb-label">📚 知识库</span>
+          <label v-for="kb in knowledgeBases" :key="kb.id" class="chat-kb-chip">
+            <input type="checkbox" :value="kb.id" v-model="selectedKnowledgeIds" />
+            <span class="chat-kb-chip-name">{{ kb.name }}</span>
+            <span class="chat-kb-chip-count">{{ kb.chunk_count }}</span>
+          </label>
         </div>
         <div class="chat-input-row">
           <button class="chat-upload" @click="triggerImageUpload" title="上传图片">＋</button>
@@ -466,6 +486,8 @@ const editingSessionId = ref(null)
 const workspaceDirInput = ref(null)
 const imageInput = ref(null)
 const pendingImages = ref([])
+const knowledgeBases = ref([])
+const selectedKnowledgeIds = ref([])
 const MAX_IMAGES = 4
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
@@ -544,6 +566,18 @@ function formatThinkingDuration(sec) {
   return `${Math.floor(sec / 60)}m${sec % 60}s`
 }
 
+// 根据时间线索引项的 elapsed 计算任务总耗时（秒）
+function totalDurationSeconds(msg) {
+  let total = 0
+  if (msg.timeline && msg.timeline.length) {
+    for (const item of msg.timeline) {
+      if (item && item.elapsed && item.elapsed > total) total = item.elapsed
+    }
+  }
+  if (msg.thinkingDuration && msg.thinkingDuration > total) total = msg.thinkingDuration
+  return total
+}
+
 function renderMarkdown(text) {
   if (!text) return ''
   return text
@@ -560,6 +594,16 @@ function renderMarkdown(text) {
 function toggleReportStep(msg, stepId) {
   if (!msg.reportExpanded) msg.reportExpanded = {}
   msg.reportExpanded[stepId] = !msg.reportExpanded[stepId]
+}
+
+async function loadKnowledgeBases() {
+  try {
+    const res = await fetch('/api/knowledge')
+    if (res.ok) {
+      const data = await res.json()
+      knowledgeBases.value = data.knowledge_bases || []
+    }
+  } catch {}
 }
 
 async function loadAvailableSkills() {
@@ -630,11 +674,18 @@ function confirmSkillSelection() {
       messages: [],
       skills: [...tempSelectedSkills.value],
       modelPresetId: globalDefaultPresetId.value || '',  // 新建会话时绑定当前默认模型
+      memoryEnabled: true,  // 每个新会话自动开启跨会话记忆
     })
     currentId.value = id
     saveSessions()
   }
   showSkillPicker.value = false
+}
+
+// 切换会话记忆开关（会话级，点击会话列表的 🧠 图标）
+function toggleSessionMemory(s) {
+  s.memoryEnabled = !(s.memoryEnabled !== false)
+  saveSessions()
 }
 
 async function deleteSession(id) {
@@ -921,6 +972,7 @@ async function send() {
       messages: [],
       skills: [],
       modelPresetId: globalDefaultPresetId.value || '',
+      memoryEnabled: true,  // 自动开启会话记忆
       sending: false,
     }
     sessions.value.unshift(s)
@@ -1165,6 +1217,8 @@ async function sendAgent(s, text, images = []) {
         workspace_id: currentWorkspaceId.value || null,
         images: images.map(i => i.dataUrl),
         skill_ids: (s.skills || []).map(sk => sk.id),
+        knowledge_ids: selectedKnowledgeIds.value,
+        memory_enabled: (s.memoryEnabled !== false) && !!currentWorkspaceId.value,
       }),
     })
     if (!startRes.ok) {
@@ -1304,6 +1358,7 @@ function onWorkspaceChanged(evt) {
 onMounted(async () => {
   loadSessions()
   loadAvailableSkills()
+  loadKnowledgeBases()
   await loadPresetsList()
   for (const s of sessions.value) {
     if (!s.modelPresetId && globalDefaultPresetId.value) {
@@ -2086,6 +2141,28 @@ function onFilePick(node) {
 .chat-model-menu-check { color: #22c55e; font-weight: 700; font-size: 14px; }
 
 .chat-session-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; align-items: center; }
+/* 会话记忆开关图标：开=高亮，关=置灰；可点击切换 */
+.session-memory-icon {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  line-height: 1;
+  opacity: .35;
+  filter: grayscale(1);
+  vertical-align: -1px;
+  cursor: pointer;
+  transition: opacity .15s, transform .15s;
+}
+.session-memory-icon:hover {
+  transform: scale(1.15);
+}
+.session-memory-icon.on {
+  opacity: 1;
+  filter: none;
+}
 .chat-session-model-chip {
   font-size: 10px; padding: 1px 7px; border-radius: 10px;
   background: rgba(59, 130, 246, 0.1); color: var(--primary);
@@ -2386,6 +2463,56 @@ function onFilePick(node) {
   flex-direction: column;
   gap: 8px;
 }
+/* ===== 知识库选择条 ===== */
+.chat-kb-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 4px 0;
+}
+.chat-kb-label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.chat-kb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-soft);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all .15s;
+  user-select: none;
+}
+.chat-kb-chip:hover {
+  border-color: var(--primary);
+}
+.chat-kb-chip input {
+  accent-color: var(--primary);
+  margin: 0;
+  cursor: pointer;
+}
+.chat-kb-chip-name {
+  white-space: nowrap;
+}
+.chat-kb-chip-count {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 0 5px;
+}
+.chat-kb-chip:has(input:checked) {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--primary);
+}
 .chat-input-row {
   display: flex;
   align-items: flex-end;
@@ -2593,6 +2720,12 @@ function onFilePick(node) {
   background: rgba(139, 92, 246, 0.1);
   font-size: 11.5px;
   font-family: 'Cascadia Code', Consolas, monospace;
+}
+.timeline-elapsed {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .timeline-arrow {
   font-size: 9px;

@@ -10,7 +10,7 @@
  *
  * 运行模式：
  *   开发模式（electron . 未打包）：直接调 .venv/python.exe 运行 backend/main.py
- *   生产模式（安装后）：运行 resources/backend/CrewAIWorkbench.exe
+ *   生产模式（安装后）：运行 resources/backend/TaofeiAPI.exe
  */
 const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
 const { spawn } = require('child_process');
@@ -40,68 +40,62 @@ let quitting = false;
 
 // ---------------------------------------------------------------
 // 启动闪屏：双击后立即出现，避免「等待后端期间屏幕上什么都没有」
+// 说明：splash 改用本地 HTML 文件（而非 data: URL），并等 ready-to-show
+//       再显示。首次启动时 CPU 被 PyInstaller 冷启动/杀软扫描占用，
+//       data: URL 渲染可能延迟，导致窗口先显示为空白框。
 // ---------------------------------------------------------------
+function getSplashPath() {
+  // 打包模式：splash.html 随 extraResources 打进 resources/ 根目录
+  if (isDev) return path.join(__dirname, 'splash.html');
+  return path.join(process.resourcesPath, 'splash.html');
+}
+
 function createSplash() {
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body {
-    width: 100%; height: 100%; overflow: hidden;
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0f766e 100%);
-    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-    color: #e2e8f0;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    -webkit-app-region: drag;
-  }
-  .logo {
-    font-size: 34px; font-weight: 700; letter-spacing: 2px;
-    color: #ffffff; margin-bottom: 6px;
-  }
-  .logo span { color: #2dd4bf; }
-  .sub { font-size: 13px; color: #94a3b8; margin-bottom: 34px; }
-  .spinner {
-    width: 34px; height: 34px; margin-bottom: 22px;
-    border: 3px solid rgba(255,255,255,.15);
-    border-top-color: #2dd4bf; border-radius: 50%;
-    animation: spin .9s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  #msg { font-size: 13px; color: #cbd5e1; }
-  #tip { font-size: 11px; color: #64748b; margin-top: 10px; }
-</style>
-</head>
-<body>
-  <div class="logo">淘飞<span>AI</span></div>
-  <div class="sub">企业级 AI 智能体平台</div>
-  <div class="spinner"></div>
-  <div id="msg">正在启动本地服务…</div>
-  <div id="tip">首次启动需进行安全扫描，可能需要 1-2 分钟，请稍候</div>
-  <script>
-    window.__setMsg = function (t) { document.getElementById("msg").textContent = t; };
-  </script>
-</body>
-</html>`;
+  const splashHtml = getSplashPath();
   splashWindow = new BrowserWindow({
     width: 460,
     height: 340,
     frame: false,
     resizable: false,
     center: true,
-    show: true,
+    show: false, // 等页面渲染完成再显示，避免首次启动出现空白框
     backgroundColor: '#0f172a',
     icon: path.join(__dirname, 'icon.ico'),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splashWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+
+  // 渲染完成后再显示：保证用户看到的是完整闪屏而不是空白
+  splashWindow.once('ready-to-show', () => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  });
+
+  // 加载失败兜底：本地 HTML 异常时也显示窗口，避免永远看不到任何反馈
+  splashWindow.webContents.on('did-fail-load', () => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  });
+
+  if (fs.existsSync(splashHtml)) {
+    splashWindow.loadFile(splashHtml);
+  } else {
+    // 兜底：HTML 文件缺失时显示纯色窗口（至少不是白屏）
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  }
   splashWindow.on('closed', () => { splashWindow = null; });
   return splashWindow;
 }
 
-// 更新闪屏状态文案（窗口可能已关闭，需判空）
+// 更新闪屏进度与文案（平滑过渡；窗口可能已关闭，需判空）
+function setSplashProgress(pct, text) {
+  try {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.webContents.executeJavaScript(
+        `window.__setProgress && window.__setProgress(${Number(pct) || 0}, ${JSON.stringify(text || '')})`
+      ).catch(() => {});
+    }
+  } catch (_) { /* 忽略 */ }
+}
+
+// 兼容旧调用：仅更新文案，不改变进度
 function setSplashMsg(text) {
   try {
     if (splashWindow && !splashWindow.isDestroyed()) {
@@ -131,7 +125,7 @@ function getBackendCommand() {
   // 生产模式：打包进 resources/backend 的 PyInstaller 目录构建
   const backendDir = path.join(process.resourcesPath, 'backend');
   return {
-    cmd: path.join(backendDir, 'CrewAIWorkbench.exe'),
+    cmd: path.join(backendDir, 'TaofeiAPI.exe'),
     args: ['--no-browser'],
     cwd: backendDir,
     env: process.env,
@@ -204,12 +198,18 @@ function startBackend() {
 // ---------------------------------------------------------------
 // 轮询健康检查，等待 HTTP 服务就绪
 // ---------------------------------------------------------------
-function waitForServer(port) {
+function waitForServer(port, onProgress) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const check = () => {
+      // 轮询期间平滑推进进度（45% → 85%），让用户看到"正在初始化"
+      if (onProgress) {
+        const elapsed = Date.now() - start;
+        onProgress(Math.min(85, 45 + Math.round(elapsed / 400)), '正在初始化界面…');
+      }
       const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
         res.resume();
+        if (onProgress) onProgress(88, '正在初始化界面…');
         resolve();
       });
       req.on('error', () => {
@@ -248,9 +248,12 @@ function createWindow(port) {
   Menu.setApplicationMenu(null);
 
   mainWindow.once('ready-to-show', () => {
-    // 主界面就绪：关闪屏、亮主窗，切换几乎无感
-    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
-    mainWindow.show();
+    // 主界面就绪：进度拉满 → 关闪屏 → 亮主窗，切换几乎无感
+    setSplashProgress(100, '加载完成');
+    setTimeout(() => {
+      if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+      mainWindow.show();
+    }, 150); // 短暂停留 150ms，让 100% 进度可见
   });
 
   // 阻止页面内跳转离开本地服务（例如误点外链时用系统浏览器打开）
@@ -287,11 +290,13 @@ function killBackend() {
 app.whenReady().then(async () => {
   // 双击后立刻出闪屏，给用户即时反馈
   createSplash();
+  setSplashProgress(5, '正在启动…');
   try {
     const port = await startBackend();
-    setSplashMsg('服务已启动，正在初始化界面…');
+    setSplashProgress(45, '本地服务已启动…');
     console.log(`[electron] backend ready on port ${port}, waiting for HTTP...`);
-    await waitForServer(port);
+    await waitForServer(port, (pct, text) => setSplashProgress(pct, text));
+    setSplashProgress(90, '正在打开工作台…');
     console.log('[electron] backend HTTP ready, opening window');
     createWindow(port);
   } catch (err) {

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0f766e 100%);
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #e2e8f0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    -webkit-app-region: drag;
+  }
+  .logo {
+    font-size: 34px; font-weight: 700; letter-spacing: 2px;
+    color: #ffffff; margin-bottom: 6px;
+  }
+  .logo span { color: #2dd4bf; }
+  .sub { font-size: 13px; color: #94a3b8; margin-bottom: 30px; }
+
+  /* 进度条：平滑过渡，视觉随启动阶段推进 */
+  .progress-track {
+    width: 300px; height: 4px; margin-bottom: 16px;
+    background: rgba(255,255,255,.12);
+    border-radius: 4px; overflow: hidden;
+  }
+  .progress-bar {
+    width: 0%; height: 100%;
+    background: linear-gradient(90deg, #2dd4bf, #38bdf8);
+    border-radius: 4px;
+    transition: width .5s ease;
+    box-shadow: 0 0 10px rgba(45, 212, 191, .5);
+  }
+  .progress-pct {
+    font-size: 12px; color: #94a3b8;
+    margin-bottom: 20px; font-variant-numeric: tabular-nums;
+    transition: opacity .3s ease;
+  }
+  #msg {
+    font-size: 13px; color: #cbd5e1;
+    transition: opacity .25s ease;
+  }
+  #tip { font-size: 11px; color: #64748b; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <div class="logo">淘飞<span>AI</span></div>
+  <div class="sub">企业级 AI 智能体平台</div>
+  <div class="progress-track"><div id="bar" class="progress-bar"></div></div>
+  <div id="pct" class="progress-pct">0%</div>
+  <div id="msg">正在启动本地服务…</div>
+  <div id="tip">首次启动需进行安全扫描，可能需要 1-2 分钟，请稍候</div>
+  <script>
+    // 主进程调用：更新进度百分比与阶段文案（平滑过渡）
+    window.__setProgress = function (pct, text) {
+      var bar = document.getElementById("bar");
+      var pctEl = document.getElementById("pct");
+      var msgEl = document.getElementById("msg");
+      if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      if (pctEl) pctEl.textContent = Math.round(pct) + "%";
+      if (text && msgEl && msgEl.textContent !== text) msgEl.textContent = text;
+    };
+    // 兼容旧调用：仅更新文案
+    window.__setMsg = function (t) { document.getElementById("msg").textContent = t; };
+  </script>
+</body>
+</html>

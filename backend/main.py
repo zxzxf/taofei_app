@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-"""CrewAI 工作台 - 后端服务
-FastAPI 封装 crewAI：提供任务运行 API + 日志查询 API + 静态前端页面服务。
+"""TaofeiAI 工作台 - 后端服务
+FastAPI 封装 taofei_api：提供任务运行 API + 日志查询 API + 静态前端页面服务。
 启动方式：
   python backend/main.py          # 开发模式（默认 8000 端口，自动打开浏览器）
   打包后双击 exe                   # 自动打开浏览器，.env 放在 exe 同目录
@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -57,30 +57,30 @@ if not os.getenv("DEEPSEEK_API_KEY") and not PACKAGED:
 # 初始化 SQLite 数据库（创建表 + 从旧 JSON 迁移数据）
 db.setup()
 
-# 注意：部分 crewai 版本（或安装方式）的顶级导出中不再包含独立的 LLM 类，
-# 也没有 crewai.llms 子模块；因此将核心类（Agent/Crew/Process/Task）与 LLM
-# 包装类分开导入：只要核心类存在即认为 HAS_CREWAI=True，LLM 缺失时由下方
+# 注意：部分 taofei_api 版本（或安装方式）的顶级导出中不再包含独立的 LLM 类，
+# 也没有 taofei_api.llms 子模块；因此将核心类（Agent/Crew/Process/Task）与 LLM
+# 包装类分开导入：只要核心类存在即认为 HAS_TAOFEI_API=True，LLM 缺失时由下方
 # _LLMCompat 适配器基于 langchain_openai 提供等效能力。
 try:
-    from crewai import Agent, Crew, Process, Task  # noqa: E402
-    HAS_CREWAI = True
+    from taofei_api import Agent, Crew, Process, Task  # noqa: E402
+    HAS_TAOFEI_API = True
 except ImportError:
-    HAS_CREWAI = False
+    HAS_TAOFEI_API = False
     Agent = Crew = Process = Task = None  # type: ignore
 
 try:
-    from crewai import LLM  # noqa: E402,F811
+    from taofei_api import LLM  # noqa: E402,F811
 except ImportError:
     LLM = None  # type: ignore
 
-# 打包时由 build/CrewAIWorkbench.spec 自动生成；开发环境无此文件时用默认值。
+# 打包时由 build/TaofeiAPI.spec 自动生成；开发环境无此文件时用默认值。
 # 用于确认运行中的到底是哪次提交的代码（访问 /api/version 或看启动日志）。
 try:
     from _version import BUILD_COMMIT, BUILD_DIRTY, BUILD_TIME  # type: ignore
 except Exception:
     BUILD_COMMIT, BUILD_TIME, BUILD_DIRTY = "dev", "", False
 
-app = FastAPI(title="CrewAI Workbench", version="1.2.0")
+app = FastAPI(title="TaofeiAI Workbench", version="1.2.0")
 
 # ---------------------------------------------------------------
 # 实际监听端口（main() 启动时写入），用于 Agent 自调用后端集成端点
@@ -243,14 +243,14 @@ def _get_current_workspace() -> dict | None:
 
 
 class _LLMCompat:
-    """当 crewai 未导出 ``crewai.LLM`` 类时的兼容替代实现。
+    """当 taofei_api 未导出 ``taofei_api.LLM`` 类时的兼容替代实现。
 
     底层基于 :mod:`langchain_openai` 的 :class:`ChatOpenAI`，提供两组能力：
 
-    * crewai 风格 ``.call(messages)`` 接口：``/api/chat`` 直接调用；
+    * taofei_api 风格 ``.call(messages)`` 接口：``/api/chat`` 直接调用；
       ``messages`` 既可以是角色/内容字典列表，也可以（作为降级）是单个字符串。
     * langchain ChatModel 原生接口（``invoke`` / ``ainvoke`` / ``stream`` 等）：
-      经由 :meth:`__getattr__` 转发到内部 ``ChatOpenAI``，供 crewai 的
+      经由 :meth:`__getattr__` 转发到内部 ``ChatOpenAI``，供 taofei_api 的
       ``Agent(llm=self, ...)`` 直接使用。
     """
 
@@ -277,7 +277,7 @@ class _LLMCompat:
         self._llm = ChatOpenAI(**kwargs)
 
     # ------------------------------------------------------------------
-    # crewai.LLM 兼容 API
+    # taofei_api.LLM 兼容 API
     # ------------------------------------------------------------------
     @staticmethod
     def _to_openai_content(content):
@@ -331,7 +331,7 @@ class _LLMCompat:
         return content
 
     # ------------------------------------------------------------------
-    # 转发到 langchain ChatModel 原生接口（crewai Agent 使用）
+    # 转发到 langchain ChatModel 原生接口（taofei_api Agent 使用）
     # ------------------------------------------------------------------
     def __getattr__(self, name: str):
         if name.startswith("_"):
@@ -344,7 +344,7 @@ class _AnthropicLLM:
 
     用于 base_url 含 "anthropic" 的端点（如阿里云 MaaS token-plan 的
     /apps/anthropic 兼容端点、DeepSeek 的 /anthropic 端点等）。
-    crewai.LLM 会把这类端点误判为 OpenAI 兼容，去请求不存在的
+    taofei_api.LLM 会把这类端点误判为 OpenAI 兼容，去请求不存在的
     /chat/completions，从而得到 404 "Model not found"。
     """
 
@@ -378,7 +378,7 @@ class _AnthropicLLM:
         }
 
     # ------------------------------------------------------------------
-    # crewai.LLM 兼容 API（/api/chat 与工作流引擎调用）
+    # taofei_api.LLM 兼容 API（/api/chat 与工作流引擎调用）
     # ------------------------------------------------------------------
     def call(self, messages):
         import httpx
@@ -439,7 +439,7 @@ class _AnthropicLLM:
             text = (thinking_block + text).strip() if text else thinking_block.strip()
         return text
 
-    # langchain / crewai 风格别名
+    # langchain / taofei_api 风格别名
     def invoke(self, messages, **kwargs):
         return self.call(messages)
 
@@ -447,7 +447,7 @@ class _AnthropicLLM:
         if name.startswith("_"):
             raise AttributeError(name)
         raise AttributeError(
-            f"_AnthropicLLM 不支持属性 {name}；如需 crewai Agent 全特性请安装 langchain-anthropic"
+            f"_AnthropicLLM 不支持属性 {name}；如需 taofei_api Agent 全特性请安装 langchain-anthropic"
         )
 
 
@@ -457,9 +457,9 @@ def _build_llm(preset_id: str | None = None):
     - preset_id 指定时，从 model_presets.json 找到对应预设，使用其 model/api_key/base_url
     - 未指定时，回退到全局 model_config.json（顶栏激活预设的写入位置）
 
-    优先使用 crewai 自带的 ``crewai.LLM`` 包装（底层走 openai SDK）；
-    若当前 crewai 版本未导出该类，则退回到基于 :mod:`langchain_openai` 的
-    :class:`_LLMCompat` 适配器，保证对 ``/api/chat`` 与 crewai Agent/Crew
+    优先使用 taofei_api 自带的 ``taofei_api.LLM`` 包装（底层走 openai SDK）；
+    若当前 taofei_api 版本未导出该类，则退回到基于 :mod:`langchain_openai` 的
+    :class:`_LLMCompat` 适配器，保证对 ``/api/chat`` 与 taofei_api Agent/Crew
     两条调用路径都可用。
     """
     cfg = _load_model_config()
@@ -487,7 +487,7 @@ def _build_llm(preset_id: str | None = None):
     base_url = (cfg.get("base_url") or "").strip() or None
 
     # Anthropic 兼容端点（如阿里云 MaaS /apps/anthropic、DeepSeek /anthropic）：
-    # crewai.LLM 会误判为 OpenAI 兼容去请求 /chat/completions → 404。
+    # taofei_api.LLM 会误判为 OpenAI 兼容去请求 /chat/completions → 404。
     # 这里直接走 Anthropic Messages API（httpx 原生调用）。
     if base_url and "anthropic" in base_url.lower():
         return _AnthropicLLM(model, base_url=base_url, api_key=api_key)
@@ -498,15 +498,15 @@ def _build_llm(preset_id: str | None = None):
     if api_key:
         kwargs["api_key"] = api_key
 
-    # 路径 1：crewai.LLM 存在（老版本 / 完整安装）
+    # 路径 1：taofei_api.LLM 存在（老版本 / 完整安装）
     if LLM is not None:
         try:
             return LLM(**kwargs)
         except TypeError:
-            # crewai 不同版本的构造签名可能略有差异，失败则走降级路径
+            # taofei_api 不同版本的构造签名可能略有差异，失败则走降级路径
             pass
 
-    # 路径 2：crewai.LLM 缺失 -> 使用 langchain_openai 兼容层
+    # 路径 2：taofei_api.LLM 缺失 -> 使用 langchain_openai 兼容层
     try:
         return _LLMCompat(**kwargs)
     except Exception:
@@ -639,18 +639,18 @@ class _MemoryLogHandler(logging.Handler):
         try:
             msg = self.format(record)
             source = "system"
-            # 尝试识别 crewai 的 Agent 日志
+            # 尝试识别 taofei_api 的 Agent 日志
             agent_match = re.search(r"Agent:\s*(\S+.*?)(?:\s*[|]\s*|\s+|$)", msg)
             if agent_match:
                 source = agent_match.group(1).strip()[:40]
-            elif "crewai" in record.name.lower():
-                source = "crewai"
+            elif "taofei_api" in record.name.lower():
+                source = "taofei_api"
             log_buffer.emit(record.levelname, source, msg)
         except Exception:
             self.handleError(record)
 
 
-# 配置根 logger，让 crewai / uvicorn / 其他库的日志都进入内存
+# 配置根 logger，让 taofei_api / uvicorn / 其他库的日志都进入内存
 _root_logger = logging.getLogger()
 _root_logger.setLevel(logging.DEBUG)
 # 避免重复添加 handler（模块重载时）
@@ -790,8 +790,8 @@ def _read_workspace_context(workspace_path: str | None, max_chars: int = 30000) 
 
 def _build_crew(topic: str, workspace_path: str | None = None) -> Crew:
     """构建固定双 Agent 协作 Crew（研究员 + 分析师），LLM 由用户配置决定。"""
-    if not HAS_CREWAI:
-        raise RuntimeError("crewai 未正确安装，无法使用 CrewAI 功能")
+    if not HAS_TAOFEI_API:
+        raise RuntimeError("taofei_api 未正确安装，无法使用 Agent 功能")
     llm = _build_llm()
     if llm is None:
         raise RuntimeError("LLM 初始化失败，请检查模型配置")
@@ -894,6 +894,13 @@ class AgentRunRequest(BaseModel):
     workspace_id: str | None = None
     images: list[str] = []  # 多模态图片（data URL 或 URL），传给首条用户消息
     skill_ids: list[str] = []  # 会话绑定的技能 id（来自技能管理列表）
+    knowledge_ids: list[str] = []  # 本次任务引用的知识库 id 列表（RAG）
+    memory_enabled: bool = True  # 是否启用跨会话记忆（召回 + 写入）
+
+
+class KnowledgeBaseCreate(BaseModel):
+    name: str
+    description: str = ""
 
 
 class GitCommitRequest(BaseModel):
@@ -907,7 +914,7 @@ class GitCommitRequest(BaseModel):
 def get_version():
     """返回当前运行的代码版本（git commit + 打包时间），用于排查「桌面端跑的是不是新代码」"""
     return {
-        "app": "CrewAI Workbench",
+        "app": "TaofeiAI Workbench",
         "version": app.version,
         "commit": BUILD_COMMIT,
         "build_time": BUILD_TIME,
@@ -921,11 +928,19 @@ def health():
     cfg = _load_model_config()
     key_ok = bool(cfg.get("api_key")) or bool(os.getenv("DEEPSEEK_API_KEY"))
     current_ws = _get_current_workspace()
+    # embedding 模型预热状态（供前端启动 loading 展示文案）
+    embedding_warmup = True
+    try:
+        import embedding
+        embedding_warmup = embedding.is_loaded()
+    except Exception:
+        pass
     return {
         "status": "ok",
         "api_key_configured": key_ok,
         "provider": cfg.get("provider", ""),
         "model": cfg.get("model", ""),
+        "embedding_warmup": embedding_warmup,
         "workspace": {
             "id": current_ws.get("id") if current_ws else None,
             "name": current_ws.get("name") if current_ws else None,
@@ -1364,8 +1379,8 @@ def chat(req: ChatRequest):
     """直接调用大模型接口，进行多轮对话；自动注入已启用的 Claude 技能和工作空间上下文。"""
     if not req.messages:
         return JSONResponse({"error": "消息不能为空"}, status_code=400)
-    if not HAS_CREWAI:
-        return JSONResponse({"error": "LLM 功能不可用：crewai/langchain 未安装"}, status_code=503)
+    if not HAS_TAOFEI_API:
+        return JSONResponse({"error": "LLM 功能不可用：taofei_api/langchain 未安装"}, status_code=503)
     try:
         llm = _build_llm(req.model_preset_id)
         if llm is None:
@@ -1384,7 +1399,7 @@ def chat(req: ChatRequest):
         try:
             reply_text = llm.call(messages)
         except TypeError:
-            # 极少数老版本 crewai 可能仅支持字符串，退化为单条 prompt
+            # 极少数老版本 taofei_api 可能仅支持字符串，退化为单条 prompt
             reply_text = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
         if not isinstance(reply_text, str):
             reply_text = str(reply_text)
@@ -1891,8 +1906,8 @@ def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
         if not HAS_WF_ENGINE:
             raise RuntimeError("wf_engine 工作流引擎未安装")
 
-        if not HAS_CREWAI:
-            raise RuntimeError("LLM 功能不可用：crewai/langchain 未安装")
+        if not HAS_TAOFEI_API:
+            raise RuntimeError("LLM 功能不可用：taofei_api/langchain 未安装")
 
         llm = _build_llm()
         if llm is None:
@@ -2168,7 +2183,7 @@ async def ws_endpoint(websocket: WebSocket):
 # ---------------------------------------------------------------
 # Agent（ReAct 循环）
 # ---------------------------------------------------------------
-def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None):
+def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None, knowledge_ids: list[str] | None = None, workspace_id: str | None = None, memory_enabled: bool = True):
     """后台线程执行 ReAct Agent。"""
     try:
         with _tasks_lock:
@@ -2177,8 +2192,31 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
 
         if not HAS_AGENT_RUNNER:
             raise RuntimeError("agent_runner 未安装")
-        if not HAS_CREWAI:
-            raise RuntimeError("LLM 功能不可用：crewai/langchain 未安装")
+        if not HAS_TAOFEI_API:
+            raise RuntimeError("LLM 功能不可用：taofei_api/langchain 未安装")
+
+        # RAG 上下文注入：检索知识库相关片段后改写 user_request
+        if knowledge_ids:
+            try:
+                import retriever
+                import rag_prompt
+                chunks = retriever.retrieve(user_request, knowledge_ids, top_k=5)
+                if chunks:
+                    user_request = rag_prompt.build_rag_context(user_request, chunks)
+                    log_buffer.emit("INFO", "system", f"RAG 检索命中 {len(chunks)} 个片段", task_id)
+            except Exception as exc:
+                log_buffer.emit("WARNING", "system", f"RAG 检索失败：{exc}", task_id)
+
+        # 跨会话记忆注入：同工作空间向量召回
+        if memory_enabled and workspace_id:
+            try:
+                import memory
+                memories = memory.recall_memory(user_request, workspace_id, top_k=5)
+                if memories:
+                    user_request = memory.build_memory_context(user_request, memories)
+                    log_buffer.emit("INFO", "system", f"已注入 {len(memories)} 条相关记忆", task_id)
+            except Exception as exc:
+                log_buffer.emit("WARNING", "system", f"记忆召回失败：{exc}", task_id)
 
         llm = _build_llm(model_preset_id)
         if llm is None:
@@ -2258,6 +2296,24 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             skills=bound_skills,
             cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
         )
+
+        # 跨会话记忆写入：仅 completed 且启用记忆时保存
+        if memory_enabled and workspace_id:
+            try:
+                import memory
+                with _tasks_lock:
+                    task = _tasks.get(task_id, {})
+                    if task.get("status") == "completed":
+                        result = task.get("result")
+                        final_text = result if isinstance(result, str) else ""
+                        if isinstance(result, dict):
+                            final_text = (result.get("summary") or result.get("content") or "")
+                if final_text:
+                    saved = memory.save_memory(llm_call, workspace_id, user_request, str(final_text))
+                    if saved:
+                        log_buffer.emit("INFO", "system", "已保存 1 条新记忆", task_id)
+            except Exception as exc:
+                log_buffer.emit("WARNING", "system", f"记忆保存失败：{exc}", task_id)
     except Exception as exc:
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"Agent 任务失败：{err_msg}", task_id)
@@ -2275,8 +2331,8 @@ def agent_run(req: AgentRunRequest):
         return JSONResponse({"error": "任务描述不能为空"}, status_code=400)
     if not HAS_AGENT_RUNNER:
         return JSONResponse({"error": "Agent 功能不可用：agent_runner 未安装"}, status_code=503)
-    if not HAS_CREWAI:
-        return JSONResponse({"error": "LLM 功能不可用：crewai/langchain 未安装"}, status_code=503)
+    if not HAS_TAOFEI_API:
+        return JSONResponse({"error": "LLM 功能不可用：taofei_api/langchain 未安装"}, status_code=503)
 
     task_id = create_agent_task_id()
     workspace_path = _workspace_path_by_id(req.workspace_id) if req.workspace_id else None
@@ -2298,7 +2354,11 @@ def agent_run(req: AgentRunRequest):
     log_buffer.emit("INFO", "system", f"收到 Agent 任务：{req.request[:60]}", task_id)
     threading.Thread(
         target=_run_agent_async,
-        args=(task_id, req.request, workspace_path, req.model_preset_id, req.images or [], req.skill_ids or []),
+        args=(
+            task_id, req.request, workspace_path, req.model_preset_id,
+            req.images or [], req.skill_ids or [], req.knowledge_ids or [],
+            req.workspace_id or None, req.memory_enabled,
+        ),
         daemon=True,
     ).start()
     return {"task_id": task_id}
@@ -2321,6 +2381,87 @@ def agent_cancel(task_id: str):
     _notify_task_update(task_id)
     log_buffer.emit("INFO", "system", f"用户请求取消任务：{task_id}", task_id)
     return {"ok": True, "message": "已收到取消请求，任务将在当前步骤结束后停止"}
+
+
+# ---------------------------------------------------------------
+# 知识库（RAG）
+# ---------------------------------------------------------------
+@app.get("/api/knowledge")
+def list_knowledge():
+    """列出所有知识库（含分块数）。"""
+    import knowledge
+    return {"knowledge_bases": knowledge.list_kbs()}
+
+
+@app.post("/api/knowledge")
+def create_knowledge(req: KnowledgeBaseCreate):
+    """创建知识库。"""
+    import knowledge
+    if not req.name.strip():
+        return JSONResponse({"error": "知识库名称不能为空"}, status_code=400)
+    return knowledge.create_kb(req.name.strip(), req.description)
+
+
+@app.delete("/api/knowledge/{kb_id}")
+def delete_knowledge(kb_id: str):
+    """删除知识库及其全部分块。"""
+    import knowledge
+    ok = knowledge.delete_kb(kb_id)
+    if not ok:
+        return JSONResponse({"error": "知识库不存在"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/knowledge/{kb_id}/upload")
+async def upload_knowledge_file(kb_id: str, file: UploadFile = File(...)):
+    """上传文件到知识库并触发入库（分块 + 向量化）。"""
+    import knowledge
+    if not file.filename:
+        return JSONResponse({"error": "文件名不能为空"}, status_code=400)
+    upload_dir = db.USER_DATA_DIR / "uploads" / kb_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / file.filename
+    with open(dest, "wb") as f:
+        f.write(await file.read())
+    try:
+        count = knowledge.upload_file(kb_id, str(dest))
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return {"ok": True, "chunks": count, "file": file.filename}
+
+
+@app.get("/api/knowledge/{kb_id}/chunks")
+def list_knowledge_chunks(kb_id: str, limit: int = Query(20, ge=1, le=100)):
+    """查看知识库的分块列表（调试用）。"""
+    import db
+    with db._get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, source_path, chunk_index, substr(content, 1, 200) AS preview FROM knowledge_chunks WHERE kb_id=? ORDER BY chunk_index LIMIT ?",
+            (kb_id, limit),
+        ).fetchall()
+    return {"chunks": [dict(r) for r in rows]}
+
+
+# ---------------------------------------------------------------
+# 跨会话记忆
+# ---------------------------------------------------------------
+@app.get("/api/memory")
+def list_memory(workspace_id: str = Query(""), limit: int = Query(50, ge=1, le=200)):
+    """列出某工作空间的记忆（管理用）。"""
+    import memory
+    if not workspace_id:
+        return JSONResponse({"error": "workspace_id 不能为空"}, status_code=400)
+    return {"memories": memory.list_memories(workspace_id, limit)}
+
+
+@app.delete("/api/memory/{memory_id}")
+def delete_memory(memory_id: str):
+    """删除单条记忆。"""
+    import memory
+    ok = memory.delete_memory(memory_id)
+    if not ok:
+        return JSONResponse({"error": "记忆不存在"}, status_code=404)
+    return {"ok": True}
 
 
 @app.get("/api/git/status")
@@ -2845,6 +2986,21 @@ async def spa_fallback(full_path: str):
 # ---------------------------------------------------------------
 # 启动入口
 # ---------------------------------------------------------------
+def _warmup_embedding() -> None:
+    """后台预热本地 embedding 模型。
+
+    打包后首次调用 embedding 需从磁盘加载约 90MB 模型（同步可能阻塞数秒到
+    数十秒，表现为「启动后第一次用知识库/记忆时卡住」）。应用启动时提前在
+    后台线程加载，让模型常驻内存，首次实际操作即可直接使用。
+    """
+    try:
+        import embedding
+        embedding._load_local_model()
+        log_buffer.emit("INFO", "system", "Embedding 模型预热完成")
+    except Exception as exc:  # noqa: BLE001
+        log_buffer.emit("WARNING", "system", f"Embedding 模型预热失败：{exc}")
+
+
 def main():
     import socket
     import webbrowser
@@ -2864,7 +3020,7 @@ def main():
     # 防止「分析项目」类任务在会话中心弹出 http://127.0.0.1:800x/ 浏览器窗口
     no_browser = "--no-browser" in sys.argv or os.getenv("TAOFEI_AGENT_CHILD") == "1"
 
-    port = int(os.getenv("CREWAI_APP_PORT", "8000"))
+    port = int(os.getenv("TAOFEI_APP_PORT", "8000"))
 
     # 检查端口占用，被占用则自动 +1
     while True:
@@ -2878,7 +3034,7 @@ def main():
     if BUILD_DIRTY:
         _ver += " [含未提交改动]"
     print("=" * 56)
-    print("  CrewAI Workbench 已启动")
+    print("  TaofeiAI Workbench 已启动")
     print(f"  代码版本 : {_ver}")
     print(f"  访问地址: {url}")
     print(f"  API Key  : {'已配置' if os.getenv('DEEPSEEK_API_KEY') else '未配置（请在 .env 中填写）'}")
@@ -2890,6 +3046,12 @@ def main():
 
     global SERVER_PORT
     SERVER_PORT = port
+
+    # 后台预热 embedding 模型（不阻塞服务启动，避免首次用知识库/记忆时卡住）
+    try:
+        threading.Thread(target=_warmup_embedding, daemon=True).start()
+    except Exception:
+        pass
 
     if not no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
