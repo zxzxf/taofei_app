@@ -45,7 +45,17 @@ def _load_local_model():
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
         raise RuntimeError("sentence-transformers 未安装，请执行 pip install sentence-transformers") from exc
-    _local_model = SentenceTransformer(LOCAL_MODEL_NAME, cache_folder=str(MODEL_CACHE_DIR))
+    # 强制离线加载：模型已通过 cache_folder 缓存到本地 data/models。
+    # 仅设置 HF_HUB_OFFLINE 环境变量不足以阻止 transformers 对
+    # adapter_config.json 的 HEAD 检查（网络不通时每次超时 40s+ 且重试 5 次，
+    # 导致提问卡住），必须显式传 local_files_only=True 走本地缓存。
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    _local_model = SentenceTransformer(
+        LOCAL_MODEL_NAME,
+        cache_folder=str(MODEL_CACHE_DIR),
+        local_files_only=True,
+    )
     return _local_model
 
 
