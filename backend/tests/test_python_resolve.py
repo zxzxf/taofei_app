@@ -13,7 +13,7 @@ def test_packaged_resolves_deploy_venv():
     tmp = Path(tempfile.mkdtemp())
     exe_dir = tmp / "deploy" / "resources" / "backend"
     exe_dir.mkdir(parents=True)
-    fake_exe = exe_dir / "CrewAIWorkbench.exe"
+    fake_exe = exe_dir / "TaofeiAPI.exe"
     fake_exe.write_bytes(b"MZ")
     venv_py = tmp / "deploy" / ".venv" / "Scripts" / "python.exe"
     venv_py.parent.mkdir(parents=True)

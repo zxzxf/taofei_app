@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包配置：CrewAI Workbench"""
+"""PyInstaller 打包配置：TaofeiAPI 后端"""
 import datetime
 import os
 import subprocess
@@ -7,11 +7,11 @@ import subprocess
 from PyInstaller.utils.hooks import collect_data_files
 
 # 打包后的可执行文件名
-NAME = "CrewAIWorkbench"
+NAME = "TaofeiAPI"
 
 # 项目根目录：spec 中的相对路径以 spec 所在目录(build/)为基准，
 # 因此必须基于 SPECPATH 显式计算，否则会去找 build/build/backend/main.py
-PROJECT_ROOT = os.path.dirname(SPECPATH)  # E:\taofei_ai\crewai_app
+PROJECT_ROOT = os.path.dirname(SPECPATH)
 
 
 # ---------------------------------------------------------------
@@ -46,15 +46,15 @@ _gen_version_file()
 # 前端静态文件目录（打包后嵌入到 _MEIPASS/frontend）
 frontend_dir = os.path.join(PROJECT_ROOT, "frontend")
 
-# crewai 需要 translations/*.json 等数据文件（i18n 提示词），
+# taofei_api 需要 translations/*.json 等数据文件（i18n 提示词），
 # PyInstaller 默认只收集 .py，必须用 collect_data_files 显式带上
-crewai_datas = collect_data_files("crewai")
+taofei_api_datas = collect_data_files("taofei_api")
 
 a = Analysis(
     [os.path.join(PROJECT_ROOT, "backend", "main.py")],
     pathex=[PROJECT_ROOT],
     binaries=[],
-    datas=crewai_datas + [
+    datas=taofei_api_datas + [
         (frontend_dir, "frontend"),
         # browse_directory.ps1 打包到 _MEIPASS/backend/，与 main.py 同级（BASE_DIR/backend/）
         (os.path.join(PROJECT_ROOT, "backend", "browse_directory.ps1"), "backend"),

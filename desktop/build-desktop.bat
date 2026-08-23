@@ -10,14 +10,14 @@ REM    build-desktop.bat /e    = Electron installer only
 REM    build-desktop.bat /u    = Update D:\TaofeiAI only
 REM
 REM  Output:
-REM    dist\CrewAIWorkbench.exe                   = PyInstaller backend (onefile, includes frontend)
+REM    dist\TaofeiAPI.exe                        = PyInstaller backend (onefile, includes frontend)
 REM    desktop\release_v4\TaofeiAI Setup 1.2.1.exe = NSIS installer (final release)
 REM    desktop\release_v4\win-unpacked\            = Portable version
 REM
 REM  Prerequisites: .venv created + Node.js installed
 REM  Steps:
 REM    [0/4] frontend-vue npm install + npm run build -> output to project root\frontend\
-REM    [1/4] PyInstaller collects frontend\ + backend\ -> dist\CrewAIWorkbench.exe (onefile)
+REM    [1/4] PyInstaller collects frontend\ + backend\ -> dist\TaofeiAPI.exe (onefile)
 REM    [2/4] electron-builder combines Electron + extraResources -> release_v4\
 REM    [3/4] (optional) copy win-unpacked to D:\TaofeiAI
 REM ============================================
@@ -43,7 +43,7 @@ cd /d "%~dp0.."
 set "PROJECT_ROOT=%cd%"
 set "DESKTOP_DIR=%PROJECT_ROOT%\desktop"
 set "DIST_DIR=%PROJECT_ROOT%\dist"
-set "BACKEND_EXE=%DIST_DIR%\CrewAIWorkbench.exe"
+set "BACKEND_EXE=%DIST_DIR%\TaofeiAPI.exe"
 
 echo.
 echo ========================================
@@ -115,7 +115,7 @@ echo        PyInstaller building (onefile)...
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean ^
     --distpath "dist" ^
     --workpath "build\pyinstaller" ^
-    build\CrewAIWorkbench.spec
+    build\TaofeiAPI.spec
 if errorlevel 1 ( echo [ERROR] Backend build failed & pause & exit /b 1 )
 
 if not exist "%BACKEND_EXE%" (
@@ -152,7 +152,7 @@ if not exist "node_modules\electron\package.json" (
 
 REM Guard 1: kill running desktop app so files are not locked during build
 taskkill /F /IM TaofeiAI.exe /T >nul 2>&1
-taskkill /F /IM CrewAIWorkbench.exe /T >nul 2>&1
+taskkill /F /IM TaofeiAPI.exe /T >nul 2>&1
 timeout /t 1 /nobreak >nul 2>&1
 
 REM Guard 2: remove old win-unpacked BEFORE building.
@@ -189,9 +189,9 @@ if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (
 
 REM Guard 3: extraResources MUST contain the freshly built backend exe,
 REM otherwise the deployed desktop app would silently run OLD code
-if not exist "%RELEASE_VER%\win-unpacked\resources\backend\CrewAIWorkbench.exe" (
+if not exist "%RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI.exe" (
     echo [ERROR] VERIFICATION FAILED:
-    echo        %RELEASE_VER%\win-unpacked\resources\backend\CrewAIWorkbench.exe not found
+    echo        %RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI.exe not found
     echo        extraResources did not include the backend exe.
     echo        Do NOT deploy this build - fix electron-builder config and rebuild.
     pause
@@ -216,15 +216,15 @@ if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (
 )
 
 REM Guard 4: source build must contain backend exe before deploying
-if not exist "%RELEASE_VER%\win-unpacked\resources\backend\CrewAIWorkbench.exe" (
-    echo [ERROR] %RELEASE_VER%\win-unpacked\resources\backend\CrewAIWorkbench.exe not found
+if not exist "%RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI.exe" (
+    echo [ERROR] %RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI.exe not found
     echo        Build is incomplete - run full build first, never deploy without backend exe
     pause
     exit /b 1
 )
 
 taskkill /F /IM TaofeiAI.exe /T >nul 2>&1
-taskkill /F /IM CrewAIWorkbench.exe /T >nul 2>&1
+taskkill /F /IM TaofeiAPI.exe /T >nul 2>&1
 timeout /t 2 /nobreak >nul 2>&1
 
 echo        Copying files...
@@ -239,8 +239,8 @@ if errorlevel 1 (
 )
 
 REM Guard 5: verify backend exe exists in target dir after copy
-if not exist "%INSTALL_DIR%\resources\backend\CrewAIWorkbench.exe" (
-    echo [ERROR] Verify failed: %INSTALL_DIR%\resources\backend\CrewAIWorkbench.exe missing
+if not exist "%INSTALL_DIR%\resources\backend\TaofeiAPI.exe" (
+    echo [ERROR] Verify failed: %INSTALL_DIR%\resources\backend\TaofeiAPI.exe missing
     pause
     exit /b 1
 )
@@ -251,10 +251,10 @@ echo              and confirm the commit/build time matches this build.
 :done
 echo.
 echo ========================================
-echo  Build complete!
+echo  Packaging completed successfully!
 echo ========================================
 echo.
-echo  Backend:   %PROJECT_ROOT%\dist\CrewAIWorkbench.exe
+echo  Backend:   %PROJECT_ROOT%\dist\TaofeiAPI.exe
 echo  Installer: %DESKTOP_DIR%\%RELEASE_VER%\TaofeiAI Setup 1.2.1.exe
 echo  Portable:  %DESKTOP_DIR%\%RELEASE_VER%\win-unpacked\
 echo  Installed: %INSTALL_DIR%

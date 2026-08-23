@@ -10,7 +10,7 @@
  *
  * 运行模式：
  *   开发模式（electron . 未打包）：直接调 .venv/python.exe 运行 backend/main.py
- *   生产模式（安装后）：运行 resources/backend/CrewAIWorkbench.exe
+ *   生产模式（安装后）：运行 resources/backend/TaofeiAPI.exe
  */
 const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
 const { spawn } = require('child_process');
@@ -125,7 +125,7 @@ function getBackendCommand() {
   // 生产模式：打包进 resources/backend 的 PyInstaller 目录构建
   const backendDir = path.join(process.resourcesPath, 'backend');
   return {
-    cmd: path.join(backendDir, 'CrewAIWorkbench.exe'),
+    cmd: path.join(backendDir, 'TaofeiAPI.exe'),
     args: ['--no-browser'],
     cwd: backendDir,
     env: process.env,

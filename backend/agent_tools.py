@@ -318,7 +318,7 @@ def _is_usable_python(path: str) -> bool:
 def _resolve_python_exe() -> str | None:
     """返回可用于执行代码的 Python 解释器路径。
 
-    打包（PyInstaller）环境下 sys.executable 是应用本体（CrewAIWorkbench.exe），
+    打包（PyInstaller）环境下 sys.executable 是应用本体（TaofeiAPI.exe），
     不能当解释器用——直接 spawn 会拉起一个全新后端实例（该实例还会自动打开
     浏览器），这是「会话中心说'分析项目'就弹出 http://127.0.0.1:800x/chat
     新建会话页面」的根源。此时按以下顺序查找真实 python：

@@ -243,7 +243,7 @@
         <div class="settings-form">
           <div class="field"><label>平台名称</label><input type="text" value="淘飞AI · 企业级AI智能体平台" disabled></div>
           <div class="field"><label>版本</label><input type="text" value="v2.0.0 (Vue)" disabled></div>
-          <div class="field"><label>技术栈</label><input type="text" value="Vue 3 + Vite + FastAPI + CrewAI" disabled></div>
+          <div class="field"><label>技术栈</label><input type="text" value="Vue 3 + Vite + FastAPI + taofei_api" disabled></div>
           <p style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
             淘飞AI致力于打造零门槛、高效率、可私有化部署的企业级智能体平台。通过研究员、分析师等多 Agent 协作，帮助企业完成调研、分析、写作、决策等复杂任务。
           </p>

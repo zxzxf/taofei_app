@@ -65,7 +65,7 @@ Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结
 9. 读取文件必须使用 read_file 工具，不得用 run_python_code 替代读文件；run_python_code 仅用于计算、数据处理或运行脚本。
 10. 如需创建或修改文件，使用 write_file，修改后必须输出 Final Answer 报告完成情况。
 11. 功能开发/代码修改类任务：完成文件修改并验证思路正确后，立即输出 Final Answer，不要继续探索。
-12. 禁止启动后端服务或桌面应用（python backend/main.py、CrewAIWorkbench.exe、TaofeiAI.exe 等），禁止打开浏览器（webbrowser、os.startfile、start 命令）。验证接口请用 http_request 访问已在运行的服务即可。
+12. 禁止启动后端服务或桌面应用（python backend/main.py、TaofeiAPI.exe、TaofeiAI.exe 等），禁止打开浏览器（webbrowser、os.startfile、start 命令）。验证接口请用 http_request 访问已在运行的服务即可。
 """
 
 

@@ -34,8 +34,8 @@
     ],
     "extraResources": [
       {
-        "from": "../dist/CrewAIWorkbench.exe",
-        "to": "backend/CrewAIWorkbench.exe"
+        "from": "../dist/TaofeiAPI.exe",
+        "to": "backend/TaofeiAPI.exe"
       },
       {
         "from": "../.env",
