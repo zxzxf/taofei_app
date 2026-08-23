@@ -321,13 +321,35 @@ def _resolve_python_exe() -> str | None:
     打包（PyInstaller）环境下 sys.executable 是应用本体（CrewAIWorkbench.exe），
     不能当解释器用——直接 spawn 会拉起一个全新后端实例（该实例还会自动打开
     浏览器），这是「会话中心说'分析项目'就弹出 http://127.0.0.1:800x/chat
-    新建会话页面」的根源。此时改为在系统 PATH 及常见安装目录中查找真实的 python。
+    新建会话页面」的根源。此时按以下顺序查找真实 python：
+      0) exe 邻近的应用自带环境（.venv / 同目录 python）——优先
+      1) 系统 PATH
+      2) 常见安装目录
+      3) 注册表（PEP 514）
     """
     if not getattr(sys, "frozen", False):
         return sys.executable
 
     candidates: list[str] = []
     seen: set[str] = set()
+
+    # 0) 应用自带 Python 环境：exe 同目录 / 上级目录 / 上上级目录（部署根）
+    #    （Electron 打包结构：部署根\resources\backend\exe，.venv 在部署根）
+    #    以及 exe 同目录的 python.exe（部分打包方案会随带解释器）。
+    #    这类环境依赖完整、版本与应用匹配，优先级最高。
+    exe_dir = Path(sys.executable).resolve().parent
+    for base in (exe_dir, exe_dir.parent, exe_dir.parent.parent):
+        p = base / ".venv" / "Scripts" / "python.exe"
+        if p.is_file() and str(p) not in seen:
+            seen.add(str(p))
+            candidates.append(str(p))
+    for p in (
+        exe_dir / "python.exe",
+        exe_dir / "python" / "python.exe",
+    ):
+        if p.is_file() and str(p) not in seen:
+            seen.add(str(p))
+            candidates.append(str(p))
 
     # 1) PATH 中的候选
     for name in ("python.exe", "python3.exe", "python", "python3", "py"):
