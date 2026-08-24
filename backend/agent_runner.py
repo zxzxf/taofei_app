@@ -11,6 +11,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from agent_tools import TOOLS, build_skill_tools, execute_tool
@@ -373,6 +374,8 @@ def run_agent_task(
 
     def update(**kwargs):
         with task_lock:
+            if kwargs.get("status") in ("completed", "failed", "cancelled"):
+                kwargs["completed_at"] = datetime.now(timezone.utc).astimezone().isoformat()
             task_store[task_id].update(kwargs)
         if notify_update:
             notify_update()

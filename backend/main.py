@@ -857,14 +857,16 @@ def _run_crew_async(task_id: str, topic: str, workspace_id: str | None = None):
                 log_buffer.emit("INFO", "system", f"已注入工作空间上下文（{len(context)} 字符）", task_id)
             result = crew.kickoff(inputs=inputs)
             log_buffer.emit("INFO", "system", "Crew 执行完成", task_id)
+        now = datetime.now(timezone.utc).astimezone().isoformat()
         with _tasks_lock:
-            _tasks[task_id].update(status="completed", result=str(result))
+            _tasks[task_id].update(status="completed", result=str(result), completed_at=now)
         log_buffer.emit("INFO", "system", f"任务 {task_id} 已完成", task_id)
     except Exception as exc:  # noqa: BLE001
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"任务 {task_id} 执行失败：{err_msg}", task_id)
+        now = datetime.now(timezone.utc).astimezone().isoformat()
         with _tasks_lock:
-            _tasks[task_id].update(status="failed", error=err_msg)
+            _tasks[task_id].update(status="failed", error=err_msg, completed_at=now)
 
 
 # ---------------------------------------------------------------
@@ -1304,6 +1306,7 @@ def run_task(req: RunRequest):
         current_ws = _get_current_workspace()
         workspace_id = current_ws.get("id") if current_ws else ""
     task_id = uuid.uuid4().hex[:12]
+    now = datetime.now(timezone.utc).astimezone().isoformat()
     with _tasks_lock:
         _tasks[task_id] = {
             "id": task_id,
@@ -1312,6 +1315,8 @@ def run_task(req: RunRequest):
             "workspace_id": workspace_id,
             "result": None,
             "error": None,
+            "created_at": now,
+            "completed_at": None,
         }
     log_buffer.emit("INFO", "system", f"收到新任务：{topic}", task_id)
     thread = threading.Thread(target=_run_crew_async, args=(task_id, topic, workspace_id or None), daemon=True)
@@ -1976,20 +1981,23 @@ def _run_workflow_async(task_id: str, wf: dict, inputs: dict[str, Any]):
             progress=on_progress, extra_ctx={"get_skill": get_skill},
         )
         result = engine.run(inputs)
+        now = datetime.now(timezone.utc).astimezone().isoformat()
         with _tasks_lock:
             _tasks[task_id].update(
                 status="completed",
                 result=result.get("outputs", {}),
                 node_runs=result.get("node_runs", []),
                 skipped=result.get("skipped", []),
+                completed_at=now,
             )
         _notify_task_update(task_id)
         log_buffer.emit("INFO", "system", f"工作流「{wf['name']}」执行完成", task_id)
     except Exception as exc:  # noqa: BLE001
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"工作流执行失败：{err_msg}", task_id)
+        now = datetime.now(timezone.utc).astimezone().isoformat()
         with _tasks_lock:
-            _tasks[task_id].update(status="failed", error=err_msg)
+            _tasks[task_id].update(status="failed", error=err_msg, completed_at=now)
         _notify_task_update(task_id)
 
 
@@ -1999,6 +2007,7 @@ def run_workflow(wf_id: str, req: WorkflowRunRequest):
     if not wf:
         return JSONResponse({"error": "工作流不存在"}, status_code=404)
     task_id = uuid.uuid4().hex[:12]
+    now = datetime.now(timezone.utc).astimezone().isoformat()
     with _tasks_lock:
         _tasks[task_id] = {
             "id": task_id,
@@ -2008,6 +2017,8 @@ def run_workflow(wf_id: str, req: WorkflowRunRequest):
             "result": None,
             "error": None,
             "node_runs": [],
+            "created_at": now,
+            "completed_at": None,
         }
     log_buffer.emit("INFO", "system", f"收到工作流任务：{wf['name']}", task_id)
     threading.Thread(target=_run_workflow_async, args=(task_id, wf, req.inputs), daemon=True).start()
@@ -2361,8 +2372,9 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
     except Exception as exc:
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"Agent 任务失败：{err_msg}", task_id)
+        now = datetime.now(timezone.utc).astimezone().isoformat()
         with _tasks_lock:
-            _tasks[task_id].update(status="failed", error=err_msg)
+            _tasks[task_id].update(status="failed", error=err_msg, completed_at=now)
     finally:
         # 任务结束后清理取消标志
         _task_cancel.pop(task_id, None)
@@ -2380,6 +2392,7 @@ def agent_run(req: AgentRunRequest):
 
     task_id = create_agent_task_id()
     workspace_path = _workspace_path_by_id(req.workspace_id) if req.workspace_id else None
+    now = datetime.now(timezone.utc).astimezone().isoformat()
     with _tasks_lock:
         _tasks[task_id] = {
             "id": task_id,
@@ -2394,6 +2407,8 @@ def agent_run(req: AgentRunRequest):
             "thinking": "",
             "thinking_duration": 0,
             "timeline": [],
+            "created_at": now,
+            "completed_at": None,
         }
     log_buffer.emit("INFO", "system", f"收到 Agent 任务：{req.request[:60]}", task_id)
     threading.Thread(
@@ -2619,8 +2634,8 @@ def git_commit(req: GitCommitRequest):
 
 @app.get("/api/tasks")
 def list_tasks(workspace_id: str | None = Query(None)):
-    # 倒序返回,最多 50 个;可按 workspace_id 过滤
-    tasks = sorted(_tasks.values(), key=lambda t: t["id"], reverse=True)
+    # 按创建时间倒序返回,最多 50 个;可按 workspace_id 过滤
+    tasks = sorted(_tasks.values(), key=lambda t: t.get("created_at") or t["id"], reverse=True)
     if workspace_id:
         tasks = [t for t in tasks if t.get("workspace_id") == workspace_id]
     return {"tasks": tasks[:50]}
@@ -2696,8 +2711,8 @@ def dashboard_trend():
 
 @app.get("/api/dashboard/activities")
 def dashboard_activities(limit: int = Query(10, ge=1, le=50)):
-    """最近动态流。"""
-    recent = sorted(_tasks.values(), key=lambda t: t["id"], reverse=False)[:limit]
+    """最近动态流：按任务创建时间倒序，最新的在最上面。"""
+    recent = sorted(_tasks.values(), key=lambda t: t.get("created_at") or t["id"], reverse=True)[:limit]
     items = []
     for t in recent:
         if t["status"] == "completed":
