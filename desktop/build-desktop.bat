@@ -100,6 +100,29 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
+REM ---------- Dependency check ----------
+echo        Checking required Python packages...
+".venv\Scripts\python.exe" -c "import taofei_api_core, taofei_api_files, taofei_api_tools, taofei_api_cli, taofei_api, sentence_transformers, PyPDF2, numpy" >nul 2>&1
+if errorlevel 1 (
+    echo        Required packages missing, installing from requirements.txt...
+    if not exist "requirements.txt" (
+        echo [ERROR] requirements.txt not found in %PROJECT_ROOT%
+        pause
+        exit /b 1
+    )
+    ".venv\Scripts\python.exe" -m pip install -r requirements.txt
+    if errorlevel 1 ( echo [ERROR] Dependency installation failed & pause & exit /b 1 )
+
+    echo        Re-checking required packages...
+    ".venv\Scripts\python.exe" -c "import taofei_api_core, taofei_api_files, taofei_api_tools, taofei_api_cli, taofei_api, sentence_transformers, PyPDF2, numpy" >nul 2>&1
+    if errorlevel 1 (
+        echo [ERROR] Required packages still missing after installation
+        pause
+        exit /b 1
+    )
+)
+echo       [OK] Python dependencies OK
+
 if not exist "build\_noop_site" mkdir "build\_noop_site"
 if not exist "build\_noop_site\sitecustomize.py" type nul > "build\_noop_site\sitecustomize.py"
 set "PYTHONPATH=%PROJECT_ROOT%\build\_noop_site"

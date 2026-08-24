@@ -1,7 +1,12 @@
 fastapi>=0.110
 uvicorn>=0.29
 python-dotenv>=1.0
-taofei_api
 sentence-transformers>=3.0.0
 numpy>=1.26.0
 PyPDF2>=3.0.0
+# taofei_api 及其子包为本地源码包，需按依赖顺序 editable 安装
+-e ../taofei_ai/lib/taofei_api-core
+-e ../taofei_ai/lib/taofei_api-files
+-e ../taofei_ai/lib/taofei_api-tools
+-e ../taofei_ai/lib/taofei_api-cli
+-e ../taofei_ai/lib/taofei_api
