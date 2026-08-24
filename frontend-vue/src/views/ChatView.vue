@@ -1119,6 +1119,15 @@ function fallbackPoll(task_id, aiMsg, s) {
 }
 
 async function sendAgent(s, text, images = []) {
+  // 0) 收集当前会话历史（不包含当前请求和 pending 消息）
+  const history = s.messages
+    .filter(m => !m.pending)
+    .map(m => ({
+      role: m.role,
+      text: m.text || '',
+      images: m.images || [],
+    }))
+
   // 1) 推入用户消息（含图片）
   s.messages.push({ role: 'user', text, time: Date.now(), images: images.map(i => i.dataUrl) })
   s.title = (text || '图片消息').slice(0, 20)
@@ -1219,6 +1228,7 @@ async function sendAgent(s, text, images = []) {
         skill_ids: (s.skills || []).map(sk => sk.id),
         knowledge_ids: selectedKnowledgeIds.value,
         memory_enabled: (s.memoryEnabled !== false) && !!currentWorkspaceId.value,
+        history,
       }),
     })
     if (!startRes.ok) {

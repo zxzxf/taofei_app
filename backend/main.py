@@ -888,6 +888,14 @@ class ChatRequest(BaseModel):
     workspace_id: str | None = None  # 当前工作空间 ID，用于注入上下文
 
 
+class AgentHistoryMessage(BaseModel):
+    """当前会话历史消息，用于让 Agent 感知连续对话上下文。"""
+
+    role: str
+    text: str = ""
+    images: list[str] = []
+
+
 class AgentRunRequest(BaseModel):
     request: str  # 用户的 Agent 任务描述
     model_preset_id: str | None = None
@@ -896,6 +904,7 @@ class AgentRunRequest(BaseModel):
     skill_ids: list[str] = []  # 会话绑定的技能 id（来自技能管理列表）
     knowledge_ids: list[str] = []  # 本次任务引用的知识库 id 列表（RAG）
     memory_enabled: bool = True  # 是否启用跨会话记忆（召回 + 写入）
+    history: list[AgentHistoryMessage] = []  # 当前会话历史消息（不包含当前 request）
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -2183,7 +2192,31 @@ async def ws_endpoint(websocket: WebSocket):
 # ---------------------------------------------------------------
 # Agent（ReAct 循环）
 # ---------------------------------------------------------------
-def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None, knowledge_ids: list[str] | None = None, workspace_id: str | None = None, memory_enabled: bool = True):
+def _build_history_context(history: list[dict]) -> str:
+    """把当前会话历史消息拼接为 Agent 上下文文本。"""
+    if not history:
+        return ""
+    parts = ["以下是你与用户的当前会话历史（按时间顺序），供你理解上下文：", ""]
+    for m in history:
+        role = m.get("role", "user")
+        text = (m.get("text") or "").strip()
+        # 报告类消息取 summary/content 作为历史摘要
+        if role == "ai" and m.get("report"):
+            report = m["report"]
+            text = (report.get("summary") or report.get("content") or text or "").strip()
+        images = m.get("images") or []
+        if images:
+            text = f"{text} [包含图片]".strip() if text else "[图片消息]"
+        if not text:
+            continue
+        label = "用户" if role == "user" else "助手"
+        parts.append(f"{label}：{text}")
+    parts.append("")
+    parts.append("请基于以上历史回答用户的最新问题。")
+    return "\n".join(parts)
+
+
+def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None, knowledge_ids: list[str] | None = None, workspace_id: str | None = None, memory_enabled: bool = True, history: list[AgentHistoryMessage] | None = None):
     """后台线程执行 ReAct Agent。"""
     try:
         with _tasks_lock:
@@ -2217,6 +2250,17 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     log_buffer.emit("INFO", "system", f"已注入 {len(memories)} 条相关记忆", task_id)
             except Exception as exc:
                 log_buffer.emit("WARNING", "system", f"记忆召回失败：{exc}", task_id)
+
+        # 当前会话历史注入：让 Agent 感知同一会话内的连续对话
+        if history:
+            try:
+                history_dicts = [h.model_dump() if hasattr(h, "model_dump") else dict(h) for h in history]
+                history_text = _build_history_context(history_dicts)
+                if history_text:
+                    user_request = history_text + "\n\n" + user_request
+                    log_buffer.emit("INFO", "system", f"已注入 {len(history)} 条会话历史", task_id)
+            except Exception as exc:
+                log_buffer.emit("WARNING", "system", f"会话历史注入失败：{exc}", task_id)
 
         llm = _build_llm(model_preset_id)
         if llm is None:
@@ -2357,7 +2401,7 @@ def agent_run(req: AgentRunRequest):
         args=(
             task_id, req.request, workspace_path, req.model_preset_id,
             req.images or [], req.skill_ids or [], req.knowledge_ids or [],
-            req.workspace_id or None, req.memory_enabled,
+            req.workspace_id or None, req.memory_enabled, req.history or [],
         ),
         daemon=True,
     ).start()
