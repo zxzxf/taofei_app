@@ -2697,7 +2697,7 @@ def dashboard_trend():
 @app.get("/api/dashboard/activities")
 def dashboard_activities(limit: int = Query(10, ge=1, le=50)):
     """最近动态流。"""
-    recent = sorted(_tasks.values(), key=lambda t: t["id"], reverse=True)[:limit]
+    recent = sorted(_tasks.values(), key=lambda t: t["id"], reverse=False)[:limit]
     items = []
     for t in recent:
         if t["status"] == "completed":
