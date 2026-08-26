@@ -237,9 +237,7 @@
               <!-- 其他章节（兼容旧报告/模型生成的章节） -->
               <div v-for="(sec, si) in msg.report.sections" :key="si" class="chat-report-section">
                 <div class="chat-report-section-title">{{ sec.heading }}</div>
-                <ul class="chat-report-list">
-                  <li v-for="(item, ii) in sec.items" :key="ii" v-html="item"></li>
-                </ul>
+                <div class="chat-report-section-body" v-html="renderSectionItems(sec.items)"></div>
               </div>
             </div>
             <!-- 无报告但有时间线（任务运行初期），单独展示思考过程 -->
@@ -279,7 +277,7 @@
                 </div>
               </div>
             </div>
-            <div v-else class="chat-bubble" v-html="renderMarkdown(msg.text)"></div>
+            <div v-else class="chat-bubble"><div v-html="renderMarkdown(msg.text)"></div></div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
           </div>
         </div>
@@ -580,15 +578,185 @@ function totalDurationSeconds(msg) {
 
 function renderMarkdown(text) {
   if (!text) return ''
-  return text
+  let html = String(text)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => {
+    return `<pre><code${lang ? ` class="lang-${lang}"` : ''}>${code}</code></pre>`
+  })
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
+
+  const lines = html.split('\n')
+  const out = []
+  let inTable = false
+  let tableRows = []
+  let inList = false
+  let listType = null
+  let listItems = []
+  let inBlockquote = false
+  let blockquoteLines = []
+  let paraBuf = []
+
+  function flushPara() {
+    if (paraBuf.length) {
+      out.push('<p>' + paraBuf.join(' ').trim() + '</p>')
+      paraBuf = []
+    }
+  }
+
+  function flushList() {
+    if (inList && listItems.length) {
+      const tag = listType === 'ol' ? 'ol' : 'ul'
+      out.push(`<${tag}>` + listItems.join('') + `</${tag}>`)
+    }
+    inList = false
+    listType = null
+    listItems = []
+  }
+
+  function flushBlockquote() {
+    if (inBlockquote && blockquoteLines.length) {
+      out.push('<blockquote>' + blockquoteLines.join('<br>') + '</blockquote>')
+    }
+    inBlockquote = false
+    blockquoteLines = []
+  }
+
+  function flushTable() {
+    if (inTable && tableRows.length) {
+      let thead = ''
+      let tbody = ''
+      if (tableRows.length >= 2) {
+        const headerCells = tableRows[0].map(c => `<th>${c.trim()}</th>`).join('')
+        thead = `<thead><tr>${headerCells}</tr></thead>`
+        const bodyRows = tableRows.slice(2).map(r => {
+          const cells = r.map(c => `<td>${c.trim()}</td>`).join('')
+          return `<tr>${cells}</tr>`
+        }).join('')
+        tbody = `<tbody>${bodyRows}</tbody>`
+      } else {
+        const rows = tableRows.map(r => {
+          const cells = r.map(c => `<td>${c.trim()}</td>`).join('')
+          return `<tr>${cells}</tr>`
+        }).join('')
+        tbody = `<tbody>${rows}</tbody>`
+      }
+      out.push(`<div class="md-table-wrap"><table>${thead}${tbody}</table></div>`)
+    }
+    inTable = false
+    tableRows = []
+  }
+
+  const tableLineRegex = /^\s*\|(.+)\|\s*$/
+  const tableSepRegex = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+
+    if (!trimmed) {
+      flushPara()
+      flushList()
+      flushBlockquote()
+      flushTable()
+      continue
+    }
+
+    if (tableLineRegex.test(trimmed)) {
+      flushPara()
+      flushList()
+      flushBlockquote()
+      const cells = trimmed.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|')
+      if (!inTable) {
+        inTable = true
+        tableRows = []
+      }
+      tableRows.push(cells)
+      continue
+    } else if (inTable && tableSepRegex.test(trimmed)) {
+      tableRows.push(trimmed.split('|'))
+      continue
+    } else {
+      flushTable()
+    }
+
+    if (trimmed.startsWith('> ')) {
+      flushPara()
+      flushList()
+      inBlockquote = true
+      blockquoteLines.push(trimmed.slice(2))
+      continue
+    } else {
+      flushBlockquote()
+    }
+
+    const ulMatch = trimmed.match(/^[-*+]\s+(.+)$/)
+    const olMatch = trimmed.match(/^\d+\.\s+(.+)$/)
+    if (ulMatch) {
+      flushPara()
+      if (!inList || listType !== 'ul') { flushList(); inList = true; listType = 'ul' }
+      listItems.push(`<li>${ulMatch[1]}</li>`)
+      continue
+    } else if (olMatch) {
+      flushPara()
+      if (!inList || listType !== 'ol') { flushList(); inList = true; listType = 'ol' }
+      listItems.push(`<li>${olMatch[1]}</li>`)
+      continue
+    } else {
+      flushList()
+    }
+
+    let heading = null
+    if (trimmed.startsWith('### ')) heading = { level: 3, text: trimmed.slice(4) }
+    else if (trimmed.startsWith('## ')) heading = { level: 2, text: trimmed.slice(3) }
+    else if (trimmed.startsWith('# ')) heading = { level: 1, text: trimmed.slice(2) }
+    if (heading) {
+      flushPara()
+      out.push(`<h${heading.level}>${heading.text}</h${heading.level}>`)
+      continue
+    }
+
+    if (trimmed.startsWith('---') || trimmed.startsWith('***') || trimmed.startsWith('___')) {
+      flushPara()
+      out.push('<hr>')
+      continue
+    }
+
+    paraBuf.push(line.trim())
+  }
+
+  flushPara()
+  flushList()
+  flushBlockquote()
+  flushTable()
+
+  html = out.join('\n')
+
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>')
+  html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>')
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+
+  return `<div class="md">${html}</div>`
+}
+
+function renderSectionItems(items) {
+  if (!items || !items.length) return ''
+  const listHtml = items.map(item => {
+    const content = renderMarkdownInline(item)
+    return `<li>${content}</li>`
+  }).join('')
+  return `<ul class="chat-report-list">${listHtml}</ul>`
+}
+
+function renderMarkdownInline(text) {
+  if (!text) return ''
+  return String(text)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\n/g, '<br>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
 }
 
 function toggleReportStep(msg, stepId) {
@@ -2851,6 +3019,16 @@ function onFilePick(node) {
   max-width: 100%;
   animation: reportCardIn .25s ease-out;
   box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
+}
+.chat-report-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary), var(--purple), var(--accent));
+  opacity: .8;
 }
 @keyframes reportCardIn {
   from { opacity: 0; transform: translateY(6px); }
@@ -2927,22 +3105,43 @@ function onFilePick(node) {
 .chat-report-section-title {
   font-size: 12px; font-weight: 700; color: var(--text);
   margin-bottom: 6px;
+  display: flex; align-items: center; gap: 6px;
+  padding-left: 8px;
+  border-left: 3px solid var(--primary);
 }
+.chat-report-section-body { overflow: hidden; }
 .chat-report-list {
   margin: 0; padding: 0; list-style: none;
 }
 .chat-report-list li {
-  font-size: 12px; color: var(--text-secondary); line-height: 1.6;
-  padding: 3px 0; padding-left: 14px; position: relative;
+  font-size: 12px; color: var(--text-secondary); line-height: 1.7;
+  padding: 4px 0 4px 16px; position: relative;
 }
 .chat-report-list li::before {
-  content: '·'; position: absolute; left: 2px; top: 2px;
-  color: var(--text-muted); font-weight: 700;
+  content: ''; position: absolute; left: 3px; top: 10px;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--primary); opacity: .7;
 }
-.chat-report-list li :deep(code) {
-  background: rgba(139, 92, 246, 0.08); padding: 1px 4px; border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+.chat-report-list li code {
+  background: rgba(139, 92, 246, 0.1); padding: 1px 6px; border-radius: 4px;
+  font-family: Consolas, 'Cascadia Code', monospace;
+  font-size: 11.5px; color: var(--accent);
 }
+.chat-report-list li strong { color: var(--text); font-weight: 600; }
+.chat-report-list li a { color: var(--primary); text-decoration: none; border-bottom: 1px solid rgba(59, 130, 246, 0.3); }
+.chat-report-section-body :deep(.md-table-wrap) { margin: 10px 0; }
+.chat-report-section-body :deep(table) { width: 100%; border-collapse: collapse; font-size: 12px; }
+.chat-report-section-body :deep(th) {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.08));
+  font-weight: 700; color: var(--text); text-align: left;
+  padding: 8px 10px; border-bottom: 2px solid rgba(59, 130, 246, 0.3);
+}
+.chat-report-section-body :deep(td) {
+  padding: 7px 10px; color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.chat-report-section-body :deep(tr:last-child td) { border-bottom: none; }
+.chat-report-section-body :deep(tr:hover td) { background: rgba(59, 130, 246, 0.04); }
 
 /* ===== 报告卡片 · 可折叠执行步骤 ===== */
 .chat-report-steps {
