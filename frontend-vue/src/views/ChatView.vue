@@ -744,6 +744,9 @@ function renderSectionItems(items) {
   if (!items || !items.length) return ''
   const parts = items.map(item => {
     if (typeof item === 'string') {
+      if (item.includes('\n') || item.includes('```') || item.includes('|') || item.startsWith('#') || item.startsWith('-') || item.startsWith('1.')) {
+        return `<div class="report-section-text md">${renderMarkdown(item)}</div>`
+      }
       return `<li>${renderMarkdownInline(item)}</li>`
     }
     if (item && typeof item === 'object') {
@@ -757,9 +760,15 @@ function renderSectionItems(items) {
     }
     return `<li>${renderMarkdownInline(String(item))}</li>`
   })
-  const hasList = items.some(item => typeof item === 'string' || (item && item.type && item.type !== 'text' && item.type !== 'code'))
+  const hasList = items.some(item => {
+    if (typeof item !== 'string') return !!(item && item.type && item.type !== 'text' && item.type !== 'code')
+    return !(item.includes('\n') || item.includes('```') || item.includes('|') || item.startsWith('#') || item.startsWith('-') || item.startsWith('1.'))
+  })
   if (hasList && !items.some(item => typeof item === 'object' && (item.type === 'text' || item.type === 'code'))) {
-    return `<ul class="chat-report-list">${parts.join('')}</ul>`
+    const allStrings = items.every(item => typeof item === 'string')
+    if (allStrings && !items.some(item => item.includes('\n') || item.includes('```') || item.includes('|') || item.startsWith('#') || item.startsWith('-') || item.startsWith('1.'))) {
+      return `<ul class="chat-report-list">${parts.join('')}</ul>`
+    }
   }
   return parts.join('')
 }
@@ -3177,6 +3186,8 @@ function onFilePick(node) {
   padding: 14px 16px; border-radius: 10px;
   overflow-x: auto; font-size: 12.5px; line-height: 1.6;
   margin: 12px 0;
+  white-space: pre;
+  font-family: Consolas, 'Cascadia Code', 'Courier New', monospace;
 }
 .report-section-text.md pre code {
   background: transparent; padding: 0; color: inherit; font-size: inherit;
