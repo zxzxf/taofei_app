@@ -214,7 +214,7 @@
                           <span class="timeline-label">思考中。。。</span>
                           <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                         </div>
-                        <div class="timeline-thinking-content">{{ item.content }}</div>
+                        <div class="timeline-thinking-content" v-html="renderMarkdown(item.content)"></div>
                       </div>
                       <!-- 命令项：可展开/折叠，结果直接可见 -->
                       <div v-else-if="item.type === 'command'" class="timeline-command">
@@ -232,8 +232,8 @@
                 </div>
               </div>
               <!-- 报告标题/摘要/章节：始终显示 -->
-              <div class="chat-report-title">{{ msg.report.title }}</div>
-              <div class="chat-report-summary">{{ msg.report.summary }}</div>
+              <div class="chat-report-title" v-html="renderMarkdownInline(msg.report.title)"></div>
+              <div class="chat-report-summary" v-html="renderMarkdown(msg.report.summary)"></div>
               <!-- 其他章节（兼容旧报告/模型生成的章节） -->
               <div v-for="(sec, si) in msg.report.sections" :key="si" class="chat-report-section">
                 <div class="chat-report-section-title">{{ sec.heading }}</div>
@@ -260,7 +260,7 @@
                         <span class="timeline-label">思考中。。。</span>
                         <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                       </div>
-                      <div class="timeline-thinking-content">{{ item.content }}</div>
+                      <div class="timeline-thinking-content" v-html="renderMarkdown(item.content)"></div>
                     </div>
                     <!-- 命令项：可展开/折叠，结果直接可见 -->
                     <div v-else-if="item.type === 'command'" class="timeline-command">
