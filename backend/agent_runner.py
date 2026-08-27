@@ -490,7 +490,19 @@ def run_agent_task(
 
             if _has_final_answer(reply):
                 final_answer = _extract_final_answer(reply)
-                # 如果最终答案是 JSON 报告，直接作为结构化结果；否则用普通文本
+                thinking_content = raw_thinking or _extract_thought(reply or "")
+                if thinking_content:
+                    with task_lock:
+                        timeline = task_store[task_id].get("timeline", [])
+                        timeline.append({
+                            "type": "thinking",
+                            "content": thinking_content,
+                            "time": time.strftime("%H:%M:%S"),
+                            "elapsed": int(time.time() - task_start_time),
+                        })
+                        task_store[task_id]["timeline"] = timeline
+                    if notify_update:
+                        notify_update()
                 if _is_report_json(final_answer):
                     try:
                         final_answer = json.loads(final_answer)
