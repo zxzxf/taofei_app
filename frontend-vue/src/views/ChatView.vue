@@ -222,6 +222,7 @@
                           <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
                           <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
                           <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
+                          <span class="timeline-command-summary" v-if="toolArgSummary(item.name, item.args)">{{ toolArgSummary(item.name, item.args) }}</span>
                           <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                           <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                         </div>
@@ -268,6 +269,7 @@
                         <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
                         <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
                         <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
+                        <span class="timeline-command-summary" v-if="toolArgSummary(item.name, item.args)">{{ toolArgSummary(item.name, item.args) }}</span>
                         <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
                         <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                       </div>
@@ -551,9 +553,46 @@ const TOOL_DISPLAY_NAMES = {
 
 function toolDisplayName(name) {
   if (!name) return ''
-  // 技能类工具 call_skill_xxx 也显示为"调用技能"
   if (name.startsWith('call_skill_')) return '调用技能'
   return TOOL_DISPLAY_NAMES[name] || name
+}
+
+function toolArgSummary(name, args) {
+  if (!args || typeof args !== 'object') return ''
+  if (name === 'read_file' || name === 'write_file') {
+    return args.path || ''
+  }
+  if (name === 'list_directory') {
+    return args.path || '根目录'
+  }
+  if (name === 'grep_code') {
+    const parts = []
+    if (args.pattern) parts.push(args.pattern)
+    if (args.path) parts.push(`于 ${args.path}`)
+    return parts.join(' ')
+  }
+  if (name === 'run_python_code') {
+    const code = args.code || ''
+    const firstLine = code.split('\n').find(l => l.trim())
+    return firstLine ? firstLine.slice(0, 40) + (firstLine.length > 40 ? '…' : '') : '代码'
+  }
+  if (name === 'http_request') {
+    return `${args.method || 'GET'} ${args.url || ''}`.trim()
+  }
+  if (name === 'run_command') {
+    const cmd = args.command || ''
+    return cmd.slice(0, 50) + (cmd.length > 50 ? '…' : '')
+  }
+  if (name && name.startsWith && name.startsWith('call_skill_')) {
+    return ''
+  }
+  const keys = Object.keys(args)
+  if (keys.length) {
+    const firstKey = keys[0]
+    const val = String(args[firstKey] || '')
+    return val.slice(0, 40) + (val.length > 40 ? '…' : '')
+  }
+  return ''
 }
 
 // 思考耗时格式化：12s / 1m5s / --
@@ -2916,11 +2955,21 @@ function onFilePick(node) {
 .timeline-command-name {
   color: var(--text);
   font-weight: 600;
-  margin-left: auto;
   padding: 1px 8px;
   border-radius: 4px;
   background: rgba(139, 92, 246, 0.1);
   font-size: 11.5px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  flex-shrink: 0;
+}
+.timeline-command-summary {
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 8px;
   font-family: 'Cascadia Code', Consolas, monospace;
 }
 .timeline-elapsed {
