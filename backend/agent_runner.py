@@ -241,17 +241,6 @@ def _parse_action(text: str) -> tuple[str, dict] | None:
     return None
 
 
-def _has_final_answer(text: str) -> bool:
-    text, _ = _sanitize_model_output(text)
-    return "Final Answer:" in text
-
-
-def _extract_final_answer(text: str) -> str:
-    text, _ = _sanitize_model_output(text)
-    match = re.search(r"Final Answer:\s*(.*)", text, re.DOTALL)
-    return match.group(1).strip() if match else text.strip()
-
-
 def _extract_thought(text: str) -> str:
     """从模型输出中提取 Thought 内容（去掉前缀和 Action 之后的部分），用于前端展示。"""
     text, _ = _sanitize_model_output(text)
@@ -318,7 +307,79 @@ def _build_partial_report(steps: list[dict], user_request: str, status: str = "r
 
 
 def _is_report_json(text: str) -> bool:
-    return text.strip().startswith("{") and '"type"' in text and '"report"' in text
+    if not text:
+        return False
+    text = text.strip()
+    if not text.startswith("{"):
+        return False
+    if '"type"' not in text or '"report"' not in text:
+        return False
+    try:
+        data = json.loads(text)
+        return isinstance(data, dict) and data.get("type") == "report"
+    except Exception:
+        return False
+
+
+def _try_extract_report_json(text: str) -> dict | None:
+    """尝试从文本中提取 report JSON。兼容纯 JSON、包裹在代码块中、前后有解释文字等情况。"""
+    if not text:
+        return None
+    text, _ = _sanitize_model_output(text)
+    text = text.strip()
+    # 1) 直接就是 JSON
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict) and data.get("type") == "report":
+                return data
+        except Exception:
+            pass
+    # 2) 在 markdown 代码块里 ```json ... ```
+    code_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if code_match:
+        try:
+            data = json.loads(code_match.group(1))
+            if isinstance(data, dict) and data.get("type") == "report":
+                return data
+        except Exception:
+            pass
+    # 3) 文本中间的第一个 {...}（包含 "type": "report" 特征）
+    if '"type"' in text and '"report"' in text:
+        brace_idx = text.find("{")
+        if brace_idx >= 0:
+            # 从第一个 { 开始尝试解析
+            for end in range(len(text), brace_idx, -1):
+                candidate = text[brace_idx:end]
+                if candidate.count("{") == candidate.count("}") and candidate.endswith("}"):
+                    try:
+                        data = json.loads(candidate)
+                        if isinstance(data, dict) and data.get("type") == "report":
+                            return data
+                    except Exception:
+                        pass
+    return None
+
+
+def _has_final_answer(text: str) -> bool:
+    text, _ = _sanitize_model_output(text)
+    if "Final Answer:" in text:
+        return True
+    # 兼容直接输出 report JSON 的模型（没有 Final Answer 前缀）
+    if _try_extract_report_json(text):
+        return True
+    return False
+
+
+def _extract_final_answer(text: str) -> str:
+    text, _ = _sanitize_model_output(text)
+    match = re.search(r"Final Answer:\s*(.*)", text, re.DOTALL)
+    content = match.group(1).strip() if match else text.strip()
+    # 如果内容里包含 report JSON，提取出纯 JSON 部分
+    rpt = _try_extract_report_json(content)
+    if rpt:
+        return json.dumps(rpt, ensure_ascii=False)
+    return content
 
 
 def _build_user_content(user_request: str, images: list[str]):
