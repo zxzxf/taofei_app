@@ -431,16 +431,15 @@ def _resolve_python_exe() -> str | None:
 def run_python_code(workspace_path: str | None, code: str) -> dict:
     """在独立子进程中执行 Python 代码片段，返回 stdout/stderr。"""
     try:
+        code = code if isinstance(code, str) else ""
+        if not code.strip():
+            return {"observation": "", "error": "代码为空，无法执行"}
         python_exe = _resolve_python_exe()
         if not python_exe:
             return {
                 "observation": "",
                 "error": "打包环境且系统未安装 Python，无法执行代码；请改用 read_file/list_directory 分析文件",
             }
-        # 安全护栏：Agent 代码不允许打开浏览器或拉起会自动开浏览器的后端
-        # 1) 预置 webbrowser 空实现（import webbrowser 后 open() 无副作用）
-        # 2) 预置 os.startfile 空实现（防止用系统默认程序打开 URL）
-        # 3) 注入 TAOFEI_AGENT_CHILD=1，backend/main.py 据此跳过启动时自动开浏览器
         guard = (
             "import sys,types as _t;"
             "_w=_t.ModuleType('webbrowser');"
@@ -449,18 +448,20 @@ def run_python_code(workspace_path: str | None, code: str) -> dict:
             "import os as _os;"
             "_os.startfile=lambda *a,**k:None\n"
         )
-        env = {**os.environ, "TAOFEI_AGENT_CHILD": "1"}
+        safe_env = {k: v for k, v in os.environ.items() if isinstance(v, str)}
+        safe_env["TAOFEI_AGENT_CHILD"] = "1"
         proc = subprocess.run(
             [python_exe, "-c", guard + code],
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
             timeout=15,
             cwd=workspace_path or None,
-            env=env,
+            env=safe_env,
         )
-        out = proc.stdout.strip()
-        err = proc.stderr.strip()
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
         result = ""
         if out:
             result += f"[stdout]\n{out}\n"
@@ -687,40 +688,45 @@ def build_skill_tools(skills: list[dict]) -> list[dict]:
 
 def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list[dict]], str], args: dict, skills: list[dict] | None = None) -> dict:
     """根据工具名分发执行。skills 提供动态注册的 HTTP 技能（call_skill_<id>）。"""
+    if not isinstance(args, dict):
+        args = {}
+    def _str(key, default=""):
+        v = args.get(key, default)
+        return v if isinstance(v, str) else default
     if name == "read_file":
         try:
-            offset = int(args.get("offset", 1))
+            offset = int(args.get("offset", 1) or 1)
         except Exception:
             offset = 1
         try:
-            limit = int(args.get("limit", 100))
+            limit = int(args.get("limit", 100) or 100)
         except Exception:
             limit = 100
-        return read_file(workspace_path, args.get("path", ""), offset=offset, limit=limit)
+        return read_file(workspace_path, _str("path"), offset=offset, limit=limit)
     if name == "grep_code":
         return grep_code(
             workspace_path,
-            args.get("pattern", ""),
-            path=args.get("path", ""),
+            _str("pattern"),
+            path=_str("path"),
             case_sensitive=bool(args.get("case_sensitive", False)),
-            include=args.get("include", ""),
+            include=_str("include"),
         )
     if name == "write_file":
-        return write_file(workspace_path, args.get("path", ""), args.get("content", ""))
+        return write_file(workspace_path, _str("path"), _str("content"))
     if name == "list_directory":
-        return list_directory(workspace_path, args.get("path", ""))
+        return list_directory(workspace_path, _str("path"))
     if name == "run_python_code":
-        return run_python_code(workspace_path, args.get("code", ""))
+        return run_python_code(workspace_path, _str("code"))
     if name == "http_request":
         return http_request(
             workspace_path,
-            args.get("url", ""),
-            args.get("method", "GET"),
-            args.get("headers", ""),
-            args.get("body", ""),
+            _str("url"),
+            _str("method", "GET"),
+            _str("headers"),
+            _str("body"),
         )
     if name == "ask_llm":
-        return ask_llm(llm_call, args.get("prompt", ""))
+        return ask_llm(llm_call, _str("prompt"))
     if name.startswith("call_skill_") and skills:
         sid = name[len("call_skill_"):]
         for sk in skills:
