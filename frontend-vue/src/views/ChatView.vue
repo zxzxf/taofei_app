@@ -742,11 +742,26 @@ function renderMarkdown(text) {
 
 function renderSectionItems(items) {
   if (!items || !items.length) return ''
-  const listHtml = items.map(item => {
-    const content = renderMarkdownInline(item)
-    return `<li>${content}</li>`
-  }).join('')
-  return `<ul class="chat-report-list">${listHtml}</ul>`
+  const parts = items.map(item => {
+    if (typeof item === 'string') {
+      return `<li>${renderMarkdownInline(item)}</li>`
+    }
+    if (item && typeof item === 'object') {
+      if (item.type === 'text' || item.content) {
+        return `<div class="report-section-text md">${renderMarkdown(item.content || item.text || '')}</div>`
+      }
+      if (item.type === 'code') {
+        return `<pre class="report-section-code"><code>${escapeHtml(item.content || item.code || '')}</code></pre>`
+      }
+      return `<li>${renderMarkdownInline(item.content || item.text || '')}</li>`
+    }
+    return `<li>${renderMarkdownInline(String(item))}</li>`
+  })
+  const hasList = items.some(item => typeof item === 'string' || (item && item.type && item.type !== 'text' && item.type !== 'code'))
+  if (hasList && !items.some(item => typeof item === 'object' && (item.type === 'text' || item.type === 'code'))) {
+    return `<ul class="chat-report-list">${parts.join('')}</ul>`
+  }
+  return parts.join('')
 }
 
 function renderMarkdownInline(text) {
@@ -3142,6 +3157,72 @@ function onFilePick(node) {
 }
 .chat-report-section-body :deep(tr:last-child td) { border-bottom: none; }
 .chat-report-section-body :deep(tr:hover td) { background: rgba(59, 130, 246, 0.04); }
+
+.report-section-text.md {
+  font-size: 13.5px;
+  color: var(--text);
+  line-height: 1.75;
+}
+.report-section-text.md p { margin: 0 0 12px 0; }
+.report-section-text.md p:last-child { margin-bottom: 0; }
+.report-section-text.md strong { color: var(--text); font-weight: 700; }
+.report-section-text.md em { color: var(--text-secondary); font-style: italic; }
+.report-section-text.md code {
+  background: rgba(139, 92, 246, 0.1); padding: 2px 6px; border-radius: 5px;
+  font-family: Consolas, 'Cascadia Code', monospace;
+  font-size: 12.5px; color: var(--accent);
+}
+.report-section-text.md pre {
+  background: #1e1e2e; color: #e0e0e0;
+  padding: 14px 16px; border-radius: 10px;
+  overflow-x: auto; font-size: 12.5px; line-height: 1.6;
+  margin: 12px 0;
+}
+.report-section-text.md pre code {
+  background: transparent; padding: 0; color: inherit; font-size: inherit;
+}
+.report-section-text.md a {
+  color: var(--primary); text-decoration: none;
+  border-bottom: 1px solid rgba(59, 130, 246, 0.3);
+}
+.report-section-text.md a:hover { opacity: .85; }
+.report-section-text.md ul, .report-section-text.md ol {
+  margin: 10px 0; padding-left: 24px;
+}
+.report-section-text.md li { margin: 4px 0; line-height: 1.7; }
+.report-section-text.md ul li::marker { color: var(--primary); }
+.report-section-text.md ol li::marker { color: var(--primary); font-weight: 700; }
+.report-section-text.md blockquote {
+  margin: 12px 0; padding: 10px 14px;
+  border-left: 3px solid var(--primary);
+  background: rgba(139, 92, 246, 0.06);
+  color: var(--text-secondary);
+  border-radius: 0 6px 6px 0;
+}
+.report-section-text.md h1, .report-section-text.md h2, .report-section-text.md h3,
+.report-section-text.md h4, .report-section-text.md h5, .report-section-text.md h6 {
+  font-weight: 700; color: var(--text); margin: 16px 0 8px 0; line-height: 1.35;
+}
+.report-section-text.md h1 { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.report-section-text.md h2 { font-size: 16px; border-bottom: 1px solid var(--border-light); padding-bottom: 4px; }
+.report-section-text.md h3 { font-size: 14.5px; }
+.report-section-text.md hr {
+  border: none; border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+.report-section-text.md .md-table-wrap { margin: 12px 0; overflow-x: auto; }
+.report-section-text.md table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.report-section-text.md th {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.08));
+  font-weight: 700; color: var(--text); text-align: left;
+  padding: 9px 12px; border-bottom: 2px solid rgba(59, 130, 246, 0.3);
+}
+.report-section-text.md td {
+  padding: 8px 12px; color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.report-section-text.md tr:last-child td { border-bottom: none; }
+.report-section-text.md tr:hover td { background: rgba(59, 130, 246, 0.04); }
 
 /* ===== 报告卡片 · 可折叠执行步骤 ===== */
 .chat-report-steps {

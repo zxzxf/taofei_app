@@ -645,7 +645,13 @@ def run_agent_task(
         else:
             final_report = computed_report
             final_report["title"] = f"已完成：{user_request[:30]}…"
-            final_report["summary"] = str(final_answer) if final_answer else "Agent 已完成任务。"
+            answer_text = str(final_answer) if final_answer else "Agent 已完成任务。"
+            short_summary = answer_text[:80].strip() + ("…" if len(answer_text) > 80 else "")
+            final_report["summary"] = short_summary
+            final_report["sections"] = [{
+                "heading": "答案",
+                "items": [{"type": "text", "content": answer_text}],
+            }]
             update(status="completed", result=final_report, current_step="完成")
             emit_log("INFO", "Agent 任务完成", task_id)
     except Exception as exc:
