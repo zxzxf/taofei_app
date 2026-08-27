@@ -781,35 +781,26 @@ function renderMarkdown(text) {
 
 function renderSectionItems(items) {
   if (!items || !items.length) return ''
-  const parts = items.map(item => {
+  const mdLines = []
+  for (const item of items) {
     if (typeof item === 'string') {
-      if (item.includes('\n') || item.includes('```') || item.includes('|') || item.startsWith('#') || item.startsWith('-') || item.startsWith('1.')) {
-        return `<div class="report-section-text md">${renderMarkdown(item)}</div>`
+      if (item.includes('\n') || item.includes('```') || item.includes('|') || item.startsWith('#') || item.startsWith('-') || item.startsWith('1.') || item.startsWith('>')) {
+        mdLines.push('', item, '')
+      } else {
+        mdLines.push(`- ${item}`)
       }
-      return `<li>${renderMarkdownInline(item)}</li>`
-    }
-    if (item && typeof item === 'object') {
+    } else if (item && typeof item === 'object') {
       if (item.type === 'text' || item.content) {
-        return `<div class="report-section-text md">${renderMarkdown(item.content || item.text || '')}</div>`
+        mdLines.push('', item.content || item.text || '', '')
+      } else if (item.type === 'code') {
+        mdLines.push('', '```', item.content || item.code || '', '```', '')
+      } else if (item.content || item.text) {
+        mdLines.push(`- ${item.content || item.text || ''}`)
       }
-      if (item.type === 'code') {
-        return `<pre class="report-section-code"><code>${escapeHtml(item.content || item.code || '')}</code></pre>`
-      }
-      return `<li>${renderMarkdownInline(item.content || item.text || '')}</li>`
-    }
-    return `<li>${renderMarkdownInline(String(item))}</li>`
-  })
-  const hasList = items.some(item => {
-    if (typeof item !== 'string') return !!(item && item.type && item.type !== 'text' && item.type !== 'code')
-    return !(item.includes('\n') || item.includes('```') || item.includes('|') || item.startsWith('#') || item.startsWith('-') || item.startsWith('1.'))
-  })
-  if (hasList && !items.some(item => typeof item === 'object' && (item.type === 'text' || item.type === 'code'))) {
-    const allStrings = items.every(item => typeof item === 'string')
-    if (allStrings && !items.some(item => item.includes('\n') || item.includes('```') || item.includes('|') || item.startsWith('#') || item.startsWith('-') || item.startsWith('1.'))) {
-      return `<ul class="chat-report-list">${parts.join('')}</ul>`
     }
   }
-  return parts.join('')
+  const md = mdLines.join('\n')
+  return `<div class="report-section-text md">${renderMarkdown(md)}</div>`
 }
 
 function renderMarkdownInline(text) {
