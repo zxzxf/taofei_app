@@ -281,12 +281,23 @@ class _LLMCompat:
     # ------------------------------------------------------------------
     @staticmethod
     def _to_openai_content(content):
-        """把 Anthropic 多模态 blocks 转换为 OpenAI vision 格式（image_url）。"""
+        """把 content 统一为 OpenAI vision 格式。
+
+        支持两种输入：Anthropic blocks 格式（type=image + source）
+        和 OpenAI 格式（type=image_url + image_url），都统一输出为
+        OpenAI vision 格式。纯文本内容直接返回。
+        """
         if not isinstance(content, list):
             return content
         out = []
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "image":
+            if not isinstance(block, dict):
+                out.append(block)
+                continue
+            btype = block.get("type")
+            if btype == "image_url":
+                out.append(block)
+            elif btype == "image":
                 src = block.get("source") or {}
                 if src.get("type") == "base64":
                     media = src.get("media_type", "image/png")
@@ -380,6 +391,35 @@ class _AnthropicLLM:
     # ------------------------------------------------------------------
     # taofei_api.LLM 兼容 API（/api/chat 与工作流引擎调用）
     # ------------------------------------------------------------------
+    @staticmethod
+    def _to_anthropic_content(content):
+        """把 OpenAI vision 格式的 content 转为 Anthropic blocks 格式。"""
+        if not isinstance(content, list):
+            return content
+        out = []
+        for block in content:
+            if not isinstance(block, dict):
+                out.append(block)
+                continue
+            btype = block.get("type")
+            if btype == "image":
+                out.append(block)
+            elif btype == "image_url":
+                iu = block.get("image_url") or {}
+                url = iu.get("url", "")
+                import re as _re
+                m = _re.match(r"^data:([^;]+);base64,(.+)$", url)
+                if m:
+                    out.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": m.group(1), "data": m.group(2)},
+                    })
+                else:
+                    out.append({"type": "image", "source": {"type": "url", "url": url}})
+            else:
+                out.append(block)
+        return out
+
     def call(self, messages):
         import httpx
 
@@ -391,11 +431,11 @@ class _AnthropicLLM:
             for m in messages:
                 if isinstance(m, dict):
                     role = str(m.get("role", "user"))
-                    content = m.get("content", "")
+                    content = self._to_anthropic_content(m.get("content", ""))
                 else:
                     # langchain BaseMessage 兼容
                     role = getattr(m, "type", "user")
-                    content = getattr(m, "content", str(m))
+                    content = self._to_anthropic_content(getattr(m, "content", str(m)))
                 if role in ("system", "developer"):
                     system.append(content if isinstance(content, str) else str(content))
                 elif role in ("assistant", "ai", "tool"):

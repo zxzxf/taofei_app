@@ -54,6 +54,11 @@ Final Answer: 给用户的最终答案。如果任务是排查、诊断、总结
   ]
 }}
 
+多模态能力：
+- 如果用户上传了图片，你可以直接看到图片内容，请结合图片信息回答问题或执行任务。
+- 图片中的文字、图表、界面、代码截图等都可以识别和分析。
+- 如果任务需要基于图片内容做操作（如根据截图找代码、分析界面等），先描述你在图片中看到的内容，再决定下一步工具调用。
+
 规则：
 1. 每次回复只能包含一轮 Thought + Action + Action Input，或最终的 Final Answer。
 2. Action Input 必须是合法 JSON，不要加 markdown 代码块，不要在 JSON 前后写解释文字。
@@ -383,7 +388,7 @@ def _extract_final_answer(text: str) -> str:
 
 
 def _build_user_content(user_request: str, images: list[str]):
-    """构造首条用户消息内容：无图返回纯文本，有图返回 Anthropic 多模态 blocks。"""
+    """构造首条用户消息内容：无图返回纯文本，有图返回 OpenAI vision 格式的 content 数组。"""
     if not images:
         return user_request
     blocks: list[dict] = []
@@ -394,13 +399,13 @@ def _build_user_content(user_request: str, images: list[str]):
         m = re.match(r"^data:([^;]+);base64,(.+)$", img)
         if m:
             blocks.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": m.group(1), "data": m.group(2)},
+                "type": "image_url",
+                "image_url": {"url": f"data:{m.group(1)};base64,{m.group(2)}"},
             })
         elif img.startswith("http://") or img.startswith("https://"):
-            blocks.append({"type": "image", "source": {"type": "url", "url": img}})
+            blocks.append({"type": "image_url", "image_url": {"url": img}})
     if user_request:
-        blocks.append({"type": "text", "text": user_request})
+        blocks.insert(0, {"type": "text", "text": user_request})
     return blocks if blocks else user_request
 
 
@@ -508,7 +513,7 @@ def run_agent_task(
                 has_image_blocks = (
                     isinstance(first_user, dict)
                     and isinstance(first_user.get("content"), list)
-                    and any(isinstance(b, dict) and b.get("type") == "image" for b in first_user["content"])
+                    and any(isinstance(b, dict) and b.get("type") == "image_url" for b in first_user["content"])
                 )
                 if images and has_image_blocks:
                     emit_log("WARNING", f"当前模型不支持图片，已降级为纯文本重试：{exc}", task_id)
