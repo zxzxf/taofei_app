@@ -212,7 +212,7 @@
                         <div class="timeline-thinking-header">
                           <span class="timeline-icon">💭</span>
                           <span class="timeline-label">思考中。。。</span>
-                          <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
+                          <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
                         </div>
                         <div class="timeline-thinking-content" v-html="renderMarkdown(item.content)"></div>
                       </div>
@@ -223,7 +223,7 @@
                           <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
                           <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
                           <span class="timeline-command-summary" v-if="toolArgSummary(item.name, item.args)">{{ toolArgSummary(item.name, item.args) }}</span>
-                          <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
+                          <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
                           <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                         </div>
                         <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
@@ -259,7 +259,7 @@
                       <div class="timeline-thinking-header">
                         <span class="timeline-icon">💭</span>
                         <span class="timeline-label">思考中。。。</span>
-                        <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
+                        <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
                       </div>
                       <div class="timeline-thinking-content" v-html="renderMarkdown(item.content)"></div>
                     </div>
@@ -270,7 +270,7 @@
                         <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
                         <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
                         <span class="timeline-command-summary" v-if="toolArgSummary(item.name, item.args)">{{ toolArgSummary(item.name, item.args) }}</span>
-                        <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(item.elapsed) }}</span>
+                        <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
                         <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                       </div>
                       <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
@@ -613,6 +613,14 @@ function totalDurationSeconds(msg) {
   }
   if (msg.thinkingDuration && msg.thinkingDuration > total) total = msg.thinkingDuration
   return total
+}
+
+function getStepElapsed(msg, index) {
+  if (!msg.timeline || !msg.timeline[index] || !msg.timeline[index].elapsed) return 0
+  const cur = msg.timeline[index].elapsed
+  if (index === 0) return cur
+  const prev = msg.timeline[index - 1].elapsed || 0
+  return Math.max(0, cur - prev)
 }
 
 function renderMarkdown(text) {
