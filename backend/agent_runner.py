@@ -695,26 +695,33 @@ def run_agent_task(
             final_report["summary"] = f"任务已被用户取消，已执行 {len(steps)} 步。"
             update(status="cancelled", result=final_report, current_step="已取消")
             emit_log("INFO", "Agent 任务已取消", task_id)
-        elif isinstance(final_answer, dict) and final_answer.get("type") == "report":
-            final_answer["status"] = "completed"
-            final_answer["steps"] = steps
-            # 模型自己生成的 report 可能没有 duration 或带占位符，统一用计算值覆盖
-            if not final_answer.get("duration") or final_answer.get("duration") == "进行中":
-                final_answer["duration"] = computed_report.get("duration", "进行中")
-            update(status="completed", result=final_answer, current_step="完成")
-            emit_log("INFO", "Agent 任务完成", task_id)
         else:
-            final_report = computed_report
-            final_report["title"] = f"已完成：{user_request[:30]}…"
-            answer_text = str(final_answer) if final_answer else "Agent 已完成任务。"
-            short_summary = answer_text[:80].strip() + ("…" if len(answer_text) > 80 else "")
-            final_report["summary"] = short_summary
-            final_report["sections"] = [{
-                "heading": "答案",
-                "items": [{"type": "text", "content": answer_text}],
-            }]
-            update(status="completed", result=final_report, current_step="完成")
-            emit_log("INFO", "Agent 任务完成", task_id)
+            #  # final_answer 可能是字符串（report JSON）也可能是 dict
+            if isinstance(final_answer, str) and _is_report_json(final_answer):
+                try:
+                    final_answer = json.loads(final_answer)
+                except Exception:
+                    pass
+            if isinstance(final_answer, dict) and final_answer.get("type") == "report":
+                final_answer["status"] = "completed"
+                final_answer["steps"] = steps
+                # 模型自己生成的 report 可能没有 duration 或带占位符，统一用计算值覆盖
+                if not final_answer.get("duration") or final_answer.get("duration") == "进行中":
+                    final_answer["duration"] = computed_report.get("duration", "进行中")
+                update(status="completed", result=final_answer, current_step="完成")
+                emit_log("INFO", "Agent 任务完成", task_id)
+            else:
+                final_report = computed_report
+                final_report["title"] = f"已完成：{user_request[:30]}…"
+                answer_text = str(final_answer) if final_answer else "Agent 已完成任务。"
+                short_summary = answer_text[:80].strip() + ("…" if len(answer_text) > 80 else "")
+                final_report["summary"] = short_summary
+                final_report["sections"] = [{
+                    "heading": "答案",
+                    "items": [{"type": "text", "content": answer_text}],
+                }]
+                update(status="completed", result=final_report, current_step="完成")
+                emit_log("INFO", "Agent 任务完成", task_id)
     except Exception as exc:
         err = str(exc)
         update(status="failed", error=err, current_step="失败")

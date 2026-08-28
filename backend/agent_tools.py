@@ -46,7 +46,7 @@ def _short(text: Any, n: int = MAX_OUTPUT_LEN) -> str:
 # ------------------------------------------------------------------
 # 工具实现
 # ------------------------------------------------------------------
-def read_file(workspace_path: str | None, path: str, offset: int = 1, limit: int = 100) -> dict:
+def read_file(workspace_path: str | None, path: str, offset: int = 1, limit: int = 200) -> dict:
     """读取工作空间内指定文本文件的内容，支持按行分页。
 
     offset 为起始行号（从 1 开始），limit 为最多返回行数。
@@ -65,7 +65,7 @@ def read_file(workspace_path: str | None, path: str, offset: int = 1, limit: int
         lines = content.splitlines()
         total = len(lines)
         start = max(1, int(offset))
-        max_lines = min(500, max(0, int(limit)))
+        max_lines = min(1000, max(0, int(limit)))
         if start > total:
             return {"observation": f"文件 {path} 共 {total} 行，起始行 {offset} 超出范围"}
         stop = min(total, start + max_lines - 1) if max_lines > 0 else total
@@ -580,13 +580,13 @@ def call_skill(skill: dict, args: dict) -> dict:
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "read_file",
-        "description": "读取工作空间内指定文本文件的内容，支持按行分页。offset 为起始行号（从 1 开始，默认 1），limit 为最多返回行数（默认 100，最大 500）。文件较大时请用 offset 分页读取后半部分，例如 offset=500 读取第 500 行起的内容。",
+        "description": "读取工作空间内指定文本文件的内容，支持按行分页。offset 为起始行号（从 1 开始，默认 1），limit 为最多返回行数（默认 200，最大 1000）。文件较大时请用 offset 分页读取后半部分，例如 offset=500 读取第 500 行起的内容。",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "相对于工作空间的文件路径"},
                 "offset": {"type": "integer", "description": "起始行号，从 1 开始，默认 1"},
-                "limit": {"type": "integer", "description": "最多返回行数，默认 100，最大 500"},
+                "limit": {"type": "integer", "description": "最多返回行数，默认 200，最大 1000"},
             },
             "required": ["path"],
         },
@@ -699,9 +699,9 @@ def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list
         except Exception:
             offset = 1
         try:
-            limit = int(args.get("limit", 100) or 100)
+            limit = int(args.get("limit", 200) or 200)
         except Exception:
-            limit = 100
+            limit = 200
         return read_file(workspace_path, _str("path"), offset=offset, limit=limit)
     if name == "grep_code":
         return grep_code(
