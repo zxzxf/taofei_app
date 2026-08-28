@@ -2352,7 +2352,7 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
         )
 
-        # 跨会话记忆写入：仅 completed 且启用记忆时保存
+        # 跨会话记忆写入：异步后台执行，不阻塞任务完成
         if memory_enabled and workspace_id:
             try:
                 import memory
@@ -2364,11 +2364,16 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                         if isinstance(result, dict):
                             final_text = (result.get("summary") or result.get("content") or "")
                 if final_text:
-                    saved = memory.save_memory(llm_call, workspace_id, user_request, str(final_text))
-                    if saved:
-                        log_buffer.emit("INFO", "system", "已保存 1 条新记忆", task_id)
+                    def _save_mem_bg():
+                        try:
+                            saved = memory.save_memory(llm_call, workspace_id, user_request, str(final_text))
+                            if saved:
+                                log_buffer.emit("INFO", "system", "已保存 1 条新记忆", task_id)
+                        except Exception as exc:
+                            log_buffer.emit("WARNING", "system", f"记忆保存失败：{exc}", task_id)
+                    threading.Thread(target=_save_mem_bg, daemon=True).start()
             except Exception as exc:
-                log_buffer.emit("WARNING", "system", f"记忆保存失败：{exc}", task_id)
+                log_buffer.emit("WARNING", "system", f"记忆保存调度失败：{exc}", task_id)
     except Exception as exc:
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"Agent 任务失败：{err_msg}", task_id)

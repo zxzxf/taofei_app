@@ -573,6 +573,24 @@ def run_agent_task(
 
             parsed = _parse_action(reply)
             if not parsed:
+                # 优化：解析失败时先尝试提取 report JSON，避免一次无意义的格式重试
+                if _try_extract_report_json(reply):
+                    emit_log("INFO", "模型直接输出了报告格式，跳过格式重试", task_id)
+                    final_answer = _extract_final_answer(reply)
+                    thinking_content = raw_thinking or _extract_thought(reply or "")
+                    if thinking_content:
+                        with task_lock:
+                            timeline = task_store[task_id].get("timeline", [])
+                            timeline.append({
+                                "type": "thinking",
+                                "content": thinking_content,
+                                "time": time.strftime("%H:%M:%S"),
+                                "elapsed": int(time.time() - task_start_time),
+                            })
+                            task_store[task_id]["timeline"] = timeline
+                        if notify_update:
+                            notify_update()
+                    break
                 emit_log("WARNING", f"模型输出未能解析为 ReAct 格式，原始输出：\n{reply}", task_id)
                 # 让模型重试一次
                 retry_msg = (
