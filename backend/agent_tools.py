@@ -315,6 +315,25 @@ def _is_usable_python(path: str) -> bool:
         return False
 
 
+def _decode_bytes(raw: bytes | None) -> str:
+    """智能解码子进程输出字节，优先 UTF-8，失败回退到 GBK。"""
+    if not raw:
+        return ""
+    # 1. 优先 UTF-8
+    try:
+        text = raw.decode("utf-8")
+        # 检查是否有大量乱码替换字符（说明实际上不是 UTF-8）
+        if text.count("\ufffd") < len(text) * 0.05:
+            return text.strip()
+    except UnicodeDecodeError:
+        pass
+    # 2. 回退到 GBK（Windows 中文系统默认）
+    try:
+        return raw.decode("gbk", errors="replace").strip()
+    except Exception:
+        return raw.decode("utf-8", errors="replace").strip()
+
+
 def _resolve_python_exe() -> str | None:
     """返回可用于执行代码的 Python 解释器路径。
 
@@ -450,18 +469,17 @@ def run_python_code(workspace_path: str | None, code: str) -> dict:
         )
         safe_env = {k: v for k, v in os.environ.items() if isinstance(v, str)}
         safe_env["TAOFEI_AGENT_CHILD"] = "1"
+        safe_env["PYTHONIOENCODING"] = "utf-8"
+        safe_env["PYTHONUTF8"] = "1"
         proc = subprocess.run(
             [python_exe, "-c", guard + code],
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=15,
             cwd=workspace_path or None,
             env=safe_env,
         )
-        out = (proc.stdout or "").strip()
-        err = (proc.stderr or "").strip()
+        out = _decode_bytes(proc.stdout)
+        err = _decode_bytes(proc.stderr)
         result = ""
         if out:
             result += f"[stdout]\n{out}\n"
