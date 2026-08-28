@@ -564,19 +564,18 @@ def run_agent_task(
                         task_store[task_id]["timeline"] = timeline
                     if notify_update:
                         notify_update()
-                if _is_report_json(final_answer):
-                    try:
-                        final_answer = json.loads(final_answer)
-                    except Exception:
-                        pass
+                report_data = _try_extract_report_json(final_answer)
+                if report_data:
+                    final_answer = report_data
                 break
 
             parsed = _parse_action(reply)
             if not parsed:
                 # 优化：解析失败时先尝试提取 report JSON，避免一次无意义的格式重试
-                if _try_extract_report_json(reply):
+                report_data = _try_extract_report_json(reply)
+                if report_data:
                     emit_log("INFO", "模型直接输出了报告格式，跳过格式重试", task_id)
-                    final_answer = _extract_final_answer(reply)
+                    final_answer = report_data
                     thinking_content = raw_thinking or _extract_thought(reply or "")
                     if thinking_content:
                         with task_lock:
@@ -714,12 +713,11 @@ def run_agent_task(
             update(status="cancelled", result=final_report, current_step="已取消")
             emit_log("INFO", "Agent 任务已取消", task_id)
         else:
-            #  # final_answer 可能是字符串（report JSON）也可能是 dict
-            if isinstance(final_answer, str) and _is_report_json(final_answer):
-                try:
-                    final_answer = json.loads(final_answer)
-                except Exception:
-                    pass
+            # final_answer 可能是字符串（report JSON，可能前后带文字）也可能是 dict
+            if isinstance(final_answer, str):
+                report_data = _try_extract_report_json(final_answer)
+                if report_data:
+                    final_answer = report_data
             if isinstance(final_answer, dict) and final_answer.get("type") == "report":
                 final_answer["status"] = "completed"
                 final_answer["steps"] = steps
