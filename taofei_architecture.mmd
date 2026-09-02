@@ -1,0 +1,89 @@
+graph TD
+    subgraph "Electron Desktop Shell"
+        E1[Main Process]
+        E2[Renderer Process]
+        E1 <--> E2
+    end
+
+    subgraph "Frontend - Vue 3"
+        V1[Vue 3 + Vite]
+        V2[Pinia State Management]
+        V3[Vue Router]
+        V4[Element Plus UI]
+        V5[Pages: Chat / Workflow / Knowledge / Agents]
+        V1 --> V2
+        V1 --> V3
+        V1 --> V4
+        V4 --> V5
+    end
+
+    subgraph "Backend - FastAPI"
+        B1[FastAPI Service]
+        B2[RESTful API]
+        B3[WebSocket Connection]
+        B4[Dependency Injection / Routers]
+        B1 --> B2
+        B1 --> B3
+        B1 --> B4
+    end
+
+    subgraph "AI Agent Core"
+        A1[Agent Manager]
+        A2[Multi-Agent Collaboration]
+        A3[Tool Calling]
+        A4[Memory Management]
+        A1 --> A2
+        A1 --> A3
+        A1 --> A4
+    end
+
+    subgraph "Workflow Engine"
+        W1[Workflow Engine]
+        W2[Node Editor]
+        W3[Execution Scheduler]
+        W1 --> W2
+        W1 --> W3
+    end
+
+    subgraph "Knowledge Base RAG"
+        R1[Document Loader]
+        R2[Embedding]
+        R3[Vector Database]
+        R4[Retrieval-Augmented Generation]
+        R1 --> R2
+        R2 --> R3
+        R3 --> R4
+    end
+
+    subgraph "LLM Adapter Layer"
+        L1[OpenAI API]
+        L2[Azure OpenAI]
+        L3[Claude / Gemini / Others]
+        L4[Local LLM]
+        L5[Unified Model Adapter]
+        L5 --> L1
+        L5 --> L2
+        L5 --> L3
+        L5 --> L4
+    end
+
+    subgraph "Data Storage"
+        D1[(SQLite)]
+        D2[File System]
+        D3[Cache / Logs]
+    end
+
+    E2 --> V1
+    V5 --> B2
+    V5 --> B3
+    B4 --> A1
+    B4 --> W1
+    B4 --> R4
+    A1 --> L5
+    W1 --> A1
+    R4 --> L5
+    A1 --> D1
+    W1 --> D1
+    R1 --> D2
+    D1 --> D2
+    D1 --> D3

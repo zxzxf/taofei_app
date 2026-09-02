@@ -102,9 +102,6 @@ set PYTHONPATH=%CD%\build\_noop_site
 ```
 
 > **前置**：需先完成 `前端构建` 步骤（或由 build-desktop.bat 自动执行）。spec 会收集项目根 `frontend/` 作为静态资源。
-
-> **注意**：手动打包必须带上 `PYTHONPATH=build\_noop_site`（该目录含一个空 `sitecustomize.py`）。WorkBuddy 会通过环境变量注入删除钩子，导致 PyInstaller 清理缓存时崩溃；空 sitecustomize 让 Python 优先加载它从而绕开。
-
 产物：`dist\TaofeiAPI.exe`（含 taofei_api + FastAPI + 已构建前端静态资源）
 
 **分发使用：**
