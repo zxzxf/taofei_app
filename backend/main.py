@@ -424,6 +424,160 @@ class _LLMCompat:
         result = llm_with_tools.invoke(lc_msgs)
         return result
 
+    def stream_with_tools(self, messages, tools=None):
+        """流式带 function calling 调用，yield (delta_type, delta) 元组。
+
+        delta_type:
+          - "content": 文本内容 delta（字符串）
+          - "tool_call": 工具调用增量 {index, id?, name?, arguments?}
+          - "done": 调用完成，返回完整响应对象
+
+        用于 token-by-token 流式输出。
+        """
+        from langchain_core.messages import (
+            AIMessage,
+            AIMessageChunk,
+            BaseMessage,
+            HumanMessage,
+            SystemMessage,
+            ToolMessage,
+        )
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+
+        lc_msgs: list = []
+        for m in messages:
+            if isinstance(m, BaseMessage):
+                lc_msgs.append(m)
+                continue
+            if not isinstance(m, dict):
+                lc_msgs.append(HumanMessage(content=str(m)))
+                continue
+            role = m.get("role", "user")
+            content = self._to_openai_content(m.get("content", ""))
+            if role in ("system",):
+                lc_msgs.append(SystemMessage(content=content))
+            elif role in ("assistant", "ai"):
+                tc = m.get("tool_calls")
+                ai_msg = AIMessage(content=content or "")
+                if tc:
+                    lc_tcs = []
+                    for c in tc:
+                        if isinstance(c, dict):
+                            func = c.get("function", {})
+                            args = func.get("arguments", {})
+                            if isinstance(args, str):
+                                import json as _json
+                                try:
+                                    args = _json.loads(args)
+                                except Exception:
+                                    args = {}
+                            lc_tcs.append({
+                                "name": func.get("name", ""),
+                                "args": args,
+                                "id": c.get("id", ""),
+                                "type": "tool_call",
+                            })
+                    ai_msg.tool_calls = lc_tcs
+                lc_msgs.append(ai_msg)
+            elif role in ("tool",):
+                tc_id = m.get("tool_call_id", "")
+                lc_msgs.append(ToolMessage(content=content, tool_call_id=tc_id))
+            else:
+                lc_msgs.append(HumanMessage(content=content))
+
+        # 绑定工具
+        llm_stream = self._llm
+        if tools:
+            lc_tools = []
+            for t in tools:
+                if t.get("type") == "function":
+                    func = t["function"]
+                    lc_tools.append(convert_to_openai_tool({
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {"type": "object", "properties": {}}),
+                    }))
+            if lc_tools:
+                llm_stream = self._llm.bind_tools(lc_tools)
+
+        # 流式迭代
+        content_parts: list[str] = []
+        tool_call_chunks: dict[int, dict] = {}  # index -> {id, name, args_parts}
+
+        for chunk in llm_stream.stream(lc_msgs):
+            if isinstance(chunk, AIMessageChunk):
+                # 文本 delta
+                if chunk.content:
+                    if isinstance(chunk.content, str):
+                        content_parts.append(chunk.content)
+                        yield ("content", chunk.content)
+                    elif isinstance(chunk.content, list):
+                        for block in chunk.content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text = block.get("text", "")
+                                if text:
+                                    content_parts.append(text)
+                                    yield ("content", text)
+
+                # 工具调用 delta
+                if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                    for tc_chunk in chunk.tool_call_chunks:
+                        idx = tc_chunk.get("index", 0) if hasattr(tc_chunk, "get") else getattr(tc_chunk, "index", 0)
+                        if idx not in tool_call_chunks:
+                            tool_call_chunks[idx] = {"id": "", "name": "", "args_parts": []}
+                        if hasattr(tc_chunk, "get"):
+                            tid = tc_chunk.get("id", "")
+                            tname = tc_chunk.get("name", "")
+                            targs = tc_chunk.get("args", "")
+                        else:
+                            tid = getattr(tc_chunk, "id", "")
+                            tname = getattr(tc_chunk, "name", "")
+                            targs = getattr(tc_chunk, "args", "")
+                        if tid:
+                            tool_call_chunks[idx]["id"] = tid
+                        if tname:
+                            tool_call_chunks[idx]["name"] += tname
+                        if targs:
+                            tool_call_chunks[idx]["args_parts"].append(targs)
+                        yield ("tool_call_delta", {
+                            "index": idx,
+                            "id": tid or None,
+                            "name": tname or None,
+                            "arguments": targs or None,
+                        })
+            else:
+                # 非标准 chunk，尝试转字符串
+                text = str(chunk) if chunk else ""
+                if text:
+                    content_parts.append(text)
+                    yield ("content", text)
+
+        # 组装最终响应
+        full_text = "".join(content_parts)
+        full_tool_calls = []
+        for idx in sorted(tool_call_chunks.keys()):
+            tc = tool_call_chunks[idx]
+            args_str = "".join(tc["args_parts"])
+            args_dict = {}
+            if args_str:
+                import json as _json
+                try:
+                    args_dict = _json.loads(args_str)
+                except Exception:
+                    args_dict = {}
+            full_tool_calls.append({
+                "id": tc["id"],
+                "type": "function",
+                "function": {
+                    "name": tc["name"],
+                    "arguments": args_dict,
+                },
+            })
+
+        from types import SimpleNamespace
+        msg = SimpleNamespace(content=full_text, tool_calls=full_tool_calls)
+        yield ("done", SimpleNamespace(message=msg))
+
     # ------------------------------------------------------------------
     # 转发到 langchain ChatModel 原生接口（taofei_api Agent 使用）
     # ------------------------------------------------------------------
@@ -702,6 +856,213 @@ class _AnthropicLLM:
         from types import SimpleNamespace
         msg = SimpleNamespace(content=text, tool_calls=tool_calls)
         return SimpleNamespace(message=msg)
+
+    def stream_with_tools(self, messages, tools=None):
+        """Anthropic SSE 流式 + function calling，yield (delta_type, delta) 元组。
+
+        delta_type:
+          - "content": 文本内容 delta
+          - "tool_call_delta": 工具调用增量
+          - "done": 调用完成，返回完整响应对象
+        """
+        import httpx
+
+        system: list[str] = []
+        msgs: list[dict] = []
+        for m in messages:
+            if isinstance(m, dict):
+                role = str(m.get("role", "user"))
+                content = self._to_anthropic_content(m.get("content", ""))
+            else:
+                role = getattr(m, "type", "user")
+                content = self._to_anthropic_content(getattr(m, "content", str(m)))
+
+            if role in ("system", "developer"):
+                system.append(content if isinstance(content, str) else str(content))
+            elif role in ("assistant", "ai"):
+                tc = m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
+                if tc:
+                    blocks = []
+                    if content:
+                        if isinstance(content, str):
+                            blocks.append({"type": "text", "text": content})
+                        elif isinstance(content, list):
+                            blocks.extend(content)
+                    for c in tc:
+                        if isinstance(c, dict):
+                            func = c.get("function", {})
+                            args = func.get("arguments", {})
+                            if isinstance(args, str):
+                                import json as _json
+                                try:
+                                    args = _json.loads(args)
+                                except Exception:
+                                    args = {}
+                            blocks.append({
+                                "type": "tool_use",
+                                "id": c.get("id", ""),
+                                "name": func.get("name", ""),
+                                "input": args,
+                            })
+                    msgs.append({"role": "assistant", "content": blocks})
+                else:
+                    msgs.append({"role": "assistant", "content": content})
+            elif role in ("tool",):
+                tc_id = m.get("tool_call_id", "") if isinstance(m, dict) else getattr(m, "tool_call_id", "")
+                msgs.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": content if isinstance(content, str) else str(content),
+                    }],
+                })
+            else:
+                msgs.append({"role": "user", "content": content})
+
+        payload: dict[str, object] = {
+            "model": self.model,
+            "max_tokens": 8192,
+            "messages": msgs,
+            "stream": True,
+        }
+        if system:
+            payload["system"] = "\n\n".join(system)
+        if tools:
+            anthropic_tools = []
+            for t in tools:
+                if t.get("type") == "function":
+                    func = t["function"]
+                    anthropic_tools.append({
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+                    })
+            if anthropic_tools:
+                payload["tools"] = anthropic_tools
+
+        headers = dict(self._headers())
+        headers["Accept"] = "text/event-stream"
+        headers["Cache-Control"] = "no-cache"
+        headers["Connection"] = "keep-alive"
+
+        text_parts: list[str] = []
+        thinking_parts: list[str] = []
+        tool_call_states: dict[str, dict] = {}  # id -> {name, input_parts: [], index}
+
+        with httpx.stream(
+            "POST",
+            self._messages_url(),
+            json=payload,
+            headers=headers,
+            timeout=self.timeout,
+        ) as resp:
+            if resp.status_code != 200:
+                err = resp.text[:300]
+                raise ValueError(f"HTTP {resp.status_code}: {err}")
+
+            current_tool_id: str | None = None
+            for line in resp.iter_lines():
+                if not line or line.startswith(":"):
+                    continue
+                if line.startswith("event:"):
+                    continue
+                if line.startswith("data:"):
+                    data_str = line[5:].strip()
+                    if not data_str:
+                        continue
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        import json as _json
+                        data = _json.loads(data_str)
+                    except Exception:
+                        continue
+
+                    event_type = data.get("type", "")
+
+                    if event_type == "content_block_delta":
+                        delta = data.get("delta", {})
+                        delta_type = delta.get("type", "")
+                        if delta_type == "text_delta":
+                            txt = delta.get("text", "")
+                            if txt:
+                                text_parts.append(txt)
+                                yield ("content", txt)
+                        elif delta_type == "input_json_delta":
+                            tid = current_tool_id
+                            args_delta = delta.get("partial_json", "")
+                            if tid and args_delta:
+                                if tid in tool_call_states:
+                                    tool_call_states[tid]["input_parts"].append(args_delta)
+                                yield ("tool_call_delta", {
+                                    "index": tool_call_states[tid]["index"] if tid in tool_call_states else 0,
+                                    "id": tid,
+                                    "name": None,
+                                    "arguments": args_delta,
+                                })
+
+                    elif event_type == "content_block_start":
+                        block = data.get("content_block", {})
+                        btype = block.get("type", "")
+                        if btype == "tool_use":
+                            tid = block.get("id", "")
+                            tname = block.get("name", "")
+                            idx = len(tool_call_states)
+                            tool_call_states[tid] = {
+                                "name": tname,
+                                "input_parts": [],
+                                "index": idx,
+                            }
+                            current_tool_id = tid
+                            yield ("tool_call_delta", {
+                                "index": idx,
+                                "id": tid,
+                                "name": tname,
+                                "arguments": None,
+                            })
+
+                    elif event_type == "content_block_stop":
+                        pass  # 一个 content block 结束
+
+                    elif event_type == "message_delta":
+                        # message 级别 delta（如 stop_reason）
+                        pass
+
+                    elif event_type == "message_start":
+                        pass
+
+                    elif event_type == "message_stop":
+                        break
+
+        # 组装最终响应
+        full_text = "".join(text_parts).strip()
+        if thinking_parts:
+            thinking_block = "<thinking>\n" + "\n\n".join(thinking_parts) + "\n</thinking>\n\n"
+            full_text = (thinking_block + full_text).strip() if full_text else thinking_block.strip()
+
+        full_tool_calls = []
+        for tid, state in sorted(tool_call_states.items(), key=lambda x: x[1]["index"]):
+            args_str = "".join(state["input_parts"])
+            args_dict = {}
+            if args_str:
+                import json as _json
+                try:
+                    args_dict = _json.loads(args_str)
+                except Exception:
+                    args_dict = {}
+            full_tool_calls.append({
+                "id": tid,
+                "type": "function",
+                "function": {
+                    "name": state["name"],
+                    "arguments": args_dict,
+                },
+            })
+
+        from types import SimpleNamespace
+        msg = SimpleNamespace(content=full_text, tool_calls=full_tool_calls)
+        yield ("done", SimpleNamespace(message=msg))
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
@@ -2102,6 +2463,13 @@ except ImportError:
     run_agent_task_fc = None  # type: ignore
     HAS_FC_RUNNER = False
 
+try:
+    from agent_runner_stream import run_agent_task_streaming  # noqa: E402
+    HAS_STREAM_RUNNER = True
+except ImportError:
+    run_agent_task_streaming = None  # type: ignore
+    HAS_STREAM_RUNNER = False
+
 
 def _load_workflows() -> list[dict]:
     return db.load_workflows()
@@ -2316,10 +2684,18 @@ def task_status(task_id: str):
 
 @app.get("/api/agent/stream/{task_id}")
 def agent_stream(task_id: str):
-    """Server-Sent Events：实时推送 Agent 任务更新，取代轮询。"""
+    """Server-Sent Events：实时推送 Agent 任务更新，支持 token 级流式 delta。
+
+    事件类型：
+    - message (默认): 完整任务快照（向后兼容）
+    - delta: token 级增量 {type, delta}，更实时
+    - done: 任务完成
+    - error: 任务错误
+    """
 
     def event_generator():
         last_snapshot = None
+        delta_pointer = 0  # 下一条要发送的 delta 在缓冲区中的位置
         while True:
             with _tasks_lock:
                 event = _task_events.setdefault(task_id, threading.Event())
@@ -2329,8 +2705,15 @@ def agent_stream(task_id: str):
                 yield f"event: error\ndata: {json.dumps({'error': '任务不存在'}, ensure_ascii=False)}\n\n"
                 break
             status = task.get("status")
-            # 快照关键字段：状态、当前步骤、结果、步数；任一变化即推送，
-            # 确保前端能看到"思考第 N 步"等中间过程，而非只在 result 变化时才更新
+
+            # --- 发送 delta 增量（优先，更实时）---
+            delta_buf = task.get("delta_buffer", [])
+            new_deltas = delta_buf[delta_pointer:]
+            delta_pointer += len(new_deltas)
+            for entry in new_deltas:
+                yield f"event: delta\ndata: {json.dumps(entry, ensure_ascii=False)}\n\n"
+
+            # --- 发送完整快照（向后兼容 + 状态同步）---
             snapshot = (
                 status,
                 task.get("current_step"),
@@ -2341,17 +2724,18 @@ def agent_stream(task_id: str):
             )
             if snapshot != last_snapshot:
                 last_snapshot = snapshot
-                if status in ("completed", "failed"):
+                if status in ("completed", "failed", "cancelled"):
                     yield f"event: done\ndata: {json.dumps(task, ensure_ascii=False)}\n\n"
                     break
                 yield f"data: {json.dumps(task, ensure_ascii=False)}\n\n"
-            elif status in ("completed", "failed"):
+            elif status in ("completed", "failed", "cancelled"):
                 yield f"event: done\ndata: {json.dumps(task, ensure_ascii=False)}\n\n"
                 break
-            # 等待下一次更新（最长 5 秒唤醒一次，避免连接僵死）
-            timed_out = not event.wait(timeout=5.0)
+
+            # 等待下一次更新（最长 2 秒唤醒一次，降低延迟）
+            timed_out = not event.wait(timeout=2.0)
             if timed_out:
-                # 心跳：保持连接存活，防止代理/浏览器因空闲断开
+                # 心跳：保持连接存活
                 yield ": heartbeat\n\n"
 
     return StreamingResponse(
@@ -2601,6 +2985,150 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     future.cancel()
                     raise TimeoutError(f"模型调用超时（{timeout}秒），请检查网络或换用更快的模型")
 
+        def llm_stream_fn(messages: list[dict], tools: list[dict] | None = None):
+            """流式 LLM 调用生成器。优先用 stream_with_tools 方法。
+
+            生成器 yield (delta_type, delta_value):
+              ("content", str) — 文本 token
+              ("tool_call_delta", dict) — 工具调用增量
+              ("done", response_obj) — 完成，返回完整响应
+            """
+            # 优先用底层的 stream_with_tools
+            if hasattr(llm, "stream_with_tools"):
+                yield from llm.stream_with_tools(messages, tools=tools)
+                return
+
+            # 退而求其次：用 bind_tools + stream
+            if tools and hasattr(llm, "bind_tools") and hasattr(llm, "stream"):
+                from langchain_core.utils.function_calling import convert_to_openai_tool
+                from langchain_core.messages import (
+                    AIMessageChunk, HumanMessage, SystemMessage, ToolMessage,
+                )
+                lc_tools = [convert_to_openai_tool(t["function"]) for t in tools if t.get("type") == "function"]
+                bound = llm.bind_tools(lc_tools)
+
+                lc_msgs = []
+                for m in messages:
+                    role = m.get("role", "user")
+                    content = m.get("content", "")
+                    if role == "system":
+                        lc_msgs.append(SystemMessage(content=content))
+                    elif role in ("assistant", "ai"):
+                        from langchain_core.messages import AIMessage
+                        ai_msg = AIMessage(content=content or "")
+                        tc = m.get("tool_calls")
+                        if tc:
+                            lc_tcs = []
+                            for c in tc:
+                                if isinstance(c, dict):
+                                    func = c.get("function", {})
+                                    args = func.get("arguments", {})
+                                    if isinstance(args, str):
+                                        import json as _j
+                                        try:
+                                            args = _j.loads(args)
+                                        except Exception:
+                                            args = {}
+                                    lc_tcs.append({
+                                        "name": func.get("name", ""),
+                                        "args": args,
+                                        "id": c.get("id", ""),
+                                        "type": "tool_call",
+                                    })
+                            ai_msg.tool_calls = lc_tcs
+                        lc_msgs.append(ai_msg)
+                    elif role == "tool":
+                        lc_msgs.append(ToolMessage(content=content, tool_call_id=m.get("tool_call_id", "")))
+                    else:
+                        lc_msgs.append(HumanMessage(content=content))
+
+                content_parts: list[str] = []
+                tool_call_chunks: dict[int, dict] = {}
+                for chunk in bound.stream(lc_msgs):
+                    if isinstance(chunk, AIMessageChunk):
+                        if chunk.content:
+                            txt = chunk.content if isinstance(chunk.content, str) else ""
+                            if txt:
+                                content_parts.append(txt)
+                                yield ("content", txt)
+                        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                            for tc_chunk in chunk.tool_call_chunks:
+                                idx = getattr(tc_chunk, "index", 0) if hasattr(tc_chunk, "index") else 0
+                                if idx not in tool_call_chunks:
+                                    tool_call_chunks[idx] = {"id": "", "name": "", "args_parts": []}
+                                tid = getattr(tc_chunk, "id", "") or ""
+                                tname = getattr(tc_chunk, "name", "") or ""
+                                targs = getattr(tc_chunk, "args", "") or ""
+                                if tid:
+                                    tool_call_chunks[idx]["id"] = tid
+                                if tname:
+                                    tool_call_chunks[idx]["name"] += tname
+                                if targs:
+                                    tool_call_chunks[idx]["args_parts"].append(targs)
+                                yield ("tool_call_delta", {
+                                    "index": idx,
+                                    "id": tid or None,
+                                    "name": tname or None,
+                                    "arguments": targs or None,
+                                })
+
+                # 组装最终响应
+                import json as _j
+                from types import SimpleNamespace
+                full_text = "".join(content_parts)
+                full_tcs = []
+                for idx in sorted(tool_call_chunks.keys()):
+                    tc = tool_call_chunks[idx]
+                    args_str = "".join(tc["args_parts"])
+                    args_dict = {}
+                    if args_str.strip():
+                        try:
+                            args_dict = _j.loads(args_str)
+                        except Exception:
+                            pass
+                    full_tcs.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": args_dict},
+                    })
+                msg = SimpleNamespace(content=full_text, tool_calls=full_tcs)
+                yield ("done", SimpleNamespace(message=msg))
+                return
+
+            # 完全不支持流式：降级为非流式，一次性返回
+            resp = llm_call(messages, tools=tools)
+            content = ""
+            tool_calls = []
+            if isinstance(resp, str):
+                content = resp
+            else:
+                msg_obj = getattr(resp, "message", None)
+                if msg_obj is not None:
+                    content = getattr(msg_obj, "content", "") or ""
+                    tcs = getattr(msg_obj, "tool_calls", []) or []
+                    for tc in tcs:
+                        if hasattr(tc, "function"):
+                            args = tc.function.arguments
+                            if isinstance(args, str):
+                                import json as _j
+                                try:
+                                    args = _j.loads(args)
+                                except Exception:
+                                    args = {}
+                            tool_calls.append({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.function.name, "arguments": args},
+                            })
+                        elif isinstance(tc, dict):
+                            tool_calls.append(tc)
+            # 先 yield 完整文本作为一个 content 块
+            if content:
+                yield ("content", content)
+            from types import SimpleNamespace
+            msg = SimpleNamespace(content=content, tool_calls=tool_calls)
+            yield ("done", SimpleNamespace(message=msg))
+
         def emit_log(level: str, message: str, tid: str):
             log_buffer.emit(level, "agent", message, tid)
 
@@ -2642,9 +3170,24 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     emit_log("INFO", f"检测到天气意图，已自动启用技能「{s.get('name')}」", task_id)
                     break
 
-        # 默认使用 Function Calling 模式，失败自动降级到 ReAct
-        if HAS_FC_RUNNER:
-            log_buffer.emit("INFO", "system", "使用 Function Calling 模式执行 Agent 任务", task_id)
+        # 优先使用流式 Function Calling 模式，失败自动降级
+        if HAS_STREAM_RUNNER:
+            log_buffer.emit("INFO", "system", "使用流式 Function Calling 模式执行 Agent 任务", task_id)
+            run_agent_task_streaming(
+                task_id=task_id,
+                user_request=user_request,
+                llm_stream_fn=llm_stream_fn,
+                workspace_path=workspace_path,
+                emit_log=emit_log,
+                task_store=_tasks,
+                task_lock=_tasks_lock,
+                notify_update=notify_update,
+                images=images or [],
+                skills=bound_skills,
+                cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
+            )
+        elif HAS_FC_RUNNER:
+            log_buffer.emit("INFO", "system", "流式 runner 不可用，降级为非流式 FC 模式", task_id)
             run_agent_task_fc(
                 task_id=task_id,
                 user_request=user_request,
