@@ -170,6 +170,37 @@ def init_db() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_ws ON memory_entries(workspace_id)")
 
+        # 对话会话（Session 化架构：跨请求持久的对话上下文）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '新对话',
+                workspace_id TEXT,
+                model_preset_id TEXT,
+                skill_ids TEXT,
+                knowledge_ids TEXT,
+                memory_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id)")
+
+        # 会话消息（OpenAI 兼容原生格式，逐条存 JSON）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_messages (
+                session_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tool_call_id TEXT,
+                tool_calls TEXT,
+                PRIMARY KEY (session_id, seq)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sm_session ON session_messages(session_id)")
+
         conn.commit()
 
 
@@ -543,3 +574,182 @@ def save_workflows(items: list[dict]) -> None:
             conn.commit()
     except Exception as exc:
         print(f"[ERROR] 保存工作流失败：{exc}", flush=True)
+
+
+# -------------------------------------------------------------
+# 对话会话（Session）
+# -------------------------------------------------------------
+def create_session(meta: dict) -> bool:
+    """创建会话记录。meta: id/title/workspace_id/model_preset_id/skill_ids/knowledge_ids/memory_enabled/created_at/updated_at"""
+    try:
+        with _get_conn() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO sessions
+                   (id, title, workspace_id, model_preset_id, skill_ids, knowledge_ids,
+                    memory_enabled, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    meta.get("id", ""),
+                    meta.get("title", "新对话"),
+                    meta.get("workspace_id") or None,
+                    meta.get("model_preset_id") or None,
+                    json.dumps(meta.get("skill_ids") or [], ensure_ascii=False),
+                    json.dumps(meta.get("knowledge_ids") or [], ensure_ascii=False),
+                    1 if meta.get("memory_enabled", True) else 0,
+                    meta.get("created_at", 0.0),
+                    meta.get("updated_at", 0.0),
+                ),
+            )
+            conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[ERROR] 创建会话失败：{exc}", flush=True)
+        return False
+
+
+def load_session(session_id: str) -> dict | None:
+    """加载会话（含消息）。返回 {meta..., messages: [...]} 或 None。"""
+    try:
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if not row:
+                return None
+            s = _row_to_dict(row)
+            s["skill_ids"] = _safe_json_list(s.get("skill_ids"))
+            s["knowledge_ids"] = _safe_json_list(s.get("knowledge_ids"))
+            s["memory_enabled"] = bool(s.get("memory_enabled", 1))
+
+            rows = conn.execute(
+                "SELECT role, content, tool_call_id, tool_calls FROM session_messages WHERE session_id = ? ORDER BY seq",
+                (session_id,),
+            ).fetchall()
+            messages = []
+            for r in rows:
+                msg = {"role": r["role"], "content": _safe_json(r["content"])}
+                if r["tool_call_id"]:
+                    msg["tool_call_id"] = r["tool_call_id"]
+                if r["tool_calls"]:
+                    msg["tool_calls"] = _safe_json(r["tool_calls"])
+                messages.append(msg)
+            s["messages"] = messages
+            return s
+    except Exception as exc:
+        print(f"[ERROR] 加载会话失败：{exc}", flush=True)
+        return None
+
+
+def list_sessions(limit: int = 100, workspace_id: str | None = None) -> list[dict]:
+    """列出会话摘要（不含消息），按最近活跃排序。"""
+    try:
+        with _get_conn() as conn:
+            sql = """
+                SELECT s.id, s.title, s.workspace_id, s.model_preset_id, s.memory_enabled,
+                       s.created_at, s.updated_at,
+                       (SELECT COUNT(*) FROM session_messages m WHERE m.session_id = s.id) AS message_count
+                FROM sessions s
+            """
+            params: list = []
+            if workspace_id:
+                sql += " WHERE s.workspace_id = ?"
+                params.append(workspace_id)
+            sql += " ORDER BY s.updated_at DESC LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(sql, params).fetchall()
+            out = []
+            for r in rows:
+                item = _row_to_dict(r)
+                item["memory_enabled"] = bool(item.get("memory_enabled", 1))
+                item["title"] = item.get("title") or "新对话"
+                out.append(item)
+            return out
+    except Exception as exc:
+        print(f"[ERROR] 列出会话失败：{exc}", flush=True)
+        return []
+
+
+def update_session_meta(session_id: str, **fields) -> bool:
+    """更新会话元数据字段。fields 为 {title/workspace_id/model_preset_id/skill_ids/knowledge_ids/memory_enabled/updated_at}。"""
+    try:
+        allowed = {
+            "title", "workspace_id", "model_preset_id", "skill_ids",
+            "knowledge_ids", "memory_enabled", "updated_at",
+        }
+        sets, params = [], []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k in ("skill_ids", "knowledge_ids"):
+                v = json.dumps(v or [], ensure_ascii=False)
+            elif k == "memory_enabled":
+                v = 1 if v else 0
+            sets.append(f"{k} = ?")
+            params.append(v)
+        if not sets:
+            return False
+        params.append(session_id)
+        with _get_conn() as conn:
+            conn.execute(f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?", params)
+            conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[ERROR] 更新会话失败：{exc}", flush=True)
+        return False
+
+
+def append_session_messages(session_id: str, messages: list[dict]) -> bool:
+    """追加消息到会话，seq 自动递增。"""
+    if not messages:
+        return True
+    try:
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM session_messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            seq = int(row["next_seq"]) if row else 0
+            for msg in messages:
+                role = msg.get("role", "")
+                content = json.dumps(msg.get("content", ""), ensure_ascii=False)
+                tool_call_id = msg.get("tool_call_id")
+                tool_calls = json.dumps(msg.get("tool_calls"), ensure_ascii=False) if msg.get("tool_calls") else None
+                conn.execute(
+                    """INSERT INTO session_messages (session_id, seq, role, content, tool_call_id, tool_calls)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (session_id, seq, role, content, tool_call_id, tool_calls),
+                )
+                seq += 1
+            conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[ERROR] 追加会话消息失败：{exc}", flush=True)
+        return False
+
+
+def delete_session(session_id: str) -> bool:
+    """删除会话及其全部消息。"""
+    try:
+        with _get_conn() as conn:
+            conn.execute("DELETE FROM session_messages WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[ERROR] 删除会话失败：{exc}", flush=True)
+        return False
+
+
+def _safe_json(data) -> Any:
+    """尝试解析 JSON，失败原样返回。"""
+    if data is None:
+        return None
+    try:
+        return json.loads(data)
+    except Exception:
+        return data
+
+
+def _safe_json_list(data) -> list:
+    val = _safe_json(data)
+    return val if isinstance(val, list) else []

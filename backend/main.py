@@ -1528,6 +1528,17 @@ class AgentRunRequest(BaseModel):
     knowledge_ids: list[str] = []  # 本次任务引用的知识库 id 列表（RAG）
     memory_enabled: bool = True  # 是否启用跨会话记忆（召回 + 写入）
     history: list[AgentHistoryMessage] = []  # 当前会话历史消息（不包含当前 request）
+    session_id: str | None = None  # 会话 id：传则复用持久化会话上下文，不传保持旧 task 模式
+
+
+class SessionCreateRequest(BaseModel):
+    """显式创建空会话。"""
+    title: str = "新对话"
+    workspace_id: str | None = None
+    model_preset_id: str | None = None
+    skill_ids: list[str] = []
+    knowledge_ids: list[str] = []
+    memory_enabled: bool = True
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -2732,8 +2743,8 @@ def agent_stream(task_id: str):
                 yield f"event: done\ndata: {json.dumps(task, ensure_ascii=False)}\n\n"
                 break
 
-            # 等待下一次更新（最长 2 秒唤醒一次，降低延迟）
-            timed_out = not event.wait(timeout=2.0)
+            # 等待下一次更新（最长 15 秒心跳，正常情况下有新 delta 会立即被 event.set() 唤醒）
+            timed_out = not event.wait(timeout=15.0)
             if timed_out:
                 # 心跳：保持连接存活
                 yield ": heartbeat\n\n"
@@ -2878,8 +2889,13 @@ def _build_history_context(history: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None, knowledge_ids: list[str] | None = None, workspace_id: str | None = None, memory_enabled: bool = True, history: list[AgentHistoryMessage] | None = None):
-    """后台线程执行 ReAct Agent。"""
+def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None, model_preset_id: str | None, images: list[str] | None = None, skill_ids: list[str] | None = None, knowledge_ids: list[str] | None = None, workspace_id: str | None = None, memory_enabled: bool = True, history: list[AgentHistoryMessage] | None = None, session: Any = None):
+    """后台线程执行 Agent（FC 流式优先，自动降级）。
+
+    session: 可选 ChatSession。提供时走 Session 化路径——历史以原始消息
+    注入 LLM，任务结束后通过 messages_hook 把本轮增量写回会话并持久化。
+    不提供时保持旧 task 模式（history 文本注入）。
+    """
     try:
         with _tasks_lock:
             _tasks[task_id]["status"] = "running"
@@ -2889,6 +2905,11 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             raise RuntimeError("agent_runner 未安装")
         if not HAS_TAOFEI_API:
             raise RuntimeError("LLM 功能不可用：taofei_api/langchain 未安装")
+
+        # Session 化：历史以原始消息注入 runner（不拼文本）
+        session_history: list[dict] = []
+        if session is not None:
+            session_history = [dict(m) for m in getattr(session, "messages", [])]
 
         # RAG 上下文注入：检索知识库相关片段后改写 user_request
         if knowledge_ids:
@@ -2913,8 +2934,9 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             except Exception as exc:
                 log_buffer.emit("WARNING", "system", f"记忆召回失败：{exc}", task_id)
 
-        # 当前会话历史注入：让 Agent 感知同一会话内的连续对话
-        if history:
+        # 当前会话历史注入（仅旧 task 模式：前端全量 history 文本注入）
+        # Session 模式下历史已通过 session_history 原始消息注入，这里跳过
+        if history and session is None:
             try:
                 history_dicts = [h.model_dump() if hasattr(h, "model_dump") else dict(h) for h in history]
                 history_text = _build_history_context(history_dicts)
@@ -2929,54 +2951,23 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             raise RuntimeError("LLM 初始化失败，请检查模型配置")
 
         def llm_call(messages: list[dict], tools: list[dict] | None = None) -> Any:
-            """统一的 LLM 调用包装：支持 tools 参数（function calling）。
-
-            无 tools 时走 .call() 返回字符串（兼容旧接口）；
-            有 tools 时走 .call_with_tools() 返回完整响应对象。
-            """
+            """统一的 LLM 调用包装：基于 taofei_api.LLM 原生 call 方法。"""
             import concurrent.futures
 
             def _call():
-                try:
-                    if tools is not None:
-                        # function calling 模式
-                        if hasattr(llm, "call_with_tools"):
-                            return llm.call_with_tools(messages, tools=tools)
-                        # 没有 call_with_tools 方法 → 尝试用 bind_tools
-                        if hasattr(llm, "bind_tools"):
-                            from langchain_core.utils.function_calling import convert_to_openai_tool
-                            lc_tools = [convert_to_openai_tool(t["function"]) for t in tools if t.get("type") == "function"]
-                            bound = llm.bind_tools(lc_tools)
-                            # 需要把 messages 转成 langchain 格式
-                            from langchain_core.messages import (
-                                AIMessage, HumanMessage, SystemMessage, ToolMessage,
-                            )
-                            lc_msgs = []
-                            for m in messages:
-                                role = m.get("role", "user")
-                                content = m.get("content", "")
-                                if role == "system":
-                                    lc_msgs.append(SystemMessage(content=content))
-                                elif role in ("assistant", "ai"):
-                                    lc_msgs.append(AIMessage(content=content or ""))
-                                elif role == "tool":
-                                    lc_msgs.append(ToolMessage(content=content, tool_call_id=m.get("tool_call_id", "")))
-                                else:
-                                    lc_msgs.append(HumanMessage(content=content))
-                            return bound.invoke(lc_msgs)
-                        # 不支持 tools → 抛出 TypeError 让上层降级
-                        raise TypeError("LLM does not support function calling")
-                    else:
-                        # 普通文本调用
-                        try:
-                            result = llm.call(messages)
-                        except TypeError:
-                            result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
-                        return result if isinstance(result, str) else str(result)
-                except Exception:
-                    raise
+                if tools is not None:
+                    # taofei_api.LLM 原生 call(messages, tools=tools)
+                    response = llm.call(messages, tools=tools)
+                    # 返回值可能是 str（纯文本）或完整响应对象
+                    if isinstance(response, str):
+                        from types import SimpleNamespace
+                        return SimpleNamespace(message=SimpleNamespace(content=response, tool_calls=[]))
+                    return response
+                else:
+                    result = llm.call(messages)
+                    return result if isinstance(result, str) else str(result)
 
-            timeout = int(os.getenv("LLM_TIMEOUT", "120"))  # 默认 120 秒超时
+            timeout = int(os.getenv("LLM_TIMEOUT", "120"))
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(_call)
                 try:
@@ -2986,149 +2977,85 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     raise TimeoutError(f"模型调用超时（{timeout}秒），请检查网络或换用更快的模型")
 
         def llm_stream_fn(messages: list[dict], tools: list[dict] | None = None):
-            """流式 LLM 调用生成器。优先用 stream_with_tools 方法。
+            """流式 LLM 调用生成器：基于 taofei_api.LLM 底层 OpenAI client 原生流式。
 
             生成器 yield (delta_type, delta_value):
               ("content", str) — 文本 token
               ("tool_call_delta", dict) — 工具调用增量
               ("done", response_obj) — 完成，返回完整响应
             """
-            # 优先用底层的 stream_with_tools
-            if hasattr(llm, "stream_with_tools"):
-                yield from llm.stream_with_tools(messages, tools=tools)
-                return
-
-            # 退而求其次：用 bind_tools + stream
-            if tools and hasattr(llm, "bind_tools") and hasattr(llm, "stream"):
-                from langchain_core.utils.function_calling import convert_to_openai_tool
-                from langchain_core.messages import (
-                    AIMessageChunk, HumanMessage, SystemMessage, ToolMessage,
-                )
-                lc_tools = [convert_to_openai_tool(t["function"]) for t in tools if t.get("type") == "function"]
-                bound = llm.bind_tools(lc_tools)
-
-                lc_msgs = []
-                for m in messages:
-                    role = m.get("role", "user")
-                    content = m.get("content", "")
-                    if role == "system":
-                        lc_msgs.append(SystemMessage(content=content))
-                    elif role in ("assistant", "ai"):
-                        from langchain_core.messages import AIMessage
-                        ai_msg = AIMessage(content=content or "")
-                        tc = m.get("tool_calls")
-                        if tc:
-                            lc_tcs = []
-                            for c in tc:
-                                if isinstance(c, dict):
-                                    func = c.get("function", {})
-                                    args = func.get("arguments", {})
-                                    if isinstance(args, str):
-                                        import json as _j
-                                        try:
-                                            args = _j.loads(args)
-                                        except Exception:
-                                            args = {}
-                                    lc_tcs.append({
-                                        "name": func.get("name", ""),
-                                        "args": args,
-                                        "id": c.get("id", ""),
-                                        "type": "tool_call",
-                                    })
-                            ai_msg.tool_calls = lc_tcs
-                        lc_msgs.append(ai_msg)
-                    elif role == "tool":
-                        lc_msgs.append(ToolMessage(content=content, tool_call_id=m.get("tool_call_id", "")))
-                    else:
-                        lc_msgs.append(HumanMessage(content=content))
-
-                content_parts: list[str] = []
-                tool_call_chunks: dict[int, dict] = {}
-                for chunk in bound.stream(lc_msgs):
-                    if isinstance(chunk, AIMessageChunk):
-                        if chunk.content:
-                            txt = chunk.content if isinstance(chunk.content, str) else ""
-                            if txt:
-                                content_parts.append(txt)
-                                yield ("content", txt)
-                        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                            for tc_chunk in chunk.tool_call_chunks:
-                                idx = getattr(tc_chunk, "index", 0) if hasattr(tc_chunk, "index") else 0
-                                if idx not in tool_call_chunks:
-                                    tool_call_chunks[idx] = {"id": "", "name": "", "args_parts": []}
-                                tid = getattr(tc_chunk, "id", "") or ""
-                                tname = getattr(tc_chunk, "name", "") or ""
-                                targs = getattr(tc_chunk, "args", "") or ""
-                                if tid:
-                                    tool_call_chunks[idx]["id"] = tid
-                                if tname:
-                                    tool_call_chunks[idx]["name"] += tname
-                                if targs:
-                                    tool_call_chunks[idx]["args_parts"].append(targs)
-                                yield ("tool_call_delta", {
-                                    "index": idx,
-                                    "id": tid or None,
-                                    "name": tname or None,
-                                    "arguments": targs or None,
-                                })
-
-                # 组装最终响应
-                import json as _j
-                from types import SimpleNamespace
-                full_text = "".join(content_parts)
-                full_tcs = []
-                for idx in sorted(tool_call_chunks.keys()):
-                    tc = tool_call_chunks[idx]
-                    args_str = "".join(tc["args_parts"])
-                    args_dict = {}
-                    if args_str.strip():
-                        try:
-                            args_dict = _j.loads(args_str)
-                        except Exception:
-                            pass
-                    full_tcs.append({
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": args_dict},
-                    })
-                msg = SimpleNamespace(content=full_text, tool_calls=full_tcs)
-                yield ("done", SimpleNamespace(message=msg))
-                return
-
-            # 完全不支持流式：降级为非流式，一次性返回
-            resp = llm_call(messages, tools=tools)
-            content = ""
-            tool_calls = []
-            if isinstance(resp, str):
-                content = resp
-            else:
-                msg_obj = getattr(resp, "message", None)
-                if msg_obj is not None:
-                    content = getattr(msg_obj, "content", "") or ""
-                    tcs = getattr(msg_obj, "tool_calls", []) or []
-                    for tc in tcs:
-                        if hasattr(tc, "function"):
-                            args = tc.function.arguments
-                            if isinstance(args, str):
-                                import json as _j
-                                try:
-                                    args = _j.loads(args)
-                                except Exception:
-                                    args = {}
-                            tool_calls.append({
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {"name": tc.function.name, "arguments": args},
-                            })
-                        elif isinstance(tc, dict):
-                            tool_calls.append(tc)
-            # 先 yield 完整文本作为一个 content 块
-            if content:
-                yield ("content", content)
+            import json as _j
             from types import SimpleNamespace
-            msg = SimpleNamespace(content=content, tool_calls=tool_calls)
-            yield ("done", SimpleNamespace(message=msg))
 
+            # 直接获取底层 OpenAI client 做原生流式调用
+            client = llm._get_sync_client()
+
+            kwargs = {
+                "model": llm.model,
+                "messages": messages,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            if tools:
+                kwargs["tools"] = tools
+
+            content_parts: list[str] = []
+            tool_call_chunks: dict[int, dict] = {}
+
+            stream = client.chat.completions.create(**kwargs)
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+
+                delta = chunk.choices[0].delta
+
+                # 文本增量
+                if delta.content:
+                    content_parts.append(delta.content)
+                    yield ("content", delta.content)
+
+                # 工具调用增量
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_call_chunks:
+                            tool_call_chunks[idx] = {
+                                "id": "",
+                                "name": "",
+                                "args_parts": [],
+                            }
+                        if tc.id:
+                            tool_call_chunks[idx]["id"] = tc.id
+                        if tc.function and tc.function.name:
+                            tool_call_chunks[idx]["name"] += tc.function.name
+                        if tc.function and tc.function.arguments:
+                            tool_call_chunks[idx]["args_parts"].append(tc.function.arguments)
+                        yield ("tool_call_delta", {
+                            "index": idx,
+                            "id": tc.id or None,
+                            "name": tc.function.name if tc.function else None,
+                            "arguments": tc.function.arguments if tc.function else None,
+                        })
+
+            # 组装最终响应
+            full_text = "".join(content_parts)
+            full_tcs = []
+            for idx in sorted(tool_call_chunks.keys()):
+                tc = tool_call_chunks[idx]
+                args_str = "".join(tc["args_parts"])
+                args_dict = {}
+                if args_str.strip():
+                    try:
+                        args_dict = _j.loads(args_str)
+                    except Exception:
+                        pass
+                full_tcs.append({
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": args_dict},
+                })
+            msg = SimpleNamespace(content=full_text, tool_calls=full_tcs)
+            yield ("done", SimpleNamespace(message=msg))
         def emit_log(level: str, message: str, tid: str):
             log_buffer.emit(level, "agent", message, tid)
 
@@ -3170,6 +3097,75 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     emit_log("INFO", f"检测到天气意图，已自动启用技能「{s.get('name')}」", task_id)
                     break
 
+        # Session 化：构造收尾回写 hook（runner 结束时调用，把本轮增量写回会话）
+        session_hook = None
+        if session is not None:
+            _base_user_idx = 1 + len(session_history)  # system + history 之后即本轮 user
+            _internal_hint_texts = (
+                "注意：你已接近最大步数限制，请根据已执行的工具调用和结果，直接给出最终答案，不要再调用新工具。",
+                "任务步数即将耗尽。请基于以上所有工具调用和结果，直接输出最终总结。",
+            )
+
+            def _extract_final_text(result: Any) -> str:
+                """从 task result（str 或报告 dict）提取最终回答文本。"""
+                if isinstance(result, str):
+                    return result
+                if isinstance(result, dict):
+                    for k in ("summary", "content"):
+                        v = result.get(k)
+                        if isinstance(v, str) and v.strip():
+                            return v.strip()
+                    secs = result.get("sections")
+                    if isinstance(secs, list):
+                        for sec in secs:
+                            if isinstance(sec, dict):
+                                items = sec.get("items")
+                                if isinstance(items, list) and items and isinstance(items[0], dict):
+                                    v = items[0].get("content")
+                                    if isinstance(v, str):
+                                        return v.strip()
+                return ""
+
+            def _session_hook(full_messages: list[dict]) -> None:
+                try:
+                    with _tasks_lock:
+                        _t = _tasks.get(task_id, {})
+                        if not _t or _t.get("status") != "completed":
+                            return  # 仅成功完成才写回历史
+                    new_msgs = []
+                    for m in full_messages[_base_user_idx:]:
+                        if not isinstance(m, dict):
+                            continue
+                        role = m.get("role")
+                        if role == "system":
+                            continue
+                        mm = dict(m)
+                        # 丢弃内部注入的步数提醒（伪造的 user 消息）
+                        if role == "user" and isinstance(mm.get("content"), str) and mm["content"].strip() in _internal_hint_texts:
+                            continue
+                        new_msgs.append(mm)
+                    if not new_msgs:
+                        return
+                    # 兜底：末尾不是 assistant → 从任务结果补最终回答
+                    if new_msgs[-1].get("role") != "assistant":
+                        final_text = _extract_final_text(_t.get("result"))
+                        if final_text:
+                            new_msgs.append({"role": "assistant", "content": final_text})
+                    from session.manager import get_session_manager
+                    mgr = get_session_manager()
+                    s = mgr.get(session.id)
+                    if s is None:
+                        return
+                    s.append_messages(new_msgs)
+                    mgr.save(s)
+                    log_buffer.emit("INFO", "system", f"会话 {session.id} 已追加 {len(new_msgs)} 条消息", task_id)
+                except Exception as _hook_exc:
+                    log_buffer.emit("WARNING", "system", f"会话写回失败：{_hook_exc}", task_id)
+
+            session_hook = _session_hook
+            if session_history:
+                log_buffer.emit("INFO", "system", f"Session 化：注入 {len(session_history)} 条历史消息", task_id)
+
         # 优先使用流式 Function Calling 模式，失败自动降级
         if HAS_STREAM_RUNNER:
             log_buffer.emit("INFO", "system", "使用流式 Function Calling 模式执行 Agent 任务", task_id)
@@ -3185,6 +3181,8 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                 images=images or [],
                 skills=bound_skills,
                 cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
+                history_messages=session_history or None,
+                messages_hook=session_hook,
             )
         elif HAS_FC_RUNNER:
             log_buffer.emit("INFO", "system", "流式 runner 不可用，降级为非流式 FC 模式", task_id)
@@ -3200,12 +3198,34 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                 images=images or [],
                 skills=bound_skills,
                 cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
+                history_messages=session_history or None,
+                messages_hook=session_hook,
             )
         else:
             log_buffer.emit("INFO", "system", "FC runner 不可用，降级为 ReAct 模式", task_id)
+            react_request = user_request
+            if session is not None and session_history:
+                # ReAct 只支持文本，历史折衷为文本注入
+                parts = []
+                for _hm in session_history:
+                    _role = _hm.get("role")
+                    _c = _hm.get("content")
+                    if isinstance(_c, list):
+                        _txt = " ".join(
+                            b.get("text", "") for b in _c
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    else:
+                        _txt = str(_c or "")
+                    if not _txt.strip():
+                        continue
+                    _label = "用户" if _role == "user" else ("工具结果" if _role == "tool" else "助手")
+                    parts.append(f"{_label}：{_txt.strip()[:2000]}")
+                if parts:
+                    react_request = "以下是你与用户的会话历史：\n" + "\n\n".join(parts) + "\n\n" + user_request
             run_agent_task(
                 task_id=task_id,
-                user_request=user_request,
+                user_request=react_request,
                 llm_call=lambda msgs: llm_call(msgs),
                 workspace_path=workspace_path,
                 emit_log=emit_log,
@@ -3216,6 +3236,26 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                 skills=bound_skills,
                 cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
             )
+            # ReAct 完成，最小化写回（React 无消息级 hook）
+            if session is not None:
+                try:
+                    with _tasks_lock:
+                        _t3 = _tasks.get(task_id, {})
+                    if _t3.get("status") == "completed":
+                        _ftext = _extract_final_text(_t3.get("result"))
+                        if _ftext:
+                            from session.manager import get_session_manager
+                            _mgr = get_session_manager()
+                            _s = _mgr.get(session.id)
+                            if _s is not None:
+                                _s.append_messages([
+                                    {"role": "user", "content": user_request},
+                                    {"role": "assistant", "content": _ftext},
+                                ])
+                                _mgr.save(_s)
+                                log_buffer.emit("INFO", "system", f"会话 {session.id} 已追加 ReAct 轮消息", task_id)
+                except Exception as _rex:
+                    log_buffer.emit("WARNING", "system", f"ReAct 会话写回失败：{_rex}", task_id)
 
         # 跨会话记忆写入：异步后台执行，不阻塞任务完成
         if memory_enabled and workspace_id:
@@ -3246,13 +3286,24 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
         with _tasks_lock:
             _tasks[task_id].update(status="failed", error=err_msg, completed_at=now)
     finally:
-        # 任务结束后清理取消标志
+        # 任务结束后清理取消标志，释放会话 busy 标记
         _task_cancel.pop(task_id, None)
+        if session is not None:
+            try:
+                from session.manager import get_session_manager
+                get_session_manager().mark_busy(session, -1)
+            except Exception:
+                pass
 
 
 @app.post("/api/agent/run")
 def agent_run(req: AgentRunRequest):
-    """启动一个 ReAct Agent 任务，返回 task_id 供前端轮询。"""
+    """启动一个 Agent 任务，返回 task_id 供前端轮询。
+
+    - 不带 session_id：旧 task 模式（一次请求一个任务，history 文本注入）
+    - 带 session_id：Session 模式——复用持久化上下文，历史以原生消息注入，
+      本轮产出自动写回会话；响应返回 session_id 供前端持续复用
+    """
     if not req.request.strip():
         return JSONResponse({"error": "任务描述不能为空"}, status_code=400)
     if not HAS_AGENT_RUNNER:
@@ -3261,14 +3312,73 @@ def agent_run(req: AgentRunRequest):
         return JSONResponse({"error": "LLM 功能不可用：taofei_api/langchain 未安装"}, status_code=503)
 
     task_id = create_agent_task_id()
-    workspace_path = _workspace_path_by_id(req.workspace_id) if req.workspace_id else None
+    session = None
+    workspace_id = req.workspace_id
+    model_preset_id = req.model_preset_id
+    skill_ids = req.skill_ids or []
+    knowledge_ids = req.knowledge_ids or []
+    memory_enabled = req.memory_enabled
+
+    # ---- Session 化路由 ----
+    if req.session_id:
+        from session.manager import get_session_manager
+        mgr = get_session_manager()
+        meta = {
+            "workspace_id": req.workspace_id,
+            "model_preset_id": req.model_preset_id,
+            "skill_ids": req.skill_ids or [],
+            "knowledge_ids": req.knowledge_ids or [],
+            "memory_enabled": req.memory_enabled,
+        }
+        session, created = mgr.get_or_create(req.session_id, meta=meta)
+        if created:
+            # 新会话：若前端把本地历史全量传上来，先迁移进会话（老前端过渡）
+            if req.history:
+                try:
+                    init_msgs = []
+                    for h in req.history:
+                        role = h.role
+                        text = (h.text or "").strip()
+                        if not text and not h.images:
+                            continue
+                        init_msgs.append({
+                            "role": "assistant" if role == "ai" else "user",
+                            "content": text,
+                        })
+                    if init_msgs:
+                        session.append_messages(init_msgs)
+                        log_buffer.emit("INFO", "system", f"历史已迁移进新会话：{len(init_msgs)} 条", task_id)
+                except Exception as exc:
+                    log_buffer.emit("WARNING", "system", f"历史迁移到会话失败：{exc}", task_id)
+        else:
+            # 已有会话：请求显式字段覆盖（同步最新配置），空字段沿用会话配置
+            if req.workspace_id:
+                session.workspace_id = req.workspace_id
+            if req.model_preset_id:
+                session.model_preset_id = req.model_preset_id
+            if req.skill_ids:
+                session.skill_ids = list(req.skill_ids)
+            if req.knowledge_ids:
+                session.knowledge_ids = list(req.knowledge_ids)
+            session.memory_enabled = req.memory_enabled
+        # 本次任务使用合并后的配置
+        workspace_id = session.workspace_id
+        model_preset_id = session.model_preset_id
+        skill_ids = list(session.skill_ids)
+        knowledge_ids = list(session.knowledge_ids)
+        memory_enabled = session.memory_enabled
+        session.set_title_if_empty(req.request)
+        mgr.mark_busy(session, 1)
+        mgr.save(session)  # 元数据先落库（title/配置/updated_at）
+
+    workspace_path = _workspace_path_by_id(workspace_id) if workspace_id else None
     now = datetime.now(timezone.utc).astimezone().isoformat()
     with _tasks_lock:
         _tasks[task_id] = {
             "id": task_id,
             "topic": req.request[:60],
             "status": "queued",
-            "workspace_id": req.workspace_id or "",
+            "workspace_id": workspace_id or "",
             "result": None,
             "error": None,
             "steps": [],
@@ -3284,13 +3394,17 @@ def agent_run(req: AgentRunRequest):
     threading.Thread(
         target=_run_agent_async,
         args=(
-            task_id, req.request, workspace_path, req.model_preset_id,
-            req.images or [], req.skill_ids or [], req.knowledge_ids or [],
-            req.workspace_id or None, req.memory_enabled, req.history or [],
+            task_id, req.request, workspace_path, model_preset_id,
+            req.images or [], skill_ids, knowledge_ids,
+            workspace_id or None, memory_enabled, req.history or [],
+            session,
         ),
         daemon=True,
     ).start()
-    return {"task_id": task_id}
+    resp: dict[str, Any] = {"task_id": task_id}
+    if session is not None:
+        resp["session_id"] = session.id
+    return resp
 
 
 @app.post("/api/agent/cancel/{task_id}")
@@ -3310,6 +3424,67 @@ def agent_cancel(task_id: str):
     _notify_task_update(task_id)
     log_buffer.emit("INFO", "system", f"用户请求取消任务：{task_id}", task_id)
     return {"ok": True, "message": "已收到取消请求，任务将在当前步骤结束后停止"}
+
+
+# ---------------------------------------------------------------
+# 会话（Session）管理
+# ---------------------------------------------------------------
+@app.get("/api/sessions")
+def api_list_sessions(workspace_id: str | None = Query(None)):
+    """列出会话摘要（不含消息），按最近活跃排序。"""
+    from session.manager import get_session_manager
+    mgr = get_session_manager()
+    return {"sessions": mgr.list(workspace_id=workspace_id)}
+
+
+@app.post("/api/sessions")
+def api_create_session(req: SessionCreateRequest):
+    """显式创建一个空会话（前端『新建会话』调用）。"""
+    from session.manager import get_session_manager
+    mgr = get_session_manager()
+    s = mgr.create(
+        title=req.title,
+        workspace_id=req.workspace_id,
+        model_preset_id=req.model_preset_id,
+        skill_ids=list(req.skill_ids or []),
+        knowledge_ids=list(req.knowledge_ids or []),
+        memory_enabled=req.memory_enabled,
+    )
+    return s.to_dict(with_messages=False)
+
+
+@app.get("/api/sessions/{session_id}")
+def api_get_session(session_id: str):
+    """获取会话详情（含全部消息）。"""
+    from session.manager import get_session_manager
+    mgr = get_session_manager()
+    s = mgr.get(session_id)
+    if s is None:
+        return JSONResponse({"error": "会话不存在"}, status_code=404)
+    data = s.to_dict(with_messages=True)
+    data["messages"] = [
+        {k: v for k, v in m.items() if k != "tool_calls"}
+        for m in data.get("messages", [])
+    ]
+    return data
+
+
+@app.delete("/api/sessions/{session_id}")
+def api_delete_session(session_id: str):
+    """删除会话及其全部消息。"""
+    from session.manager import get_session_manager
+    mgr = get_session_manager()
+    ok = mgr.delete(session_id)
+    if not ok:
+        # 判断是否存在：可能只是内存没有但 DB 有——再查一次 DB
+        try:
+            import db as _db
+            existed = _db.load_session(session_id) is not None
+        except Exception:
+            existed = False
+        if not existed:
+            return JSONResponse({"error": "会话不存在"}, status_code=404)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------

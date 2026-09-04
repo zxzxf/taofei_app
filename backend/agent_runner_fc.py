@@ -225,12 +225,19 @@ def run_agent_task_fc(
     images: list[str] | None = None,
     skills: list[dict] | None = None,
     cancel_flag_getter: Callable[[], bool] | None = None,
+    history_messages: list[dict] | None = None,
+    messages_hook: Callable[[list[dict]], None] | None = None,
 ) -> None:
     """在后台线程中执行 Function Calling 模式的 Agent。
 
     与旧 run_agent_task 接口完全一致，前端无需改动。
     llm_call 签名扩展为：llm_call(messages, tools=None) -> response
     若底层 llm_call 不支持 tools 参数，会自动检测并降级到 ReAct 模式。
+
+    history_messages: Session 历史消息（不含 system/user），插在 system 与
+        本轮 user 之间。
+    messages_hook: 任务收尾时回调(最终完整 messages)，用于把本轮增量写回
+        Session。仅在提供时启用。
     """
 
     def is_cancelled() -> bool:
@@ -275,11 +282,18 @@ def run_agent_task_fc(
     if skill_prompt:
         system_content += "\n\n## 已启用技能（请根据用户需求判断是否需要使用）\n" + skill_prompt
 
-    # 初始化消息
+    # 初始化消息：system + (session 历史) + 本轮 user
     messages: list[dict] = [
         {"role": "system", "content": system_content},
-        {"role": "user", "content": _build_user_content(user_request, images or [])},
     ]
+    if history_messages:
+        for hm in history_messages:
+            if isinstance(hm, dict) and hm.get("role") != "system":
+                messages.append(dict(hm))
+    messages.append({
+        "role": "user",
+        "content": _build_user_content(user_request, images or []),
+    })
 
     final_answer = ""
     near_limit_warned = False
@@ -344,17 +358,27 @@ def run_agent_task_fc(
                         skills=skills,
                         cancel_flag_getter=cancel_flag_getter,
                     )
+                    # ReAct 已完成，回写会话（ReAct 结果在 task_store，由 hook 兜底提取）
+                    try:
+                        if messages_hook:
+                            messages_hook(messages)
+                    except Exception:
+                        pass
                     return
                 raise
             except Exception as exc:
-                # 图片不支持的降级
-                first_user = messages[1] if len(messages) > 1 else None
+                # 图片不支持的降级（定位本轮 user：messages 中最后一条 user）
+                first_user = None
+                for _m in reversed(messages):
+                    if isinstance(_m, dict) and _m.get("role") == "user":
+                        first_user = _m
+                        break
                 has_image_blocks = (
                     isinstance(first_user, dict)
                     and isinstance(first_user.get("content"), list)
                     and any(isinstance(b, dict) and b.get("type") == "image_url" for b in first_user["content"])
                 )
-                if images and has_image_blocks:
+                if images and has_image_blocks and first_user is not None:
                     emit_log("WARNING", f"当前模型不支持图片，已降级为纯文本重试：{exc}", task_id)
                     text_blocks = [
                         b for b in first_user["content"]
@@ -362,7 +386,7 @@ def run_agent_task_fc(
                     ]
                     note = "\n\n（注意：当前模型不支持图片，已忽略用户附带的图片，请基于文字描述继续完成任务。）"
                     new_content = (text_blocks[0]["text"] if text_blocks else user_request) + note
-                    messages[1] = {"role": "user", "content": new_content}
+                    first_user["content"] = new_content
                     response = llm_call(messages, tools=openai_tools)
                 else:
                     raise
@@ -384,6 +408,9 @@ def run_agent_task_fc(
             # 没有工具调用 → 任务完成
             if not tool_calls:
                 final_answer = content
+                # 把最终回答补成 assistant 消息，保证消息历史自洽（Session 回写需要）
+                if content:
+                    messages.append({"role": "assistant", "content": content})
                 # 添加 timeline
                 with task_lock:
                     timeline = task_store[task_id].get("timeline", [])
@@ -399,29 +426,47 @@ def run_agent_task_fc(
                     notify_update()
                 break
 
-            # 有工具调用 → 执行
-            emit_log("INFO", f"[FC模式] 调用 {len(tool_calls)} 个工具：{[tc['function']['name'] for tc in tool_calls]}", task_id)
+            # 有工具调用 → 并行执行
+            emit_log("INFO", f"[FC模式] 并行调用 {len(tool_calls)} 个工具：{[tc['function']['name'] for tc in tool_calls]}", task_id)
 
             # 构造 assistant 消息（带 tool_calls）
+            # 注意：发给 API 的 tool_calls.function.arguments 必须是 JSON 字符串，不能是 dict
+            api_tool_calls = []
+            for tc in tool_calls:
+                func = tc.get("function", tc) if isinstance(tc, dict) else tc
+                args = func.get("arguments", "") if isinstance(func, dict) else getattr(func, "arguments", "")
+                if isinstance(args, dict):
+                    args = json.dumps(args, ensure_ascii=False)
+                api_tool_calls.append({
+                    "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": func.get("name", "") if isinstance(func, dict) else getattr(func, "name", ""),
+                        "arguments": args,
+                    },
+                })
             assistant_msg = {
                 "role": "assistant",
-                "content": content or None,
-                "tool_calls": tool_calls,
+                "content": content if content else "",
+                "tool_calls": api_tool_calls,
             }
             messages.append(assistant_msg)
 
-            # 执行所有工具（暂时串行，后续阶段改为并行）
+            # 先解析所有 tool_calls 的参数
+            parsed_tools = []
             for tc in tool_calls:
                 tc_id = tc.get("id", "")
                 func_name = tc.get("function", {}).get("name", "")
                 func_args = tc.get("function", {}).get("arguments", {})
-                # arguments 可能是字符串
                 if isinstance(func_args, str):
                     try:
                         func_args = json.loads(func_args)
                     except Exception:
                         func_args = {}
+                parsed_tools.append((tc_id, func_name, func_args))
 
+            # 先批量添加 running step
+            for tc_id, func_name, func_args in parsed_tools:
                 add_step({
                     "id": f"step-{step_idx + 1}-action-{func_name}",
                     "name": f"调用工具：{func_name}",
@@ -431,14 +476,53 @@ def run_agent_task_fc(
                 })
                 emit_log("INFO", f"[FC模式] 工具 {func_name}({func_args})", task_id)
 
-                # 执行工具
-                tool_result_str = execute_tool_fc(
-                    func_name, workspace_path,
-                    lambda msgs: llm_call(msgs, tools=openai_tools),
-                    func_args, skills=skills,
-                )
+            # 预占 timeline
+            with task_lock:
+                timeline = task_store[task_id].get("timeline", [])
+                for tc_id, func_name, func_args in parsed_tools:
+                    timeline.append({
+                        "type": "command",
+                        "name": func_name,
+                        "args": func_args,
+                        "result": "",
+                        "status": "running",
+                        "time": time.strftime("%H:%M:%S"),
+                        "elapsed": 0,
+                    })
+                task_store[task_id]["timeline"] = timeline
+            if notify_update:
+                notify_update()
 
+            # 并行执行所有工具
+            import concurrent.futures
+
+            tool_indices = {tc_id: i for i, (tc_id, _, _) in enumerate(parsed_tools)}
+
+            def _run_single_tool(tc_item):
+                tc_id, func_name, func_args = tc_item
+                try:
+                    tool_result_str = execute_tool_fc(
+                        func_name, workspace_path,
+                        lambda msgs: llm_call(msgs, tools=openai_tools),
+                        func_args, skills=skills,
+                    )
+                except Exception as exc:
+                    tool_result_str = f"Error: {exc}"
+                return tc_id, func_name, func_args, tool_result_str
+
+            tool_results = {}
+            max_workers = min(max(len(parsed_tools), 1), 8)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {executor.submit(_run_single_tool, item): item[0] for item in parsed_tools}
+                for future in concurrent.futures.as_completed(future_map):
+                    tc_id, func_name, func_args, result_str = future.result()
+                    tool_results[tc_id] = (func_name, func_args, result_str)
+
+            # 按原始顺序组装结果
+            for tc_id, func_name, func_args in parsed_tools:
+                _, _, tool_result_str = tool_results.get(tc_id, (func_name, func_args, "Error: 工具执行失败"))
                 is_error = tool_result_str.startswith("Error:")
+
                 add_step({
                     "id": f"step-{step_idx + 1}-observation-{func_name}",
                     "name": f"工具结果：{func_name}",
@@ -448,28 +532,27 @@ def run_agent_task_fc(
                 })
                 emit_log("INFO", f"[FC模式] 工具 {func_name} 返回：{tool_result_str[:200]}", task_id)
 
-                # 构造 tool 消息回传
+                # 构造 tool 消息回传（按原始顺序）
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
                     "content": tool_result_str,
                 })
 
-                # 更新 timeline
+                # 更新 timeline 对应项
+                idx = tool_indices[tc_id]
                 with task_lock:
                     timeline = task_store[task_id].get("timeline", [])
-                    timeline.append({
-                        "type": "command",
-                        "name": func_name,
-                        "args": func_args,
-                        "result": tool_result_str,
-                        "status": "error" if is_error else "done",
-                        "time": time.strftime("%H:%M:%S"),
-                        "elapsed": int(time.time() - task_start_time),
-                    })
+                    base_offset = len(timeline) - len(parsed_tools)
+                    target_idx = base_offset + idx
+                    if 0 <= target_idx < len(timeline) and timeline[target_idx]["type"] == "command":
+                        timeline[target_idx]["result"] = tool_result_str
+                        timeline[target_idx]["status"] = "error" if is_error else "done"
+                        timeline[target_idx]["elapsed"] = int(time.time() - task_start_time)
                     task_store[task_id]["timeline"] = timeline
-                if notify_update:
-                    notify_update()
+
+            if notify_update:
+                notify_update()
 
         else:
             # 步数耗尽
@@ -537,10 +620,22 @@ def run_agent_task_fc(
                 update(status="completed", result=final_report, current_step="完成")
                 emit_log("INFO", "Agent 任务完成", task_id)
 
+        # 收尾：把本轮完整消息回写给 Session（若提供 hook）
+        try:
+            if messages_hook:
+                messages_hook(messages)
+        except Exception as _hook_exc:
+            emit_log("WARNING", f"会话消息回写失败：{_hook_exc}", task_id)
+
     except Exception as exc:
         err = str(exc)
         update(status="failed", error=err, current_step="失败")
         emit_log("ERROR", f"[FC模式] Agent 任务失败：{err}", task_id)
+        try:
+            if messages_hook:
+                messages_hook(messages)
+        except Exception:
+            pass
 
 
 def create_agent_task_id() -> str:

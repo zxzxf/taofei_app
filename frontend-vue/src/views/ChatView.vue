@@ -1432,8 +1432,7 @@ async function sendAgent(s, text, images = []) {
       aiMsg.thinkingActive = true
       // 同时更新 aiMsg.text 为当前累积内容（打字机效果）
       if (!aiMsg.report) {
-        // 只在没有报告的简单模式下直接显示
-        // 复杂思考过程保留在 timeline 里
+        aiMsg.text = aiMsg.timeline[st.thinkingIdx].content
       }
     } else if (type === 'tool_call_delta') {
       // 工具调用增量：累积到当前 thinking 项
