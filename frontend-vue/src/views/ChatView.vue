@@ -280,6 +280,7 @@
               </div>
             </div>
             <div v-else class="chat-bubble"><div v-html="renderMarkdown(msg.text)"></div></div>
+            <div v-if="msg.role === 'ai' && msg.metrics" class="chat-msg-metrics">{{ msg.metrics }}</div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
           </div>
         </div>
@@ -1297,6 +1298,31 @@ async function sendGitCommit(s, userText, commitMessage) {
 
 // ===== Agent 模式：ReAct 循环 =====
 
+// 计算并存储性能指标（任务 9.4 性能看板）：总耗时/首字延迟/token/缓存命中率/速度
+function applyTaskMetrics(aiMsg, task) {
+  if (!aiMsg) return
+  const u = task && task.usage_stats
+  const now = Date.now()
+  const sendAt = aiMsg._sendAt || now
+  const totalMs = Math.max(0, now - sendAt)
+  const firstMs = aiMsg._firstTokenAt ? aiMsg._firstTokenAt - sendAt : null
+  const parts = []
+  if (aiMsg.pending === false && totalMs >= 100) parts.push(`⏱ ${(totalMs / 1000).toFixed(1)}s`)
+  if (firstMs != null && firstMs >= 0) parts.push(`首字 ${(firstMs / 1000).toFixed(2)}s`)
+  if (u && (u.prompt_tokens || u.completion_tokens)) {
+    const totalTok = (u.prompt_tokens || 0) + (u.completion_tokens || 0)
+    parts.push(`${totalTok.toLocaleString()} tok`)
+    const hit = u.cache_hit_tokens || 0
+    const miss = u.cache_miss_tokens || 0
+    if (hit + miss > 0) parts.push(`缓存命中 ${Math.round((hit / (hit + miss)) * 100)}%`)
+    if (u.completion_tokens && totalMs > 500) {
+      const speed = (u.completion_tokens || 0) / (totalMs / 1000)
+      if (speed >= 1) parts.push(`${Math.round(speed)} tok/s`)
+    }
+  }
+  aiMsg.metrics = parts.length ? parts.join(' · ') : null
+}
+
 // 生成客户端会话 id（与后端 session_id 关联，服务重启后可续聊）
 function genSessionId() {
   if (window.crypto && crypto.randomUUID) {
@@ -1360,6 +1386,7 @@ function fallbackPoll(task_id, aiMsg, s) {
         clearInterval(pollInterval)
         s.sending = false
         s.time = Date.now()
+        applyTaskMetrics(aiMsg, task)
         saveSessions()
       } else if (task.status === 'failed') {
         aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
@@ -1369,6 +1396,7 @@ function fallbackPoll(task_id, aiMsg, s) {
         s.sending = false
         // 首轮失败：废弃刚建的 sid（后端只存了空壳/残缺历史）
         if (aiMsg._firstRound) discardSessionBinding(s)
+        applyTaskMetrics(aiMsg, task)
         saveSessions()
       }
       scrollToBottom()
@@ -1406,6 +1434,7 @@ async function sendAgent(s, text, images = []) {
   s.messages.push({ role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: true, stepExpanded: {}, thinking: '', thinkingDuration: 0, thinkingActive: true, thinkingExpanded: true, timeline: [], timelineExpanded: {}, _stream: { thinkingIdx: -1, currentToolId: null, toolIdx: -1 } })
   const aiMsg = s.messages[s.messages.length - 1]
   aiMsg._firstRound = firstRound  // 供 fallback 轮询判断是否废弃新建的 sid
+  aiMsg._sendAt = Date.now()      // 性能看板：发送时刻（测首字延迟/总耗时）
   await scrollToBottom(true)
 
   s.sending = true
@@ -1462,6 +1491,7 @@ async function sendAgent(s, text, images = []) {
       aiMsg.thinkingActive = true
     } else if (type === 'content') {
       // 文本 token 增量
+      if (!aiMsg._firstTokenAt) aiMsg._firstTokenAt = Date.now()  // 性能看板：首字时刻
       if (st.thinkingIdx < 0) {
         st.thinkingIdx = aiMsg.timeline.length
         aiMsg.timeline.push({ type: 'thinking', content: '', start_time: Date.now() })
@@ -1558,6 +1588,7 @@ async function sendAgent(s, text, images = []) {
     }
     s.sending = false
     s.time = Date.now()
+    applyTaskMetrics(aiMsg, task)  // 性能看板：统计本轮耗时/token/缓存
     saveSessions()
     scrollToBottom()
   }
@@ -2977,6 +3008,14 @@ function onFilePick(node) {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 6px;
+}
+.chat-msg-metrics {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: .8;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
 .chat-msg-image {
   max-width: 180px;

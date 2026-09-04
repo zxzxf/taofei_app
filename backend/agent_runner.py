@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from agent_tools import TOOLS, build_skill_tools, execute_tool
+from agent_tools import MAX_OUTPUT_LEN, TOOLS, _short, build_skill_tools, execute_tool
 
 MAX_STEPS = 25
 
@@ -636,6 +636,8 @@ def run_agent_task(
             tool_result = execute_tool(action_name, workspace_path, llm_call, args, skills=skills)
             observation = tool_result.get("observation", "")
             error = tool_result.get("error", "")
+            # 工具结果兜底截断，防止撑爆上下文（与 FC 路径一致，任务 9.2）
+            observation = _short(observation, MAX_OUTPUT_LEN)
 
             if error:
                 observation_text = f"{observation}\n错误：{error}".strip() if observation else error

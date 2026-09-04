@@ -886,5 +886,10 @@ def execute_tool_fc(
     obs = result.get("observation", "")
     err = result.get("error", "")
     if err:
-        return f"Error: {err}\n{obs}".strip()
-    return obs or "（无输出）"
+        msg = f"Error: {err}\n{obs}".strip()
+    else:
+        msg = obs or "（无输出）"
+    # 兜底截断（任务 9.2）：任何工具结果回传 LLM / 存入会话前
+    # 统一限制在 MAX_OUTPUT_LEN 内，防超大输出撑爆上下文。
+    # 已在工具内部截断的短结果原样返回，无额外开销。
+    return _short(msg, MAX_OUTPUT_LEN)
