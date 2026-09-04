@@ -158,7 +158,10 @@
         </div>
       </div>
       <div class="chat-messages" ref="messagesEl">
-        <div v-for="(msg, i) in currentMessages" :key="i" class="chat-msg" :class="msg.role">
+        <div v-if="!expandedEarly && currentMessages.length > RENDER_WINDOW" class="chat-earlier-bar" @click="expandEarlier">
+          ↑ 已折叠更早的 {{ currentMessages.length - RENDER_WINDOW }} 条消息，点击加载
+        </div>
+        <div v-for="(msg, i) in displayMessages" :key="i" class="chat-msg" :class="msg.role">
           <div class="chat-avatar" :class="msg.role">
             <span v-if="msg.role === 'user'">我</span>
             <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -214,7 +217,7 @@
                           <span class="timeline-label">思考中。。。</span>
                           <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
                         </div>
-                        <div class="timeline-thinking-content" v-html="renderMarkdown(item.content)"></div>
+                        <div class="timeline-thinking-content msg-plain-content">{{ item.content }}</div>
                       </div>
                       <!-- 命令项：可展开/折叠，结果直接可见 -->
                       <div v-else-if="item.type === 'command'" class="timeline-command">
@@ -261,7 +264,7 @@
                         <span class="timeline-label">思考中。。。</span>
                         <span class="timeline-elapsed" style="margin-left:auto">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
                       </div>
-                      <div class="timeline-thinking-content" v-html="renderMarkdown(item.content)"></div>
+                      <div class="timeline-thinking-content msg-plain-content">{{ item.content }}</div>
                     </div>
                     <!-- 命令项：可展开/折叠，结果直接可见 -->
                     <div v-else-if="item.type === 'command'" class="timeline-command">
@@ -279,7 +282,12 @@
                 </div>
               </div>
             </div>
-            <div v-else class="chat-bubble"><div v-html="renderMarkdown(msg.text)"></div></div>
+            <div v-else class="chat-bubble">
+              <!-- 8.1：流式进行中用纯文本（v-text 自动转义，零 markdown 解析开销）；
+                   完成后一次性渲染 markdown 并缓存（renderedHtml） -->
+              <div v-if="msg.pending" class="msg-streaming-text">{{ msg.text }}</div>
+              <div v-else v-html="renderedHtml(msg)"></div>
+            </div>
             <div v-if="msg.role === 'ai' && msg.metrics" class="chat-msg-metrics">{{ msg.metrics }}</div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
           </div>
@@ -493,6 +501,22 @@ const MAX_IMAGES = 4
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
 const currentMessages = computed(() => currentSession.value?.messages || [])
+
+// 8.2 渲染窗口：超长会话只渲染最近 N 条，防止 DOM 膨胀；可手动展开更早消息
+const RENDER_WINDOW = 150
+const expandedEarly = ref(false)
+const displayMessages = computed(() => {
+  const all = currentSession.value?.messages || []
+  if (!expandedEarly.value && all.length > RENDER_WINDOW) {
+    return all.slice(-RENDER_WINDOW)
+  }
+  return all
+})
+watch(currentId, () => { expandedEarly.value = false })
+function expandEarlier() {
+  expandedEarly.value = true
+  nextTick(() => scrollToBottom(true))
+}
 
 const filteredSessions = computed(() => {
   const term = searchTerm.value.trim().toLowerCase()
@@ -808,8 +832,16 @@ function renderSectionItems(items) {
       }
     }
   }
-  const md = mdLines.join('\n')
+  const md = mdLines.join('\\n')
   return `<div class="report-section-text md">${renderMarkdown(md)}</div>`
+}
+
+// 8.1：消息 markdown 渲染缓存——文本完成后只渲染一次，流式期间零解析
+function renderedHtml(msg) {
+  if (msg._htmlReady) return msg._html
+  msg._html = renderMarkdown(msg.text || '')
+  msg._htmlReady = true
+  return msg._html
 }
 
 function renderMarkdownInline(text) {
@@ -1712,16 +1744,16 @@ async function scrollToBottom(force = false) {
 
 function saveSessions() {
   try {
-    // 精简持久化：带报告卡片的消息不重复保存 agentSteps（报告 steps 已含全部过程与输出）
+    // 精简持久化：剥离大字段（报告 steps / markdown 缓存 / 运行时句柄），
+    // 避免 localStorage 膨胀；加载后按需重新渲染
+    const stripRuntime = ({ agentSteps, _html, _htmlReady, _wsUnsub, _es, _stream, _taskId, _firstTokenAt, _sendAt, _firstRound, ...rest }) => {
+      // 带报告卡片的消息不重复保存 agentSteps（报告 steps 已含全部过程与输出）
+      if (rest.role === 'ai' && rest.report && agentSteps) return rest
+      return rest
+    }
     const slim = sessions.value.map(s => ({
       ...s,
-      messages: s.messages.map(m => {
-        if (m.role === 'ai' && m.report && m.agentSteps) {
-          const { agentSteps, ...rest } = m
-          return rest
-        }
-        return m
-      }),
+      messages: s.messages.map(stripRuntime),
     }))
     localStorage.setItem('chatSessions', JSON.stringify(slim))
   } catch (e) { console.error('保存会话失败', e) }
@@ -3016,6 +3048,42 @@ function onFilePick(node) {
   opacity: .8;
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
+}
+/* 8.1：流式纯文本保持换行（v-text 已转义） */
+.msg-streaming-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 8.1：timeline 思考内容纯文本 */
+.msg-plain-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 8.2：更早消息展开栏 */
+.chat-earlier-bar {
+  padding: 8px 14px;
+  margin: 4px 0 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.chat-earlier-bar:hover {
+  background: var(--card-hover, rgba(128,128,128,.06));
+}
+/* 8.3：长代码块/长输出限高滚动，避免 DOM 撑爆视口 */
+.chat-bubble pre,
+.chat-report-section-body pre {
+  max-height: 420px;
+  overflow: auto;
+}
+.timeline-command-result pre {
+  max-height: 320px;
+  overflow: auto;
 }
 .chat-msg-image {
   max-width: 180px;
