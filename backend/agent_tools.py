@@ -752,3 +752,45 @@ def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list
                 return call_skill(sk, args)
         return {"observation": "", "error": f"技能不存在：{sid}"}
     return {"observation": "", "error": f"未知工具：{name}"}
+
+
+# ------------------------------------------------------------------
+# Function Calling 模式支持
+# ------------------------------------------------------------------
+
+def tools_to_openai_functions(tool_list: list[dict]) -> list[dict]:
+    """把 TOOLS 格式转为 OpenAI function calling 格式。
+
+    输入格式：[{name, description, parameters: {type, properties, required}}]
+    输出格式：[{"type": "function", "function": {name, description, parameters}}]
+    """
+    result = []
+    for t in tool_list:
+        result.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("parameters", {"type": "object", "properties": {}}),
+            },
+        })
+    return result
+
+
+def execute_tool_fc(
+    name: str,
+    workspace_path: str | None,
+    llm_call: Callable[[list[dict]], str],
+    args: dict,
+    skills: list[dict] | None = None,
+) -> str:
+    """function calling 版本的工具执行：直接返回 observation 字符串。
+
+    出错时返回 "Error: ..." 格式字符串，模型可以直接看到错误并重试。
+    """
+    result = execute_tool(name, workspace_path, llm_call, args, skills=skills)
+    obs = result.get("observation", "")
+    err = result.get("error", "")
+    if err:
+        return f"Error: {err}\n{obs}".strip()
+    return obs or "（无输出）"

@@ -326,6 +326,11 @@ class _LLMCompat:
                     lc_msgs.append(SystemMessage(content=content))
                 elif role in ("assistant", "ai"):
                     lc_msgs.append(AIMessage(content=content))
+                elif role in ("tool",):
+                    # tool 消息在 langchain 中是 ToolMessage
+                    from langchain_core.messages import ToolMessage
+                    tc_id = m.get("tool_call_id", "") if isinstance(m, dict) else ""
+                    lc_msgs.append(ToolMessage(content=content, tool_call_id=tc_id))
                 else:
                     lc_msgs.append(HumanMessage(content=content))
         result = self._llm.invoke(lc_msgs)
@@ -340,6 +345,84 @@ class _LLMCompat:
         if reasoning:
             content = f"<thinking>\n{reasoning}\n</thinking>\n\n{content}"
         return content
+
+    def call_with_tools(self, messages, tools=None):
+        """带 function calling 的调用，返回 langchain AIMessage（含 tool_calls）。
+
+        tools 格式：OpenAI function calling 格式
+        [{"type": "function", "function": {"name": ..., "description": ..., "parameters": {...}}}]
+        """
+        from langchain_core.messages import (
+            AIMessage,
+            BaseMessage,
+            HumanMessage,
+            SystemMessage,
+            ToolMessage,
+        )
+        from langchain_core.tools import StructuredTool
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+
+        lc_msgs: list = []
+        for m in messages:
+            if isinstance(m, BaseMessage):
+                lc_msgs.append(m)
+                continue
+            if not isinstance(m, dict):
+                lc_msgs.append(HumanMessage(content=str(m)))
+                continue
+            role = m.get("role", "user")
+            content = self._to_openai_content(m.get("content", ""))
+            if role in ("system",):
+                lc_msgs.append(SystemMessage(content=content))
+            elif role in ("assistant", "ai"):
+                # 可能带 tool_calls
+                tc = m.get("tool_calls")
+                ai_msg = AIMessage(content=content or "")
+                if tc:
+                    # 转为 langchain tool_calls 格式
+                    lc_tcs = []
+                    for c in tc:
+                        if isinstance(c, dict):
+                            func = c.get("function", {})
+                            args = func.get("arguments", {})
+                            if isinstance(args, str):
+                                import json as _json
+                                try:
+                                    args = _json.loads(args)
+                                except Exception:
+                                    args = {}
+                            lc_tcs.append({
+                                "name": func.get("name", ""),
+                                "args": args,
+                                "id": c.get("id", ""),
+                                "type": "tool_call",
+                            })
+                    ai_msg.tool_calls = lc_tcs
+                lc_msgs.append(ai_msg)
+            elif role in ("tool",):
+                tc_id = m.get("tool_call_id", "")
+                lc_msgs.append(ToolMessage(content=content, tool_call_id=tc_id))
+            else:
+                lc_msgs.append(HumanMessage(content=content))
+
+        # 绑定工具
+        llm_with_tools = self._llm
+        if tools:
+            # OpenAI 格式 → langchain tool 格式
+            lc_tools = []
+            for t in tools:
+                if t.get("type") == "function":
+                    func = t["function"]
+                    lc_tools.append(convert_to_openai_tool({
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {"type": "object", "properties": {}}),
+                    }))
+            if lc_tools:
+                llm_with_tools = self._llm.bind_tools(lc_tools)
+
+        result = llm_with_tools.invoke(lc_msgs)
+        return result
 
     # ------------------------------------------------------------------
     # 转发到 langchain ChatModel 原生接口（taofei_api Agent 使用）
@@ -482,6 +565,143 @@ class _AnthropicLLM:
     # langchain / taofei_api 风格别名
     def invoke(self, messages, **kwargs):
         return self.call(messages)
+
+    def call_with_tools(self, messages, tools=None):
+        """带 function calling 的调用，返回兼容 dict 格式的响应。
+
+        返回对象模拟 openai 响应结构：
+        response.message.content = 文本内容
+        response.message.tool_calls = [{id, type: "function", function: {name, arguments}}]
+        """
+        import httpx
+
+        system: list[str] = []
+        msgs: list[dict] = []
+        for m in messages:
+            if isinstance(m, dict):
+                role = str(m.get("role", "user"))
+                content = self._to_anthropic_content(m.get("content", ""))
+            else:
+                role = getattr(m, "type", "user")
+                content = self._to_anthropic_content(getattr(m, "content", str(m)))
+
+            if role in ("system", "developer"):
+                system.append(content if isinstance(content, str) else str(content))
+            elif role in ("assistant", "ai"):
+                # 处理带 tool_calls 的 assistant 消息
+                tc = m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
+                if tc:
+                    # 把 tool_calls 转为 Anthropic tool_use blocks
+                    blocks = []
+                    if content:
+                        if isinstance(content, str):
+                            blocks.append({"type": "text", "text": content})
+                        elif isinstance(content, list):
+                            blocks.extend(content)
+                    for c in tc:
+                        if isinstance(c, dict):
+                            func = c.get("function", {})
+                            args = func.get("arguments", {})
+                            if isinstance(args, str):
+                                import json as _json
+                                try:
+                                    args = _json.loads(args)
+                                except Exception:
+                                    args = {}
+                            blocks.append({
+                                "type": "tool_use",
+                                "id": c.get("id", ""),
+                                "name": func.get("name", ""),
+                                "input": args,
+                            })
+                    msgs.append({"role": "assistant", "content": blocks})
+                else:
+                    msgs.append({"role": "assistant", "content": content})
+            elif role in ("tool",):
+                # tool 消息 → Anthropic tool_result block
+                tc_id = m.get("tool_call_id", "") if isinstance(m, dict) else getattr(m, "tool_call_id", "")
+                msgs.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": content if isinstance(content, str) else str(content),
+                    }],
+                })
+            else:
+                msgs.append({"role": "user", "content": content})
+
+        payload: dict[str, object] = {
+            "model": self.model,
+            "max_tokens": 8192,
+            "messages": msgs,
+        }
+        if system:
+            payload["system"] = "\n\n".join(system)
+
+        # 转换 tools 为 Anthropic 格式
+        if tools:
+            anthropic_tools = []
+            for t in tools:
+                if t.get("type") == "function":
+                    func = t["function"]
+                    anthropic_tools.append({
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+                    })
+            if anthropic_tools:
+                payload["tools"] = anthropic_tools
+
+        resp = httpx.post(
+            self._messages_url(),
+            json=payload,
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        if resp.status_code != 200:
+            err = resp.text[:300]
+            raise ValueError(f"HTTP {resp.status_code}: {err}")
+
+        data = resp.json()
+
+        # 解析 Anthropic 响应 → 模拟 openai 响应结构
+        text_parts: list[str] = []
+        thinking_parts: list[str] = []
+        tool_calls: list[dict] = []
+
+        for block in data.get("content") or []:
+            if isinstance(block, str):
+                text_parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "text":
+                text_parts.append(block.get("text", ""))
+            elif btype == "thinking" and block.get("thinking"):
+                thinking_parts.append(block["thinking"])
+            elif btype == "redacted_thinking":
+                pass
+            elif btype == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": block.get("input", {}),
+                    },
+                })
+
+        text = "".join(text_parts).strip()
+        if thinking_parts:
+            thinking_block = "<thinking>\n" + "\n\n".join(thinking_parts) + "\n</thinking>\n\n"
+            text = (thinking_block + text).strip() if text else thinking_block.strip()
+
+        # 返回一个兼容对象（用 SimpleNamespace 模拟 .message 访问）
+        from types import SimpleNamespace
+        msg = SimpleNamespace(content=text, tool_calls=tool_calls)
+        return SimpleNamespace(message=msg)
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
@@ -1875,6 +2095,13 @@ except ImportError:
     run_agent_task = None  # type: ignore
     HAS_AGENT_RUNNER = False
 
+try:
+    from agent_runner_fc import run_agent_task_fc  # noqa: E402
+    HAS_FC_RUNNER = True
+except ImportError:
+    run_agent_task_fc = None  # type: ignore
+    HAS_FC_RUNNER = False
+
 
 def _load_workflows() -> list[dict]:
     return db.load_workflows()
@@ -2317,16 +2544,53 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
         if llm is None:
             raise RuntimeError("LLM 初始化失败，请检查模型配置")
 
-        def llm_call(messages: list[dict]) -> str:
-            # 使用线程池实现超时保护，避免 API 卡住时任务无限挂起
+        def llm_call(messages: list[dict], tools: list[dict] | None = None) -> Any:
+            """统一的 LLM 调用包装：支持 tools 参数（function calling）。
+
+            无 tools 时走 .call() 返回字符串（兼容旧接口）；
+            有 tools 时走 .call_with_tools() 返回完整响应对象。
+            """
             import concurrent.futures
 
             def _call():
                 try:
-                    result = llm.call(messages)
-                except TypeError:
-                    result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
-                return result if isinstance(result, str) else str(result)
+                    if tools is not None:
+                        # function calling 模式
+                        if hasattr(llm, "call_with_tools"):
+                            return llm.call_with_tools(messages, tools=tools)
+                        # 没有 call_with_tools 方法 → 尝试用 bind_tools
+                        if hasattr(llm, "bind_tools"):
+                            from langchain_core.utils.function_calling import convert_to_openai_tool
+                            lc_tools = [convert_to_openai_tool(t["function"]) for t in tools if t.get("type") == "function"]
+                            bound = llm.bind_tools(lc_tools)
+                            # 需要把 messages 转成 langchain 格式
+                            from langchain_core.messages import (
+                                AIMessage, HumanMessage, SystemMessage, ToolMessage,
+                            )
+                            lc_msgs = []
+                            for m in messages:
+                                role = m.get("role", "user")
+                                content = m.get("content", "")
+                                if role == "system":
+                                    lc_msgs.append(SystemMessage(content=content))
+                                elif role in ("assistant", "ai"):
+                                    lc_msgs.append(AIMessage(content=content or ""))
+                                elif role == "tool":
+                                    lc_msgs.append(ToolMessage(content=content, tool_call_id=m.get("tool_call_id", "")))
+                                else:
+                                    lc_msgs.append(HumanMessage(content=content))
+                            return bound.invoke(lc_msgs)
+                        # 不支持 tools → 抛出 TypeError 让上层降级
+                        raise TypeError("LLM does not support function calling")
+                    else:
+                        # 普通文本调用
+                        try:
+                            result = llm.call(messages)
+                        except TypeError:
+                            result = llm.call("\n".join(f"{m['role']}: {m['content']}" for m in messages))
+                        return result if isinstance(result, str) else str(result)
+                except Exception:
+                    raise
 
             timeout = int(os.getenv("LLM_TIMEOUT", "120"))  # 默认 120 秒超时
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -2378,19 +2642,37 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     emit_log("INFO", f"检测到天气意图，已自动启用技能「{s.get('name')}」", task_id)
                     break
 
-        run_agent_task(
-            task_id=task_id,
-            user_request=user_request,
-            llm_call=llm_call,
-            workspace_path=workspace_path,
-            emit_log=emit_log,
-            task_store=_tasks,
-            task_lock=_tasks_lock,
-            notify_update=notify_update,
-            images=images or [],
-            skills=bound_skills,
-            cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
-        )
+        # 默认使用 Function Calling 模式，失败自动降级到 ReAct
+        if HAS_FC_RUNNER:
+            log_buffer.emit("INFO", "system", "使用 Function Calling 模式执行 Agent 任务", task_id)
+            run_agent_task_fc(
+                task_id=task_id,
+                user_request=user_request,
+                llm_call=llm_call,
+                workspace_path=workspace_path,
+                emit_log=emit_log,
+                task_store=_tasks,
+                task_lock=_tasks_lock,
+                notify_update=notify_update,
+                images=images or [],
+                skills=bound_skills,
+                cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
+            )
+        else:
+            log_buffer.emit("INFO", "system", "FC runner 不可用，降级为 ReAct 模式", task_id)
+            run_agent_task(
+                task_id=task_id,
+                user_request=user_request,
+                llm_call=lambda msgs: llm_call(msgs),
+                workspace_path=workspace_path,
+                emit_log=emit_log,
+                task_store=_tasks,
+                task_lock=_tasks_lock,
+                notify_update=notify_update,
+                images=images or [],
+                skills=bound_skills,
+                cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
+            )
 
         # 跨会话记忆写入：异步后台执行，不阻塞任务完成
         if memory_enabled and workspace_id:
