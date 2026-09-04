@@ -727,6 +727,30 @@ def append_session_messages(session_id: str, messages: list[dict]) -> bool:
         return False
 
 
+def replace_session_messages(session_id: str, messages: list[dict]) -> bool:
+    """整体替换会话消息（上下文压缩后使用）：删除全部后重插，seq 从 0 开始。"""
+    try:
+        with _get_conn() as conn:
+            conn.execute("DELETE FROM session_messages WHERE session_id = ?", (session_id,))
+            seq = 0
+            for msg in messages:
+                role = msg.get("role", "")
+                content = json.dumps(msg.get("content", ""), ensure_ascii=False)
+                tool_call_id = msg.get("tool_call_id")
+                tool_calls = json.dumps(msg.get("tool_calls"), ensure_ascii=False) if msg.get("tool_calls") else None
+                conn.execute(
+                    """INSERT INTO session_messages (session_id, seq, role, content, tool_call_id, tool_calls)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (session_id, seq, role, content, tool_call_id, tool_calls),
+                )
+                seq += 1
+            conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[ERROR] 替换会话消息失败：{exc}", flush=True)
+        return False
+
+
 def delete_session(session_id: str) -> bool:
     """删除会话及其全部消息。"""
     try:

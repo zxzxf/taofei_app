@@ -3204,6 +3204,21 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     s.append_messages(new_msgs)
                     mgr.save(s)
                     log_buffer.emit("INFO", "system", f"会话 {session.id} 已追加 {len(new_msgs)} 条消息", task_id)
+                    # 上下文压缩（任务 7）：超阈值则后台把早期轮摘要为一条消息，不阻塞响应
+                    try:
+                        from session.context_compressor import maybe_compress_session, should_compress
+                        if should_compress(s.messages):
+                            def _bg_compress():
+                                try:
+                                    maybe_compress_session(
+                                        s, llm_call,
+                                        emit_log=lambda lv, msg, _tid=None: log_buffer.emit(lv, "system", msg, task_id),
+                                    )
+                                except Exception:
+                                    pass
+                            threading.Thread(target=_bg_compress, daemon=True).start()
+                    except Exception:
+                        pass
                 except Exception as _hook_exc:
                     log_buffer.emit("WARNING", "system", f"会话写回失败：{_hook_exc}", task_id)
 

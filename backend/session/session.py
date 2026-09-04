@@ -47,6 +47,8 @@ class ChatSession:
         self._persisted_count = 0
         # 正在执行 Agent 任务的次数（>0 时禁止从内存卸载）
         self.busy = 0
+        # 上下文压缩进行中（防重入）
+        self._compressing = False
 
     # -------------------------------------------------------------
     # 消息操作
