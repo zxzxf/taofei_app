@@ -1119,7 +1119,14 @@ def _build_llm(preset_id: str | None = None):
     if api_key:
         kwargs["api_key"] = api_key
 
-    # 路径 1：taofei_api.LLM 存在（老版本 / 完整安装）
+    # 路径 1：OpenAI 兼容端点直连（去中间层 → 原生 usage / 前缀缓存统计）
+    try:
+        from providers.openai_compat import OpenAICompatLLM
+        return OpenAICompatLLM(**kwargs)
+    except Exception:
+        pass
+
+    # 路径 2：taofei_api.LLM 存在（老版本 / 完整安装）
     if LLM is not None:
         try:
             return LLM(**kwargs)
@@ -1127,7 +1134,7 @@ def _build_llm(preset_id: str | None = None):
             # taofei_api 不同版本的构造签名可能略有差异，失败则走降级路径
             pass
 
-    # 路径 2：taofei_api.LLM 缺失 -> 使用 langchain_openai 兼容层
+    # 路径 3：taofei_api.LLM 缺失 -> 使用 langchain_openai 兼容层
     try:
         return _LLMCompat(**kwargs)
     except Exception:
@@ -2951,13 +2958,14 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             raise RuntimeError("LLM 初始化失败，请检查模型配置")
 
         def llm_call(messages: list[dict], tools: list[dict] | None = None) -> Any:
-            """统一的 LLM 调用包装：基于 taofei_api.LLM 原生 call 方法。"""
+            """统一的 LLM 调用包装：OpenAI 兼容端点直连（原 taofei_api.LLM）。"""
             import concurrent.futures
 
             def _call():
                 if tools is not None:
-                    # taofei_api.LLM 原生 call(messages, tools=tools)
+                    # OpenAICompatLLM.call(messages, tools=tools) → ChatCompletion
                     response = llm.call(messages, tools=tools)
+                    _record_llm_usage(getattr(llm, "last_usage", None))
                     # 返回值可能是 str（纯文本）或完整响应对象
                     if isinstance(response, str):
                         from types import SimpleNamespace
@@ -2965,6 +2973,7 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     return response
                 else:
                     result = llm.call(messages)
+                    _record_llm_usage(getattr(llm, "last_usage", None))
                     return result if isinstance(result, str) else str(result)
 
             timeout = int(os.getenv("LLM_TIMEOUT", "120"))
@@ -3001,9 +3010,13 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
 
             content_parts: list[str] = []
             tool_call_chunks: dict[int, dict] = {}
+            stream_usage = None  # include_usage 的最终 chunk
 
             stream = client.chat.completions.create(**kwargs)
             for chunk in stream:
+                # usage 可出现在任意 chunk（DeepSeek 在末尾的 chunk 带 choices + usage）
+                if getattr(chunk, "usage", None) is not None:
+                    stream_usage = chunk.usage
                 if not chunk.choices:
                     continue
 
@@ -3054,8 +3067,40 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     "type": "function",
                     "function": {"name": tc["name"], "arguments": args_dict},
                 })
+            # 流式调用完成：记录 usage / 前缀缓存统计
+            if stream_usage is not None:
+                try:
+                    from providers.openai_compat import usage_to_dict
+                    _record_llm_usage(usage_to_dict(stream_usage))
+                except Exception:
+                    pass
             msg = SimpleNamespace(content=full_text, tool_calls=full_tcs)
             yield ("done", SimpleNamespace(message=msg))
+
+        def _record_llm_usage(usage: dict | None) -> None:
+            """记录一次 LLM 调用的 token / 前缀缓存统计到任务与日志。"""
+            if not usage:
+                return
+            try:
+                with _tasks_lock:
+                    _t = _tasks.get(task_id)
+                    if _t is not None:
+                        st = _t.setdefault("usage_stats", {
+                            "calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                            "cache_hit_tokens": 0, "cache_miss_tokens": 0,
+                        })
+                        st["calls"] += 1
+                        st["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+                        st["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+                        st["cache_hit_tokens"] += int(usage.get("prompt_cache_hit_tokens") or 0)
+                        st["cache_miss_tokens"] += int(usage.get("prompt_cache_miss_tokens") or 0)
+                from providers.openai_compat import format_usage
+                _txt = format_usage(usage)
+                if _txt:
+                    log_buffer.emit("INFO", "agent", f"LLM token 统计：{_txt}", task_id)
+            except Exception:
+                pass
+
         def emit_log(level: str, message: str, tid: str):
             log_buffer.emit(level, "agent", message, tid)
 
