@@ -755,6 +755,58 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["url"],
         },
     },
+    {
+        "name": "web_search",
+        "description": "联网搜索互联网信息（DuckDuckGo，无需 key）。返回最多 max_results 条结果的标题/URL/摘要文本。适合查询最新资讯、文档、事实、代码示例等需要外部信息的问题。搜索失败会返回 Error 文本，可换关键词重试。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词（可含空格）"},
+                "max_results": {"type": "integer", "description": "最多返回结果数，默认 5，最大 10"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "web_extract",
+        "description": "抓取指定网页 URL 的内容并转为纯文本（自动剥离导航/脚本/样式）。适合读取文章正文、API 文档、新闻等。配合 web_search 使用：先搜索找到 URL，再抓取阅读。超过 max_chars 自动截断。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "要抓取的网页完整 URL（https）"},
+                "max_chars": {"type": "integer", "description": "最多返回字符数，默认 8000"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "create_skill",
+        "description": "把本次任务中可复用的方法/流程沉淀为一个知识技能并保存（供未来对话参考）。当用户明确要求记住某流程，或你发现刚完成的步骤值得复用时应调用。name 用简短动词短语（如「部署 FastAPI 到服务器」），content 写完整可执行步骤。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "技能名，≤60 字，简短描述性"},
+                "description": {"type": "string", "description": "一句话说明何时用此技能，≤300 字"},
+                "content": {"type": "string", "description": "完整操作步骤/方法，≤8000 字"},
+            },
+            "required": ["name", "content"],
+        },
+    },
+    {
+        "name": "delegate_tasks",
+        "description": "把多个相互独立的子问题拆给子代理并行执行（每个子代理有独立上下文并可调用工具），最后汇总。适合「对比/调研多个对象」「同时完成多件独立事项」。tasks 传每个子任务的一句话描述；结果会按传入顺序返回各子任务的结论。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {"type": "object", "properties": {"request": {"type": "string", "description": "子任务的一句话描述，须自包含（子代理没有当前对话上下文）"}}, "required": ["request"]},
+                    "description": "2-6 个独立子任务",
+                },
+            },
+            "required": ["tasks"],
+        },
+    },
 ]
 
 
@@ -836,6 +888,63 @@ def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list
         )
     if name == "ask_llm":
         return ask_llm(llm_call, _str("prompt"))
+    # ---- Hermes 能力补齐：联网 / 技能沉淀 / 子代理并行 ----
+    if name == "web_search":
+        from tools.web_search import search_web
+        q = _str("query")
+        try:
+            n = max(1, min(int(args.get("max_results", 5) or 5), 10))
+        except Exception:
+            n = 5
+        text = search_web(q, max_results=n) if q else "Error: query 不能为空"
+        if text.startswith("Error:"):
+            return {"observation": "", "error": text}
+        return {"observation": text, "error": ""}
+    if name == "web_extract":
+        from tools.web_extract import extract_web
+        url = _str("url")
+        try:
+            mc = max(1000, min(int(args.get("max_chars", 8000) or 8000), 50000))
+        except Exception:
+            mc = 8000
+        text = extract_web(url, max_chars=mc) if url else "Error: url 不能为空"
+        if text.startswith("Error:"):
+            return {"observation": "", "error": text}
+        return {"observation": text, "error": ""}
+    if name == "create_skill":
+        from skills_lifecycle import create_skill
+        res = create_skill(_str("name"), description=_str("description"),
+                           content=_str("content"), source="auto")
+        if res.get("ok"):
+            return {"observation": f"技能「{res.get('name')}」已保存（id={res.get('id')}），"
+                                  "未来相关任务可参考该技能。"}
+        return {"observation": "", "error": str(res.get("error", "技能保存失败"))}
+    if name == "delegate_tasks":
+        from agent.delegator import delegate_tasks
+        raw_tasks = args.get("tasks") or []
+        specs = []
+        for i, tk in enumerate(raw_tasks):
+            req = (tk.get("request") if isinstance(tk, dict) else str(tk)).strip()
+            if req:
+                specs.append({"id": f"sub{i + 1}", "request": req})
+        if not specs:
+            return {"observation": "", "error": "delegate_tasks: tasks 为空或格式错误"}
+        # 子代理可用工具 = 内置 + 当前绑定的 HTTP 技能
+        sub_schemas = tools_to_openai_functions(TOOLS + build_skill_tools(skills or []))
+        result = delegate_tasks(
+            specs,
+            llm_call=llm_call,
+            tool_schemas=sub_schemas,
+            execute_tool=execute_tool,
+            workspace_path=workspace_path,
+        )
+        lines = []
+        for r in result.get("results", []):
+            if r["status"] == "completed":
+                lines.append(f"子任务 {r['id']}（{r['duration_ms']}ms）：{r['answer']}")
+            else:
+                lines.append(f"子任务 {r['id']}：失败 - {r.get('error')}")
+        return {"observation": "\n\n".join(lines), "error": ""}
     if name.startswith("call_skill_") and skills:
         sid = name[len("call_skill_"):]
         for sk in skills:

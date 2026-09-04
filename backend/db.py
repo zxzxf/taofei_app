@@ -165,10 +165,16 @@ def init_db() -> None:
                 summary TEXT NOT NULL,
                 embedding TEXT NOT NULL,
                 created_at REAL,
+                kind TEXT DEFAULT 'episodic',
                 FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_ws ON memory_entries(workspace_id)")
+        # 老库迁移：对已存在的 memory_entries 表补充 kind 列（新库建表已含该列，此处会失败并被忽略）
+        try:
+            conn.execute("ALTER TABLE memory_entries ADD COLUMN kind TEXT DEFAULT 'episodic'")
+        except Exception:
+            pass
 
         # 对话会话（Session 化架构：跨请求持久的对话上下文）
         conn.execute("""
@@ -200,6 +206,15 @@ def init_db() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sm_session ON session_messages(session_id)")
+
+        # 会话全文检索（FTS5）。老版 SQLite 未编译 FTS5 时创建会失败，捕获后跳过，
+        # 此时 search_sessions 会自动降级为 LIKE 检索，不影响其它功能。
+        try:
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(session_id UNINDEXED, role, content)"
+            )
+        except Exception:
+            pass
 
         conn.commit()
 
@@ -346,6 +361,11 @@ def setup() -> None:
     """初始化数据库并执行一次性迁移。"""
     init_db()
     _migrate_from_json()
+    # 会话全文索引全量重建（Hermes 能力补齐 D4；表不存在时静默跳过）
+    try:
+        rebuild_session_fts()
+    except Exception:
+        pass
 
 
 # -------------------------------------------------------------
@@ -721,6 +741,11 @@ def append_session_messages(session_id: str, messages: list[dict]) -> bool:
                 )
                 seq += 1
             conn.commit()
+        # 同步全文索引（Hermes D4；表缺失/异常时静默跳过）
+        try:
+            _reindex_session_fts(session_id)
+        except Exception:
+            pass
         return True
     except Exception as exc:
         print(f"[ERROR] 追加会话消息失败：{exc}", flush=True)
@@ -745,9 +770,34 @@ def replace_session_messages(session_id: str, messages: list[dict]) -> bool:
                 )
                 seq += 1
             conn.commit()
+        # 压缩后重建该会话全文索引（Hermes D4）
+        try:
+            _reindex_session_fts(session_id)
+        except Exception:
+            pass
         return True
     except Exception as exc:
         print(f"[ERROR] 替换会话消息失败：{exc}", flush=True)
+        return False
+
+
+def _reindex_session_fts(session_id: str) -> bool:
+    """重建单个会话的 FTS5 索引（删除旧行后从 session_messages 全量重插）。"""
+    try:
+        with _get_conn() as conn:
+            conn.execute("DELETE FROM session_fts WHERE session_id = ?", (session_id,))
+            rows = conn.execute(
+                "SELECT role, content FROM session_messages WHERE session_id = ? ORDER BY seq",
+                (session_id,),
+            ).fetchall()
+            for r in rows:
+                conn.execute(
+                    "INSERT INTO session_fts (session_id, role, content) VALUES (?, ?, ?)",
+                    (session_id, r["role"], r["content"]),
+                )
+            conn.commit()
+        return True
+    except Exception:
         return False
 
 
@@ -756,12 +806,141 @@ def delete_session(session_id: str) -> bool:
     try:
         with _get_conn() as conn:
             conn.execute("DELETE FROM session_messages WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM session_fts WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             conn.commit()
         return True
     except Exception as exc:
         print(f"[ERROR] 删除会话失败：{exc}", flush=True)
         return False
+
+
+# -------------------------------------------------------------
+# 会话全文检索（FTS5 + LIKE 兜底）
+# -------------------------------------------------------------
+def _msg_content_to_text(raw) -> str:
+    """把 session_messages.content（JSON 编码存储）还原为纯文本，供 FTS 索引与摘要展示。"""
+    if not raw:
+        return ""
+    decoded = _safe_json(raw)
+    if isinstance(decoded, str):
+        return decoded
+    if isinstance(decoded, list):  # 多模态/多段内容：拼 text 段
+        parts = []
+        for p in decoded:
+            if isinstance(p, dict):
+                parts.append(p.get("text") or "")
+            elif isinstance(p, str):
+                parts.append(p)
+        return "\n".join(parts)
+    return str(raw)
+
+
+def rebuild_session_fts() -> bool:
+    """遍历 session_messages 全量重建 FTS 索引。失败（如无 FTS5 支持）返回 False，不抛出。"""
+    try:
+        with _get_conn() as conn:
+            conn.execute("DELETE FROM session_fts")
+            rows = conn.execute(
+                "SELECT session_id, role, content FROM session_messages"
+            ).fetchall()
+            conn.executemany(
+                "INSERT INTO session_fts (session_id, role, content) VALUES (?, ?, ?)",
+                [
+                    (r["session_id"], r["role"] or "", _msg_content_to_text(r["content"]))
+                    for r in rows
+                ],
+            )
+            conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[ERROR] 重建会话全文索引失败：{exc}", flush=True)
+        return False
+
+
+def _make_snippet(text: str, q: str, width: int = 60) -> str:
+    """截取命中词前后约 width 字符作为摘要片段，片段两端补省略号。"""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    term = q or ""
+    idx = text.find(term) if term else -1
+    if idx < 0 and term:  # FTS 分词后整句可能不连续，退而定位首个词
+        tokens = [t for t in term.split() if t]
+        if tokens:
+            t0 = tokens[0]
+            idx = text.find(t0)
+            if idx >= 0:
+                term = t0
+    if idx < 0:
+        start, end = 0, min(len(text), width * 2)
+    else:
+        start = max(0, idx - width)
+        end = min(len(text), idx + len(term) + width)
+    snippet = text[start:end]
+    if start > 0:
+        snippet = "…" + snippet
+    if end < len(text):
+        snippet = snippet + "…"
+    return snippet
+
+
+def search_sessions(q: str, limit: int = 20) -> list[dict]:
+    """跨会话全文检索。
+
+    返回 [{session_id, title, snippet, updated_at}]，按会话最近活跃时间倒序，每会话最多一条。
+    - FTS5 可用：查询词整体加引号做 MATCH（含特殊字符时容错）；
+    - FTS5 不可用 / MATCH 报错 / 无命中：自动降级为 LIKE '%q%' 兜底，绝不抛出。
+    """
+    if not q or not str(q).strip():
+        return []
+    q = str(q).strip()
+
+    def _like_rows(cur):
+        # LIKE 兜底：对原始存储文本做子串匹配，转义 %/_ 通配符
+        esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        sql = (
+            "SELECT m.session_id, m.content AS raw_content, s.title, s.updated_at "
+            "FROM session_messages m JOIN sessions s ON s.id = m.session_id "
+            "WHERE m.content LIKE ? ESCAPE '\\' ORDER BY s.updated_at DESC"
+        )
+        return cur.execute(sql, (f"%{esc}%",)).fetchall()
+
+    try:
+        with _get_conn() as conn:
+            rows = []
+            try:
+                # 整体转成引号短语：内部双引号翻倍转义，避免 MATCH 语法错误
+                phrase = '"' + q.replace('"', '""') + '"'
+                rows = conn.execute(
+                    "SELECT f.session_id, f.content AS raw_content, s.title, s.updated_at "
+                    "FROM session_fts f JOIN sessions s ON s.id = f.session_id "
+                    "WHERE session_fts MATCH ? ORDER BY s.updated_at DESC",
+                    (phrase,),
+                ).fetchall()
+            except Exception:
+                rows = []  # FTS 表缺失/无 FTS5 支持/MATCH 语法错误 → 走 LIKE
+            if not rows:
+                rows = _like_rows(conn)
+            # 同会话多条消息命中时只取一条（会话级结果），不设 SQL LIMIT 以保证去重后条数准确
+            seen, out = set(), []
+            for r in rows:
+                sid = r["session_id"]
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                out.append({
+                    "session_id": sid,
+                    "title": r["title"] or "新对话",
+                    "snippet": _make_snippet(_msg_content_to_text(r["raw_content"]), q),
+                    "updated_at": r["updated_at"],
+                })
+                if len(out) >= limit:
+                    break
+            return out
+    except Exception as exc:
+        print(f"[ERROR] 会话全文检索失败：{exc}", flush=True)
+        return []
 
 
 def _safe_json(data) -> Any:

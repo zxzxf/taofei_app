@@ -18,6 +18,13 @@
         <input v-model="searchTerm" type="text" placeholder="搜索会话">
       </div>
       <div v-if="!sidebarCollapsed" class="chat-session-list">
+        <div v-if="searchHits.length" class="chat-search-hits">
+          <div class="chat-search-hits-label">📄 历史内容命中 {{ searchHits.length }}</div>
+          <div v-for="hit in searchHits" :key="hit.session_id" class="chat-search-hit" @click="openSearchHit(hit)">
+            <div class="chat-search-hit-title">{{ hit.title || '（历史会话）' }}</div>
+            <div class="chat-search-hit-snippet">{{ hit.snippet }}</div>
+          </div>
+        </div>
         <div
           v-for="s in filteredSessions"
           :key="s.id"
@@ -48,7 +55,7 @@
           </div>
           <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
         </div>
-        <div v-if="!filteredSessions.length" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
+        <div v-if="!filteredSessions.length && !searchHits.length" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
           暂无会话
         </div>
       </div>
@@ -289,6 +296,16 @@
               <div v-else v-html="renderedHtml(msg)"></div>
             </div>
             <div v-if="msg.role === 'ai' && msg.metrics" class="chat-msg-metrics">{{ msg.metrics }}</div>
+            <!-- Hermes B4：后台技能建议 → 一键沉淀 -->
+            <div v-if="msg.role === 'ai' && msg.skillSuggestion && !msg._skillSaved" class="chat-skill-suggest">
+              <span class="chat-skill-suggest-icon">📌</span>
+              <span class="chat-skill-suggest-text">发现可复用流程：{{ msg.skillSuggestion.name }}</span>
+              <button class="chat-skill-save-btn" :disabled="msg._skillSaving" @click="saveSuggestedSkill(msg)">
+                {{ msg._skillSaving ? '保存中…' : '沉淀为技能' }}
+              </button>
+              <span v-if="msg._skillError" class="chat-skill-error">{{ msg._skillError }}</span>
+            </div>
+            <div v-else-if="msg.role === 'ai' && msg._skillSaved" class="chat-skill-saved">✅ 已沉淀为技能：{{ msg.skillSuggestion && msg.skillSuggestion.name }}</div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
           </div>
         </div>
@@ -523,6 +540,87 @@ const filteredSessions = computed(() => {
   if (!term) return sessions.value
   return sessions.value.filter(s => s.title.toLowerCase().includes(term))
 })
+
+// ---- Hermes D4：会话内容全文搜索（命中显示于会话列表顶部）----
+const searchHits = ref([])
+let _searchTimer = null
+watch(searchTerm, (v) => {
+  clearTimeout(_searchTimer)
+  const q = (v || '').trim()
+  if (q.length < 2) { searchHits.value = []; return }
+  _searchTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(`/api/sessions/search?q=${encodeURIComponent(q)}`)
+      if (!res.ok) return
+      const d = await res.json()
+      const cur = currentSession.value
+      searchHits.value = (d.results || [])
+        .filter(h => !cur || (h.session_id !== cur.id && h.session_id !== cur.sid))
+        .slice(0, 8)
+    } catch { /* 忽略搜索错误 */ }
+  }, 450)
+})
+
+// 打开内容命中的会话：本地无记录时从后端恢复完整消息
+async function openSearchHit(hit) {
+  const sid = hit.session_id
+  let s = sessions.value.find(x => x.id === sid || x.sid === sid)
+  if (!s) {
+    try {
+      const res = await fetch(`/api/sessions/${sid}`)
+      if (!res.ok) return
+      const d = await res.json()
+      const msgs = (d.messages || []).map(m => {
+        if (m.role !== 'user' && m.role !== 'assistant') return null
+        let text = m.content
+        if (typeof text !== 'string') {
+          text = Array.isArray(text)
+            ? text.filter(b => b && b.type === 'text').map(b => b.text).join(' ')
+            : ''
+        }
+        if (!text || !text.trim()) return null
+        return { role: m.role === 'assistant' ? 'ai' : 'user', text, time: Date.now() }
+      }).filter(Boolean)
+      s = {
+        id: sid, sid, title: d.title || '历史会话',
+        time: (d.updated_at || Date.now() / 1000) * 1000,
+        messages: msgs, skills: [], modelPresetId: d.model_preset_id || '',
+      }
+      sessions.value.unshift(s)
+    } catch { return }
+  }
+  if (!s) return
+  currentId.value = s.id
+  expandedEarly.value = true   // 内容可能较早，展开全部消息
+  searchHits.value = []
+  saveSessions()
+}
+
+// ---- Hermes B4：把后台生成的技能建议一键保存 ----
+async function saveSuggestedSkill(msg) {
+  const sug = msg && msg.skillSuggestion
+  if (!sug) return
+  msg._skillSaving = true
+  try {
+    const res = await fetch('/api/skills/auto-save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: sug.name, description: sug.description || '', content: sug.content || '' }),
+    })
+    if (res.ok) {
+      msg._skillSaved = true
+      msg._skillError = ''
+    } else {
+      let err = `HTTP ${res.status}`
+      try { const d = await res.json(); err = d.error || err } catch {}
+      msg._skillError = err
+    }
+  } catch (e) {
+    msg._skillError = String(e.message || e)
+  }
+  msg._skillSaving = false
+  saveSessions()
+}
 
 function formatTime(ts) {
   if (!ts) return ''
@@ -1355,6 +1453,23 @@ function applyTaskMetrics(aiMsg, task) {
   aiMsg.metrics = parts.length ? parts.join(' · ') : null
 }
 
+// Hermes B4：技能建议由后台线程生成，晚于 done 事件——完成后延时补拉一次
+function fetchSkillSuggestionLater(aiMsg, taskId) {
+  if (!aiMsg || !taskId) return
+  setTimeout(async () => {
+    try {
+      if (aiMsg.skillSuggestion) return
+      const r2 = await fetch(`/api/status/${taskId}`)
+      if (!r2.ok) return
+      const t2 = await r2.json()
+      if (t2.skill_suggestion) {
+        aiMsg.skillSuggestion = t2.skill_suggestion
+        saveSessions()
+      }
+    } catch { /* 忽略 */ }
+  }, 3500)
+}
+
 // 生成客户端会话 id（与后端 session_id 关联，服务重启后可续聊）
 function genSessionId() {
   if (window.crypto && crypto.randomUUID) {
@@ -1419,6 +1534,7 @@ function fallbackPoll(task_id, aiMsg, s) {
         s.sending = false
         s.time = Date.now()
         applyTaskMetrics(aiMsg, task)
+        fetchSkillSuggestionLater(aiMsg, task_id)
         saveSessions()
       } else if (task.status === 'failed') {
         aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
@@ -1607,6 +1723,7 @@ async function sendAgent(s, text, images = []) {
         aiMsg.text = result || '(Agent 无返回结果)'
       }
       aiMsg.pending = false
+      fetchSkillSuggestionLater(aiMsg, aiMsg._taskId || (task && task.id))  // B4 补拉技能建议
     } else if (task.status === 'cancelled') {
       aiMsg.text = '⏹️ 已取消'
       aiMsg.pending = false
@@ -1627,6 +1744,7 @@ async function sendAgent(s, text, images = []) {
 
   function useFallback(taskId) {
     fallbackPoll(taskId, aiMsg, s)
+    fetchSkillSuggestionLater(aiMsg, taskId)  // Hermes B4：补拉技能建议
   }
 
   try {
@@ -3048,6 +3166,64 @@ function onFilePick(node) {
   opacity: .8;
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
+}
+/* Hermes B4：技能沉淀建议条 */
+.chat-skill-suggest {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: rgba(139, 92, 246, .05);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.chat-skill-suggest-text { color: var(--text-muted); flex: 1; min-width: 120px; }
+.chat-skill-save-btn {
+  background: var(--accent, #8b5cf6);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-skill-save-btn:disabled { opacity: .6; cursor: default; }
+.chat-skill-error { color: #ef4444; font-size: 11px; }
+.chat-skill-saved {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #22c55e;
+}
+/* Hermes D4：历史内容命中 */
+.chat-search-hits {
+  padding: 4px 10px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.chat-search-hits-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.chat-search-hit {
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .12s;
+}
+.chat-search-hit:hover { background: rgba(128, 128, 128, .08); }
+.chat-search-hit-title { font-size: 12px; font-weight: 600; }
+.chat-search-hit-snippet {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 /* 8.1：流式纯文本保持换行（v-text 已转义） */
 .msg-streaming-text {

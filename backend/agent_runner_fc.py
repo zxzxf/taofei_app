@@ -503,7 +503,8 @@ def run_agent_task_fc(
                 try:
                     tool_result_str = execute_tool_fc(
                         func_name, workspace_path,
-                        lambda msgs: llm_call(msgs, tools=openai_tools),
+                        # 兼容 tools kwarg（delegate_tasks 等子代理工具会传子集 schemas）
+                        lambda msgs, _tools=None: llm_call(msgs, tools=_tools if _tools is not None else openai_tools),
                         func_args, skills=skills,
                     )
                 except Exception as exc:

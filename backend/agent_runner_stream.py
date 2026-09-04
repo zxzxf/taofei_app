@@ -52,6 +52,7 @@ def run_agent_task_streaming(
     cancel_flag_getter: Callable[[], bool] | None = None,
     history_messages: list[dict] | None = None,
     messages_hook: Callable[[list[dict]], None] | None = None,
+    tool_llm_call: Callable[..., Any] | None = None,
 ) -> None:
     """流式版本：在后台线程执行 FC agent，token 实时写入 delta_buffer。
 
@@ -403,7 +404,8 @@ def run_agent_task_streaming(
                 try:
                     tool_result_str = execute_tool_fc(
                         func_name, workspace_path,
-                        lambda msgs: None,  # 工具内不需要再调 llm（简化）
+                        # 工具内嵌 LLM（ask_llm / delegate_tasks 需要）；默认禁用
+                        tool_llm_call if tool_llm_call is not None else (lambda msgs: None),
                         func_args, skills=skills,
                         tool_line_cb=_tool_line_cb,
                     )

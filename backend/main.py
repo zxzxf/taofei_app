@@ -2224,6 +2224,13 @@ def _save_skills(skills: list[dict]) -> None:
     db.save_skills(skills)
 
 
+class SkillSuggestionSaveRequest(BaseModel):
+    """保存自动沉淀的知识技能（Hermes 能力补齐 B）。"""
+    name: str
+    description: str = ""
+    content: str = ""
+
+
 class SkillRequest(BaseModel):
     id: str = ""
     type: str = "http"          # http: HTTP API 技能；claude: Claude 技能（SKILL.md）
@@ -2260,6 +2267,20 @@ def _parse_skill_md(text: str) -> tuple[str, str, str]:
 def list_skills():
     """技能列表。"""
     return {"skills": _load_skills()}
+
+
+@app.post("/api/skills/auto-save")
+def save_auto_skill(req: SkillSuggestionSaveRequest):
+    """保存自动沉淀的知识技能（Hermes 能力补齐 B，聊天气泡确认后调用）。"""
+    from skills_lifecycle import create_skill
+    name = req.name.strip()
+    if not name or not req.content.strip():
+        return JSONResponse({"error": "技能名称与内容不能为空"}, status_code=400)
+    res = create_skill(name, description=req.description, content=req.content, source="auto")
+    if not res.get("ok"):
+        code = 409 if "已存在" in str(res.get("error", "")) else 500
+        return JSONResponse({"error": res.get("error", "保存失败")}, status_code=code)
+    return {"ok": True, "id": res.get("skill_id"), "name": req.name}
 
 
 @app.post("/api/skills")
@@ -2957,11 +2978,33 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
         if llm is None:
             raise RuntimeError("LLM 初始化失败，请检查模型配置")
 
+        # 用户长期画像（Hermes 能力补齐 D2）：注入 system 尾部，保持前缀稳定
+        _profile_ctx = ""
+        try:
+            import memory as _mem_mod
+            _profile_ctx = _mem_mod.build_user_profile_context()
+        except Exception:
+            _profile_ctx = ""
+
+        def _inject_profile(messages: list[dict]) -> None:
+            """把用户画像追加到 messages[0]（system）尾部；已注入过则跳过。"""
+            if not _profile_ctx:
+                return
+            try:
+                if messages and isinstance(messages[0], dict) \
+                        and messages[0].get("role") == "system":
+                    c = str(messages[0].get("content", ""))
+                    if "[用户画像]" not in c:
+                        messages[0]["content"] = c + "\n\n" + _profile_ctx
+            except Exception:
+                pass
+
         def llm_call(messages: list[dict], tools: list[dict] | None = None) -> Any:
             """统一的 LLM 调用包装：OpenAI 兼容端点直连（原 taofei_api.LLM）。"""
             import concurrent.futures
 
             def _call():
+                _inject_profile(messages)
                 if tools is not None:
                     # OpenAICompatLLM.call(messages, tools=tools) → ChatCompletion
                     response = llm.call(messages, tools=tools)
@@ -2998,6 +3041,8 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
 
             # 直接获取底层 OpenAI client 做原生流式调用
             client = llm._get_sync_client()
+
+            _inject_profile(messages)  # 用户画像注入 system
 
             kwargs = {
                 "model": llm.model,
@@ -3243,6 +3288,7 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                 cancel_flag_getter=lambda: _task_cancel.get(task_id, False),
                 history_messages=session_history or None,
                 messages_hook=session_hook,
+                tool_llm_call=llm_call,
             )
         elif HAS_FC_RUNNER:
             log_buffer.emit("INFO", "system", "流式 runner 不可用，降级为非流式 FC 模式", task_id)
@@ -3317,28 +3363,66 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                 except Exception as _rex:
                     log_buffer.emit("WARNING", "system", f"ReAct 会话写回失败：{_rex}", task_id)
 
-        # 跨会话记忆写入：异步后台执行，不阻塞任务完成
-        if memory_enabled and workspace_id:
-            try:
-                import memory
-                with _tasks_lock:
-                    task = _tasks.get(task_id, {})
-                    if task.get("status") == "completed":
-                        result = task.get("result")
-                        final_text = result if isinstance(result, str) else ""
-                        if isinstance(result, dict):
-                            final_text = (result.get("summary") or result.get("content") or "")
-                if final_text:
+        # 任务完成后的异步沉淀（Hermes 能力补齐）：记忆 / 用户画像 / 技能建议
+        # 统一先提取最终回答文本（不依赖工作空间是否绑定）
+        _final_text = ""
+        _task_result = None
+        with _tasks_lock:
+            _t_done = _tasks.get(task_id, {})
+            if _t_done.get("status") == "completed":
+                _task_result = _t_done.get("result")
+                _final_text = _task_result if isinstance(_task_result, str) else ""
+                if isinstance(_task_result, dict):
+                    _final_text = (_task_result.get("summary") or _task_result.get("content") or "")
+
+        if _final_text:
+            # 1) 跨会话向量记忆（需工作空间）
+            if memory_enabled and workspace_id:
+                try:
+                    import memory
                     def _save_mem_bg():
                         try:
-                            saved = memory.save_memory(llm_call, workspace_id, user_request, str(final_text))
+                            saved = memory.save_memory(llm_call, workspace_id, user_request, str(_final_text))
                             if saved:
                                 log_buffer.emit("INFO", "system", "已保存 1 条新记忆", task_id)
                         except Exception as exc:
                             log_buffer.emit("WARNING", "system", f"记忆保存失败：{exc}", task_id)
                     threading.Thread(target=_save_mem_bg, daemon=True).start()
-            except Exception as exc:
-                log_buffer.emit("WARNING", "system", f"记忆保存调度失败：{exc}", task_id)
+                except Exception as exc:
+                    log_buffer.emit("WARNING", "system", f"记忆保存调度失败：{exc}", task_id)
+
+            # 2) 用户画像更新 + 技能沉淀建议（不依赖工作空间，后台执行）
+            def _bg_profile_and_skill():
+                try:
+                    try:
+                        import memory as _mem2
+                        pr = _mem2.upsert_user_profile(llm_call, user_request, str(_final_text))
+                        if pr.get("ok"):
+                            log_buffer.emit("INFO", "system", "用户画像已更新", task_id)
+                    except Exception as _pexc:
+                        log_buffer.emit("WARNING", "system", f"用户画像更新失败：{_pexc}", task_id)
+                    try:
+                        from skills_lifecycle import suggest_skill_after_task
+                        sug = suggest_skill_after_task(user_request, str(_final_text), llm_call)
+                        if sug and sug.get("skip"):
+                            return
+                        conf = float(sug.get("confidence") or 0) if sug else 0
+                        if sug and conf >= 0.55 and sug.get("name") and sug.get("content"):
+                            with _tasks_lock:
+                                if task_id in _tasks:
+                                    _tasks[task_id]["skill_suggestion"] = {
+                                        "name": sug["name"][:60],
+                                        "description": (sug.get("description") or "")[:300],
+                                        "content": sug["content"][:8000],
+                                        "confidence": round(conf, 2),
+                                    }
+                            log_buffer.emit("INFO", "system",
+                                            f"生成技能建议「{sug['name']}」（置信 {conf:.0%}）", task_id)
+                    except Exception as _sexc:
+                        log_buffer.emit("WARNING", "system", f"技能建议生成失败：{_sexc}", task_id)
+                except Exception:
+                    pass
+            threading.Thread(target=_bg_profile_and_skill, daemon=True).start()
     except Exception as exc:
         err_msg = str(exc)
         log_buffer.emit("ERROR", "system", f"Agent 任务失败：{err_msg}", task_id)
@@ -3511,6 +3595,19 @@ def api_create_session(req: SessionCreateRequest):
         memory_enabled=req.memory_enabled,
     )
     return s.to_dict(with_messages=False)
+
+
+@app.get("/api/sessions/search")
+def api_search_sessions(q: str = Query("", min_length=1)):
+    """全文检索会话历史（Hermes 能力补齐 D4）。按最近活跃排序。"""
+    if not q.strip():
+        return {"results": []}
+    import db as _db
+    try:
+        results = _db.search_sessions(q.strip(), limit=30)
+    except Exception:
+        results = []
+    return {"results": results}
 
 
 @app.get("/api/sessions/{session_id}")
