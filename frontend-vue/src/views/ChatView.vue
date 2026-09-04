@@ -922,7 +922,12 @@ async function deleteSession(id) {
   // 原生 confirm() 在 Electron 桌面端关闭后窗口系统级焦点无法恢复（输入框打不了字），
   // 改用应用内自定义对话框，全程页面内交互，不触发系统焦点切换。
   if (!(await appConfirm('确定删除该会话？'))) return
-  sessions.value = sessions.value.filter(s => s.id !== id)
+  const s = sessions.value.find(x => x.id === id)
+  // 同步删除后端持久化会话（含消息），避免残留
+  if (s && s.sid) {
+    try { await fetch(`/api/sessions/${s.sid}`, { method: 'DELETE' }) } catch { /* 尽力而为 */ }
+  }
+  sessions.value = sessions.value.filter(x => x.id !== id)
   if (currentId.value === id) currentId.value = sessions.value[0]?.id || null
   saveSessions()
   // 焦点还给输入框，删除后可继续直接打字
@@ -939,6 +944,11 @@ async function clearCurrent() {
   const s = currentSession.value
   if (!s) return
   if (!(await appConfirm('确定清空当前会话的消息记录吗？'))) return
+  // 清空本地消息 = 后端历史作废：删除持久化会话，下次发送重建
+  if (s.sid) {
+    try { await fetch(`/api/sessions/${s.sid}`, { method: 'DELETE' }) } catch { /* 尽力而为 */ }
+    s.sid = null
+  }
   s.messages = [{ role: 'ai', text: '当前会话已清空，请重新输入。', time: Date.now() }]
   saveSessions()
 }
@@ -1287,6 +1297,22 @@ async function sendGitCommit(s, userText, commitMessage) {
 
 // ===== Agent 模式：ReAct 循环 =====
 
+// 生成客户端会话 id（与后端 session_id 关联，服务重启后可续聊）
+function genSessionId() {
+  if (window.crypto && crypto.randomUUID) {
+    return crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+  }
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+}
+
+// 废弃未成功建立的会话绑定：删除后端 session 壳 + 置空 sid（下次自动重建）
+async function discardSessionBinding(s) {
+  if (!s || !s.sid) return
+  const deadSid = s.sid
+  s.sid = null
+  try { await fetch(`/api/sessions/${deadSid}`, { method: 'DELETE' }) } catch { /* 尽力而为 */ }
+}
+
 // SSE/WS 异常时的兜底轮询
 function fallbackPoll(task_id, aiMsg, s) {
   const pollInterval = setInterval(async () => {
@@ -1341,6 +1367,8 @@ function fallbackPoll(task_id, aiMsg, s) {
         aiMsg.error = true
         clearInterval(pollInterval)
         s.sending = false
+        // 首轮失败：废弃刚建的 sid（后端只存了空壳/残缺历史）
+        if (aiMsg._firstRound) discardSessionBinding(s)
         saveSessions()
       }
       scrollToBottom()
@@ -1349,14 +1377,23 @@ function fallbackPoll(task_id, aiMsg, s) {
 }
 
 async function sendAgent(s, text, images = []) {
-  // 0) 收集当前会话历史（不包含当前请求和 pending 消息）
-  const history = s.messages
-    .filter(m => !m.pending)
-    .map(m => ({
-      role: m.role,
-      text: m.text || '',
-      images: m.images || [],
-    }))
+  // 0) Session 化：前端会话绑定后端 session_id（跨请求持久上下文 + 前缀缓存）
+  //    - 首次（无 sid）：生成客户端 sid，全量传 history → 后端自动迁移进新会话
+  //    - 之后（有 sid）：不再传 history，由后端持久化会话提供完整上下文
+  //      （含工具调用细节，比前端文本 history 更完整）
+  const firstRound = !s.sid
+  if (firstRound) {
+    s.sid = genSessionId()
+  }
+  const history = firstRound
+    ? s.messages
+        .filter(m => !m.pending)
+        .map(m => ({
+          role: m.role,
+          text: m.text || '',
+          images: m.images || [],
+        }))
+    : []
 
   // 1) 推入用户消息（含图片）
   s.messages.push({ role: 'user', text, time: Date.now(), images: images.map(i => i.dataUrl) })
@@ -1368,6 +1405,7 @@ async function sendAgent(s, text, images = []) {
   // 2) 预占一条 AI 消息
   s.messages.push({ role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: true, stepExpanded: {}, thinking: '', thinkingDuration: 0, thinkingActive: true, thinkingExpanded: true, timeline: [], timelineExpanded: {}, _stream: { thinkingIdx: -1, currentToolId: null, toolIdx: -1 } })
   const aiMsg = s.messages[s.messages.length - 1]
+  aiMsg._firstRound = firstRound  // 供 fallback 轮询判断是否废弃新建的 sid
   await scrollToBottom(true)
 
   s.sending = true
@@ -1510,10 +1548,13 @@ async function sendAgent(s, text, images = []) {
     } else if (task.status === 'cancelled') {
       aiMsg.text = '⏹️ 已取消'
       aiMsg.pending = false
+      if (aiMsg._firstRound) discardSessionBinding(s)
     } else if (task.status === 'failed') {
       aiMsg.text = `❌ Agent 执行失败：${task.error || '未知错误'}`
       aiMsg.pending = false
       aiMsg.error = true
+      // 首轮失败：废弃刚建的 sid（后端只存了空壳/残缺历史）
+      if (aiMsg._firstRound) discardSessionBinding(s)
     }
     s.sending = false
     s.time = Date.now()
@@ -1532,6 +1573,7 @@ async function sendAgent(s, text, images = []) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         request: text,
+        session_id: s.sid || null,
         model_preset_id: s.modelPresetId || globalDefaultPresetId.value || null,
         workspace_id: currentWorkspaceId.value || null,
         images: images.map(i => i.dataUrl),
@@ -1548,10 +1590,21 @@ async function sendAgent(s, text, images = []) {
       aiMsg.pending = false
       aiMsg.error = true
       s.sending = false
+      // 首轮启动失败：废弃刚生成的 sid（后端可能只建了空会话），下次重建
+      if (firstRound && s.sid) {
+        const deadSid = s.sid
+        s.sid = null
+        try { await fetch(`/api/sessions/${deadSid}`, { method: 'DELETE' }) } catch {}
+      }
       saveSessions()
       return
     }
-    const { task_id } = await startRes.json()
+    const startData = await startRes.json()
+    const { task_id } = startData
+    // 后端返回 session_id 时回存（后端可能规范化 id）
+    if (startData.session_id) {
+      s.sid = startData.session_id
+    }
 
     // 4) 优先走 WebSocket 订阅；连接未就绪时降级 SSE
     if (wsManager.status === 'connected') {
@@ -1610,6 +1663,8 @@ async function sendAgent(s, text, images = []) {
     aiMsg.pending = false
     aiMsg.error = true
     s.sending = false
+    // 首轮网络错误：废弃刚生成的 sid（后端可能只建了空会话）
+    if (firstRound) discardSessionBinding(s)
     saveSessions()
     await scrollToBottom()
   }
