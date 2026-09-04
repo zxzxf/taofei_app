@@ -494,6 +494,91 @@ def run_python_code(workspace_path: str | None, code: str) -> dict:
         return {"observation": "", "error": f"run_python_code 失败：{e}"}
 
 
+def run_python_code_stream(workspace_path: str | None, code: str,
+                           on_line=None) -> dict:
+    """流式版本的 Python 代码执行：边执行边推送 stdout/stderr 行。
+
+    Args:
+        on_line: 可调用对象，接收 (stream_name, line_text)。
+            stream_name: 'stdout' 或 'stderr'
+    """
+    try:
+        code = code if isinstance(code, str) else ""
+        if not code.strip():
+            return {"observation": "", "error": "代码为空，无法执行"}
+        python_exe = _resolve_python_exe()
+        if not python_exe:
+            return {
+                "observation": "",
+                "error": "打包环境且系统未安装 Python，无法执行代码；请改用 read_file/list_directory 分析文件",
+            }
+        guard = (
+            "import sys,types as _t;"
+            "_w=_t.ModuleType('webbrowser');"
+            "_w.open=lambda *a,**k:False;"
+            "sys.modules['webbrowser']=_w;"
+            "import os as _os;"
+            "_os.startfile=lambda *a,**k:None\n"
+        )
+        safe_env = {k: v for k, v in os.environ.items() if isinstance(v, str)}
+        safe_env["TAOFEI_AGENT_CHILD"] = "1"
+        safe_env["PYTHONIOENCODING"] = "utf-8"
+        safe_env["PYTHONUTF8"] = "1"
+        # 注意：Windows 上不支持 select 管道，这里使用线程逐行读取
+        proc = subprocess.Popen(
+            [python_exe, "-c", guard + code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=workspace_path or None,
+            env=safe_env,
+            bufsize=1,
+            universal_newlines=True,
+        )
+        out_lines, err_lines = [], []
+        done = {"stdout": False, "stderr": False}
+
+        def _read_stream(stream, name, collector):
+            for line in iter(stream.readline, ""):
+                line = line.rstrip("\n")
+                collector.append(line)
+                if on_line:
+                    try:
+                        on_line(name, line)
+                    except Exception:
+                        pass
+            done[name] = True
+
+        import threading
+        t_out = threading.Thread(target=_read_stream, args=(proc.stdout, "stdout", out_lines), daemon=True)
+        t_err = threading.Thread(target=_read_stream, args=(proc.stderr, "stderr", err_lines), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        try:
+            returncode = proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            t_out.join(timeout=2)
+            t_err.join(timeout=2)
+            return {"observation": "", "error": "代码执行超时（>15s）"}
+
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+
+        out = "\n".join(out_lines)
+        err = "\n".join(err_lines)
+        result = ""
+        if out:
+            result += f"[stdout]\n{out}\n"
+        if err:
+            result += f"[stderr]\n{err}\n"
+        if returncode != 0:
+            return {"observation": _short(result), "error": f"代码执行返回非零退出码 {returncode}"}
+        return {"observation": _short(result) or "（无输出）"}
+    except Exception as e:
+        return {"observation": "", "error": f"run_python_code_stream 失败：{e}"}
+
+
 def http_request(workspace_path: str | None, url: str, method: str = "GET", headers: str = "", body: str = "") -> dict:
     """发起 HTTP 请求。headers 为 JSON 字符串。"""
     try:
@@ -704,8 +789,12 @@ def build_skill_tools(skills: list[dict]) -> list[dict]:
     return tools
 
 
-def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list[dict]], str], args: dict, skills: list[dict] | None = None) -> dict:
-    """根据工具名分发执行。skills 提供动态注册的 HTTP 技能（call_skill_<id>）。"""
+def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list[dict]], str], args: dict, skills: list[dict] | None = None, tool_line_cb=None) -> dict:
+    """根据工具名分发执行。skills 提供动态注册的 HTTP 技能（call_skill_<id>）。
+
+    tool_line_cb: 可选，可调用对象 (stream_name, line) → None。
+        仅对 run_python_code 等支持流式输出的工具生效，用于实时推送执行输出。
+    """
     if not isinstance(args, dict):
         args = {}
     def _str(key, default=""):
@@ -734,6 +823,8 @@ def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list
     if name == "list_directory":
         return list_directory(workspace_path, _str("path"))
     if name == "run_python_code":
+        if tool_line_cb:
+            return run_python_code_stream(workspace_path, _str("code"), on_line=tool_line_cb)
         return run_python_code(workspace_path, _str("code"))
     if name == "http_request":
         return http_request(
@@ -783,12 +874,15 @@ def execute_tool_fc(
     llm_call: Callable[[list[dict]], str],
     args: dict,
     skills: list[dict] | None = None,
+    tool_line_cb=None,
 ) -> str:
     """function calling 版本的工具执行：直接返回 observation 字符串。
 
     出错时返回 "Error: ..." 格式字符串，模型可以直接看到错误并重试。
+    tool_line_cb: 可选，流式输出回调 (stream_name, line) → None
     """
-    result = execute_tool(name, workspace_path, llm_call, args, skills=skills)
+    result = execute_tool(name, workspace_path, llm_call, args, skills=skills,
+                          tool_line_cb=tool_line_cb)
     obs = result.get("observation", "")
     err = result.get("error", "")
     if err:

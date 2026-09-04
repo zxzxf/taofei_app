@@ -219,8 +219,8 @@
                       <!-- 命令项：可展开/折叠，结果直接可见 -->
                       <div v-else-if="item.type === 'command'" class="timeline-command">
                         <div class="timeline-command-header" @click="toggleTimelineItem(msg, idx)">
-                          <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
-                          <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
+                          <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : item.status === 'running' ? '⏳' : '✅' }}</span>
+                          <span class="timeline-label">{{ item.status === 'running' ? '执行中' : `已执行 ${getCommandIndex(msg, idx)} 条命令` }}</span>
                           <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
                           <span class="timeline-command-summary" v-if="toolArgSummary(item.name, item.args)">{{ toolArgSummary(item.name, item.args) }}</span>
                           <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
@@ -266,8 +266,8 @@
                     <!-- 命令项：可展开/折叠，结果直接可见 -->
                     <div v-else-if="item.type === 'command'" class="timeline-command">
                       <div class="timeline-command-header" @click="toggleTimelineItem(msg, idx)">
-                        <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : '✅' }}</span>
-                        <span class="timeline-label">已执行 {{ getCommandIndex(msg, idx) }} 条命令</span>
+                        <span class="timeline-icon" :class="item.status">{{ item.status === 'error' ? '❌' : item.status === 'running' ? '⏳' : '✅' }}</span>
+                        <span class="timeline-label">{{ item.status === 'running' ? '执行中' : `已执行 ${getCommandIndex(msg, idx)} 条命令` }}</span>
                         <span class="timeline-command-name">{{ toolDisplayName(item.name) }}</span>
                         <span class="timeline-command-summary" v-if="toolArgSummary(item.name, item.args)">{{ toolArgSummary(item.name, item.args) }}</span>
                         <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
@@ -1366,7 +1366,7 @@ async function sendAgent(s, text, images = []) {
   await scrollToBottom(true)
 
   // 2) 预占一条 AI 消息
-  s.messages.push({ role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: true, stepExpanded: {}, thinking: '', thinkingDuration: 0, thinkingActive: true, thinkingExpanded: true, timeline: [], timelineExpanded: {} })
+  s.messages.push({ role: 'ai', text: '⏳ Agent 正在思考…', time: Date.now(), pending: true, agentSteps: [], showReportSteps: true, stepExpanded: {}, thinking: '', thinkingDuration: 0, thinkingActive: true, thinkingExpanded: true, timeline: [], timelineExpanded: {}, _stream: { thinkingIdx: -1, currentToolId: null, toolIdx: -1 } })
   const aiMsg = s.messages[s.messages.length - 1]
   await scrollToBottom(true)
 
@@ -1403,6 +1403,87 @@ async function sendAgent(s, text, images = []) {
         aiMsg.text = stepText
       }
     }
+    saveSessions()
+    scrollToBottom()
+  }
+
+  // ── 流式 delta 处理：打字机效果 + 工具实时输出 ──
+  function applyDelta(delta) {
+    const st = aiMsg._stream || (aiMsg._stream = { thinkingIdx: -1, currentToolId: null, toolIdx: -1 })
+    const type = delta.type
+    const data = delta.delta || delta
+
+    if (type === 'step_start') {
+      // 开始一步思考：新增 thinking 项
+      st.thinkingIdx = aiMsg.timeline.length
+      aiMsg.timeline.push({
+        type: 'thinking',
+        content: '',
+        start_time: Date.now(),
+      })
+      aiMsg.thinkingActive = true
+    } else if (type === 'content') {
+      // 文本 token 增量
+      if (st.thinkingIdx < 0) {
+        st.thinkingIdx = aiMsg.timeline.length
+        aiMsg.timeline.push({ type: 'thinking', content: '', start_time: Date.now() })
+      }
+      aiMsg.timeline[st.thinkingIdx].content += data
+      aiMsg.thinkingActive = true
+      // 同时更新 aiMsg.text 为当前累积内容（打字机效果）
+      if (!aiMsg.report) {
+        // 只在没有报告的简单模式下直接显示
+        // 复杂思考过程保留在 timeline 里
+      }
+    } else if (type === 'tool_call_delta') {
+      // 工具调用增量：累积到当前 thinking 项
+      if (st.thinkingIdx >= 0 && data) {
+        // 不直接改 timeline，工具调用在 tool_start 时才可见
+      }
+    } else if (type === 'tool_start') {
+      // 工具开始执行：新增 command 项
+      st.currentToolId = data.id
+      st.toolIdx = aiMsg.timeline.length
+      aiMsg.timeline.push({
+        type: 'command',
+        name: data.name,
+        args: data.args || {},
+        status: 'running',
+        result: '',
+        start_time: Date.now(),
+      })
+    } else if (type === 'tool_output_line') {
+      // 工具执行输出行：实时追加
+      const toolItem = aiMsg.timeline[st.toolIdx]
+      if (toolItem && toolItem.type === 'command') {
+        toolItem.result += data.line + '\n'
+      }
+    } else if (type === 'tool_end') {
+      // 工具执行完成
+      const toolItem = aiMsg.timeline[st.toolIdx]
+      if (toolItem && toolItem.type === 'command') {
+        toolItem.status = data.is_error ? 'error' : 'done'
+        if (data.result) {
+          toolItem.result = data.result
+        }
+        toolItem.end_time = Date.now()
+      }
+      st.currentToolId = null
+    } else if (type === 'step_end') {
+      // 一步结束
+      if (st.thinkingIdx >= 0) {
+        const item = aiMsg.timeline[st.thinkingIdx]
+        if (item && item.type === 'thinking') {
+          item.end_time = Date.now()
+        }
+      }
+      st.thinkingIdx = -1
+    } else if (type === 'done') {
+      aiMsg.thinkingActive = false
+    } else if (type === 'error') {
+      aiMsg.thinkingActive = false
+    }
+
     saveSessions()
     scrollToBottom()
   }
@@ -1478,6 +1559,8 @@ async function sendAgent(s, text, images = []) {
       const unsub = wsManager.subscribe(task_id, (msg) => {
         if (msg.type === 'task_update') {
           applyTaskUpdate(msg.task)
+        } else if (msg.type === 'task_delta') {
+          applyDelta(msg.delta)
         } else if (msg.type === 'task_done') {
           applyTaskUpdate(msg.task)
           finalizeTask(msg.task)
@@ -1499,6 +1582,13 @@ async function sendAgent(s, text, images = []) {
           applyTaskUpdate(task)
         } catch { /* 忽略解析错误 */ }
       }
+      // 流式 delta：打字机效果 + 工具实时输出
+      es.addEventListener('delta', (e) => {
+        try {
+          const delta = JSON.parse(e.data)
+          applyDelta(delta)
+        } catch { /* 忽略解析错误 */ }
+      })
       es.addEventListener('done', (e) => {
         try {
           const task = JSON.parse(e.data)

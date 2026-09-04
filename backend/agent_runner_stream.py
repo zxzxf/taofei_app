@@ -318,11 +318,20 @@ def run_agent_task_streaming(
                     "args": func_args,
                 })
 
-                # 执行工具
+                # 执行工具（带流式输出回调）
+                def _tool_line_cb(stream_name, line_text):
+                    push_delta("tool_output_line", {
+                        "id": tc_id,
+                        "name": func_name,
+                        "stream": stream_name,
+                        "line": line_text,
+                    })
+
                 tool_result_str = execute_tool_fc(
                     func_name, workspace_path,
                     lambda msgs: None,  # 工具内不需要再调 llm（简化）
                     func_args, skills=skills,
+                    tool_line_cb=_tool_line_cb,
                 )
 
                 is_error = tool_result_str.startswith("Error:")
