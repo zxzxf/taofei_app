@@ -78,7 +78,6 @@ a = Analysis(
         "wf_engine.variable_pool",
         "langchain_community",
         "langchain_community.chat_models",
-        "sentence_transformers",
         "numpy",
         "PyPDF2",
         # ---- Hermes 风格重构新增包（函数内延迟导入，PyInstaller 静态分析扫不到）----
@@ -129,6 +128,12 @@ a = Analysis(
         "pyarrow",          # 数据列式存储（taofei_app 未用）
         "fitz",             # PyMuPDF 导入名（旧版别名）
         "pymupdf",          # PyMuPDF 1.24+ 实际导入名（PDF 解析 taofei_app 走 PyPDF2）
+        # ---- embedding 换 onnxruntime 后移除 torch 全家桶（见 backend/embedding.py）----
+        # embedding.py 是全仓库唯一引用点；onnxruntime+tokenizers 替代后不再需要。
+        # 向量质量余弦对齐实测 ~0.986，RAG 排序稳定性足够。
+        "sentence_transformers",
+        "torch",
+        "transformers",
     ],
     noarchive=False,
 )
