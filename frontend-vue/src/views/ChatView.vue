@@ -873,8 +873,48 @@ function renderMarkdown(text) {
   let html = String(text)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+  // 代码块：带语言标签 + 复制按钮 + diff 语法高亮
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => {
-    return `<pre><code${lang ? ` class="lang-${lang}"` : ''}>${code}</code></pre>`
+    const safeLang = (lang || '').toLowerCase()
+    const displayLang = safeLang ? safeLang.toUpperCase() : 'CODE'
+    let highlighted = code
+
+    // diff 语法高亮：+ 绿色 / - 红色 / @@ 灰色 / 头部信息灰色
+    if (safeLang === 'diff' || safeLang === 'patch' || safeLang === 'udiff') {
+      highlighted = highlighted.split('\n').map(line => {
+        // code 已经在 renderMarkdown 开头做过 HTML 转义，这里直接包 span
+        const raw = line
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          return `<span class="code-diff-add">${raw}</span>`
+        }
+        if (line.startsWith('-') && !line.startsWith('---')) {
+          return `<span class="code-diff-del">${raw}</span>`
+        }
+        if (line.startsWith('@@')) {
+          return `<span class="code-diff-hunk">${raw}</span>`
+        }
+        if (line.startsWith('diff --') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+          return `<span class="code-diff-head">${raw}</span>`
+        }
+        return raw
+      }).join('\n')
+    }
+
+    return (
+      `<div class="code-block" data-lang="${safeLang || 'text'}">` +
+        `<div class="code-block-header">` +
+          `<span class="code-lang-label">${displayLang}</span>` +
+          `<button class="code-copy-btn" onclick="(function(btn){` +
+            `var code = btn.closest('.code-block').querySelector('code').innerText;` +
+            `navigator.clipboard.writeText(code).then(function(){` +
+              `btn.textContent = '已复制'; btn.classList.add('copied');` +
+              `setTimeout(function(){ btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500);` +
+            `});` +
+          `})(this)">复制</button>` +
+        `</div>` +
+        `<pre><code${safeLang ? ` class="lang-${safeLang}"` : ''}>${highlighted}</code></pre>` +
+      `</div>`
+    )
   })
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
 
@@ -3466,6 +3506,98 @@ function onFilePick(node) {
 .chat-earlier-bar:hover {
   background: var(--card-hover, rgba(128,128,128,.06));
 }
+/* 8.3：代码块增强 —— 语言标签 + 复制按钮 + diff 高亮 */
+.code-block {
+  margin: 10px 0;
+  border: 1px solid var(--border, rgba(128,128,128,.2));
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--code-bg, #1e1e2e);
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--code-header-bg, rgba(255,255,255,.04));
+  border-bottom: 1px solid var(--border, rgba(128,128,128,.15));
+  font-size: 12px;
+}
+.code-lang-label {
+  font-weight: 600;
+  color: var(--code-lang-color, #8b5cf6);
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+.code-copy-btn {
+  background: transparent;
+  border: 1px solid var(--border, rgba(128,128,128,.25));
+  color: var(--text-muted, #9ca3af);
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.code-copy-btn:hover {
+  background: var(--accent, #8b5cf6);
+  border-color: var(--accent, #8b5cf6);
+  color: #fff;
+}
+.code-copy-btn.copied {
+  background: #10b981;
+  border-color: #10b981;
+  color: #fff;
+}
+.code-block pre {
+  margin: 0 !important;
+  max-height: none !important;
+  padding: 12px 14px !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+.code-block code {
+  font-family: 'SF Mono', 'Fira Code', Consolas, 'Microsoft YaHei', monospace;
+  color: var(--code-color, #e4e4e7);
+  background: transparent !important;
+  padding: 0 !important;
+  font-size: 13px;
+}
+
+/* diff 语法高亮 */
+.code-diff-add {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.08);
+  display: block;
+  margin: 0 -14px;
+  padding: 0 14px;
+}
+.code-diff-del {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.08);
+  display: block;
+  margin: 0 -14px;
+  padding: 0 14px;
+}
+.code-diff-hunk {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.06);
+  display: block;
+  margin: 0 -14px;
+  padding: 0 14px;
+  font-style: italic;
+}
+.code-diff-head {
+  color: #9ca3af;
+  font-weight: 600;
+}
+
 /* 8.3：长代码块/长输出限高滚动，避免 DOM 撑爆视口 */
 .chat-bubble pre,
 .chat-report-section-body pre {
