@@ -483,7 +483,13 @@
             @paste="handlePaste"
             @input="autoResize"
           ></textarea>
-          <button class="chat-send agent-active" @click="send">➤</button>
+          <button
+            v-if="currentSession && currentSession.sending"
+            class="chat-stop"
+            @click="stopAgent"
+            title="停止生成（Esc）"
+          >⏹</button>
+          <button v-else class="chat-send agent-active" @click="send" :disabled="!canSend">➤</button>
         </div>
         <input
           ref="imageInput"
@@ -661,6 +667,14 @@ const MAX_IMAGES = 4
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
 const currentMessages = computed(() => currentSession.value?.messages || [])
+
+// 发送按钮是否可用：有输入内容或图片，且不在发送中
+const canSend = computed(() => {
+  const hasText = inputText.value.trim().length > 0
+  const hasImages = pendingImages.value.length > 0
+  const isSending = currentSession.value?.sending
+  return (hasText || hasImages) && !isSending
+})
 
 // 8.2 渲染窗口：超长会话只渲染最近 N 条，防止 DOM 膨胀；可手动展开更早消息
 const RENDER_WINDOW = 150
@@ -1597,6 +1611,72 @@ async function send() {
   return sendAgent(s, text, pendingImages.value)
 }
 
+// F1：停止当前 Agent 任务
+function stopAgent() {
+  const s = currentSession.value
+  if (!s || !s.sending) return
+  // 找到当前 AI 消息（最后一条 pending 的 ai 消息）
+  const aiMsg = s.messages.slice().reverse().find(m => m.role === 'ai' && m.pending)
+  if (!aiMsg || !aiMsg._taskId) {
+    // 没有 taskId 就直接本地标记结束
+    s.sending = false
+    if (aiMsg) {
+      aiMsg.text = '⏹️ 已取消'
+      aiMsg.pending = false
+      aiMsg.thinkingActive = false
+    }
+    saveSessions()
+    return
+  }
+  const taskId = aiMsg._taskId
+
+  // 1) 优先通过 WebSocket 发取消消息
+  let cancelled = false
+  try {
+    if (wsManager.status === 'connected') {
+      wsManager.send({ type: 'cancel_task', task_id: taskId })
+      cancelled = true
+    }
+  } catch { /* WS 失败走 HTTP */ }
+
+  // 2) WS 不可用时走 HTTP cancel 接口
+  if (!cancelled) {
+    try {
+      fetch(`/api/agent/cancel/${taskId}`, { method: 'POST' }).catch(() => {})
+    } catch { /* 忽略 */ }
+  }
+
+  // 3) 关闭本地连接（SSE / WS 订阅）
+  try { aiMsg._wsUnsub?.() } catch {}
+  try { aiMsg._es?.close() } catch {}
+
+  // 4) 本地状态更新（后端可能来不及推送 cancelled，前端先更新）
+  s.sending = false
+  aiMsg.pending = false
+  aiMsg.thinkingActive = false
+  if (!aiMsg.text || aiMsg.text.startsWith('⏳')) {
+    aiMsg.text = '⏹️ 已取消'
+  }
+  // timeline 中 running 的工具标记为已取消
+  if (aiMsg.timeline) {
+    aiMsg.timeline.forEach(item => {
+      if (item.type === 'command' && item.status === 'running') {
+        item.status = 'cancelled'
+      }
+    })
+  }
+
+  saveSessions()
+}
+
+// Esc 快捷键停止当前任务
+function handleEscStop(e) {
+  if (e.key === 'Escape' && currentSession.value?.sending) {
+    e.preventDefault()
+    stopAgent()
+  }
+}
+
 // ===== 快捷指令：提交代码到 GitHub =====
 async function sendGitCommit(s, userText, commitMessage) {
   // 1) 推入用户消息
@@ -2218,6 +2298,7 @@ onMounted(async () => {
   document.addEventListener('click', onDocClickChat)
   document.addEventListener('click', onDocClickWorkspace)
   document.addEventListener('paste', handleGlobalPaste)
+  document.addEventListener('keydown', handleEscStop)
   await loadWorkspaceList()
   loadWorkspaceFiles()
   if (!sessions.value.length) {
@@ -2233,6 +2314,7 @@ onUnmounted(() => {
   document.removeEventListener('click', onDocClickChat)
   document.removeEventListener('click', onDocClickWorkspace)
   document.removeEventListener('paste', handleGlobalPaste)
+  document.removeEventListener('keydown', handleEscStop)
   // 清理所有仍在运行的任务订阅/SSE 连接
   for (const s of sessions.value) {
     for (const m of s.messages || []) {
@@ -3761,6 +3843,33 @@ function onFilePick(node) {
 /* ===== Agent 模式 ===== */
 .chat-send.agent-active {
   background: linear-gradient(135deg, #8b5cf6, #6d28d9) !important;
+}
+.chat-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.chat-stop {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .15s, box-shadow .15s;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, .3);
+}
+.chat-stop:hover {
+  transform: scale(1.05);
+  box-shadow: 0 3px 12px rgba(239, 68, 68, .45);
+}
+.chat-stop:active {
+  transform: scale(0.95);
 }
 
 .chat-agent-steps {
