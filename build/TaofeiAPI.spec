@@ -81,6 +81,24 @@ a = Analysis(
         "sentence_transformers",
         "numpy",
         "PyPDF2",
+        # ---- Hermes 风格重构新增包（函数内延迟导入，PyInstaller 静态分析扫不到）----
+        # session：会话管理 + 上下文压缩（main.py 内多处 from session.xxx import）
+        "session",
+        "session.manager",
+        "session.session",
+        "session.context_compressor",
+        # providers：OpenAI 兼容 SDK 直连层（main.py 内 from providers.openai_compat import）
+        "providers",
+        "providers.openai_compat",
+        # agent/delegator：子代理并行执行器（agent_tools.py 内 from agent.delegator import）
+        "agent",
+        "agent.delegator",
+        # tools：联网工具（agent_tools.py 内 from tools.xxx import）
+        "tools",
+        "tools.web_search",
+        "tools.web_extract",
+        # skills_lifecycle：技能创建/沉淀（main.py + agent_tools.py 内延迟导入）
+        "skills_lifecycle",
     ],
     hookspath=[],
     hooksconfig={},
