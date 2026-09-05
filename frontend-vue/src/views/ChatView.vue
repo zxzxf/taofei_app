@@ -207,6 +207,11 @@
                     <span v-if="rt.detail" class="chat-tool-badge-detail">{{ rt.detail }}</span>
                     <span class="chat-tool-badge-pulse"></span>
                   </span>
+                  <!-- F3：已探索文件数 -->
+                  <span v-if="getExploredFileCount(msg) > 0" class="chat-explored-badge" title="已探索的文件/目录/搜索数量">
+                    <span class="chat-explored-icon">📂</span>
+                    <span>Explored {{ getExploredFileCount(msg) }} {{ getExploredFileCount(msg) === 1 ? 'file' : 'files' }}</span>
+                  </span>
                 </div>
                 <span
                   class="chat-report-duration-toggle"
@@ -307,6 +312,11 @@
                     <span class="chat-tool-badge-label">{{ rt.label }}</span>
                     <span v-if="rt.detail" class="chat-tool-badge-detail">{{ rt.detail }}</span>
                     <span class="chat-tool-badge-pulse"></span>
+                  </span>
+                  <!-- F3：已探索文件数 -->
+                  <span v-if="getExploredFileCount(msg) > 0" class="chat-explored-badge" title="已探索的文件/目录/搜索数量">
+                    <span class="chat-explored-icon">📂</span>
+                    <span>Explored {{ getExploredFileCount(msg) }} {{ getExploredFileCount(msg) === 1 ? 'file' : 'files' }}</span>
                   </span>
                 </div>
               </div>
@@ -1008,6 +1018,30 @@ function getRunningTools(msg) {
     running.push({ name, label, icon, detail })
   }
   return running
+}
+
+// F3：统计已探索的文件数量（去重）
+// 统计 read_file / write_file / list_directory / grep_code 涉及的不同文件/目录数
+function getExploredFileCount(msg) {
+  if (!msg || !msg.timeline || !msg.timeline.length) return 0
+  const files = new Set()
+  for (const item of msg.timeline) {
+    if (item.type !== 'command') continue
+    const name = item.name || ''
+    const args = item.args || {}
+    if (name === 'read_file' || name === 'write_file') {
+      const p = args.path || ''
+      if (p) files.add(p)
+    } else if (name === 'list_directory') {
+      const p = args.path || ''
+      if (p) files.add('dir:' + p)
+    } else if (name === 'grep_code') {
+      const p = args.path || ''
+      const pattern = args.pattern || ''
+      if (pattern) files.add('grep:' + pattern + '@' + p)
+    }
+  }
+  return files.size
 }
 
 // 根据时间线索引项的 elapsed 计算任务总耗时（秒）
@@ -4309,6 +4343,26 @@ function onFilePick(node) {
   gap: 8px;
   flex-wrap: wrap;
   flex: 1;
+}
+
+/* F3：已探索文件计数器 */
+.chat-explored-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  font-size: 11px;
+  font-weight: 500;
+  color: #4ade80;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.chat-explored-icon {
+  font-size: 11px;
+  flex-shrink: 0;
 }
 .thinking-dots span {
   animation: thinkingBlink 1.4s infinite;
