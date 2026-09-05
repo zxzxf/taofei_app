@@ -368,6 +368,65 @@ ipcMain.handle('open-directory-picker', (_event, options = {}) =>
 );
 
 // ---------------------------------------------------------------
+// IPC：屏幕截图 + 区域裁剪
+//   capture-screen：获取主显示器截图（全屏），返回 { dataUrl, width, height }
+//   crop-image：裁剪图片，返回 { dataUrl }
+// ---------------------------------------------------------------
+const { desktopCapturer } = require('electron');
+
+ipcMain.handle('capture-screen', async () => {
+  try {
+    // 先最小化主窗口，避免截到自己
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.minimize();
+      await new Promise(r => setTimeout(r, 300)); // 等最小化动画
+    }
+
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1920, height: 1080 },
+    });
+
+    // 恢复窗口
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.restore();
+      mainWindow.focus();
+    }
+
+    if (!sources || !sources.length) {
+      return { error: '未找到可用的屏幕' };
+    }
+
+    const primary = sources[0];
+    const thumb = primary.thumbnail;
+    const dataUrl = thumb.toDataURL();
+    return {
+      dataUrl,
+      width: thumb.getSize().width,
+      height: thumb.getSize().height,
+      displayName: primary.display_id,
+    };
+  } catch (err) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.restore();
+    }
+    return { error: String(err.message || err) };
+  }
+});
+
+ipcMain.handle('crop-image', async (_event, { dataUrl, x, y, width, height }) => {
+  try {
+    const { nativeImage } = require('electron');
+    const img = nativeImage.createFromDataURL(dataUrl);
+    const cropped = img.crop({ x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) });
+    const resultDataUrl = cropped.toDataURL();
+    return { dataUrl: resultDataUrl };
+  } catch (err) {
+    return { error: String(err.message || err) };
+  }
+});
+
+// ---------------------------------------------------------------
 // 自动化测试钩子：设置 TAOFEI_TEST_PICKER=1 启动 electron 时，
 // 主窗口加载完成后会主动触发一次「选择文件夹」对话框，并把结果写入
 // %TEMP%\\taofei_picker_result.json，用于脚本侧验证。

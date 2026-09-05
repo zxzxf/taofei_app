@@ -24,4 +24,26 @@ contextBridge.exposeInMainWorld('desktop', {
   openDirectoryPicker(options = {}) {
     return ipcRenderer.invoke('open-directory-picker', options);
   },
+  /**
+   * 截取整个屏幕（主显示器）。
+   *
+   * @returns {Promise<{dataUrl: string, width: number, height: number, error?: string}>}
+   */
+  captureScreen() {
+    return ipcRenderer.invoke('capture-screen');
+  },
+  /**
+   * 裁剪图片（用于裁剪截图选区）。
+   *
+   * @param {Object} opts
+   * @param {string} opts.dataUrl - 原始图片 data URL
+   * @param {number} opts.x - 裁剪起点 x（原图坐标）
+   * @param {number} opts.y - 裁剪起点 y（原图坐标）
+   * @param {number} opts.width - 裁剪宽度
+   * @param {number} opts.height - 裁剪高度
+   * @returns {Promise<{dataUrl: string, error?: string}>}
+   */
+  cropImage(opts) {
+    return ipcRenderer.invoke('crop-image', opts);
+  },
 });

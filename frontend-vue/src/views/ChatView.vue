@@ -602,6 +602,14 @@
               </div>
             </div>
           </div>
+          <!-- F7：截图按钮（仅桌面端显示） -->
+          <button
+            v-if="isDesktopApp"
+            class="chat-screenshot-btn"
+            @click="startScreenshot"
+            :disabled="currentSession?.sending"
+            title="截图 (Ctrl+Shift+S)"
+          >📷</button>
           <textarea
             ref="inputEl"
             v-model="inputText"
@@ -630,6 +638,25 @@
       </div>
     </div>
 
+    <!-- F7：截图裁剪覆盖层 -->
+    <div v-if="screenshotOverlayOpen" class="screenshot-overlay" @mousedown="onScreenshotMouseDown" @mousemove="onScreenshotMouseMove" @mouseup="onScreenshotMouseUp">
+      <img v-if="screenshotImage" :src="screenshotImage" class="screenshot-full-image" alt="截图" />
+      <!-- 暗化遮罩（选区外部分） -->
+      <div class="screenshot-mask" :style="screenshotMaskStyle"></div>
+      <!-- 选区框 -->
+      <div v-if="screenshotHasSelection" class="screenshot-selection" :style="screenshotSelectionStyle">
+        <div class="screenshot-selection-border"></div>
+        <div class="screenshot-selection-size">{{ screenshotSelectionWidth }} × {{ screenshotSelectionHeight }}</div>
+      </div>
+      <!-- 操作栏 -->
+      <div v-if="screenshotHasSelection" class="screenshot-toolbar" :style="screenshotToolbarStyle">
+        <button class="screenshot-tool-btn" @click="sendScreenshot" title="发送">✓ 发送</button>
+        <button class="screenshot-tool-btn" @click="resetScreenshotSelection" title="重选">↻ 重选</button>
+        <button class="screenshot-tool-btn screenshot-tool-cancel" @click="closeScreenshot" title="取消">✕ 取消</button>
+      </div>
+      <!-- 提示文字 -->
+      <div v-if="!screenshotHasSelection" class="screenshot-tip">拖拽选择区域 · 按 Esc 取消</div>
+    </div>
     <div class="chat-resizer chat-resizer-right" :class="{ active: filesResizing }" @mousedown="startFilesResize"></div>
 
     <div class="chat-files" :class="{ collapsed: filesCollapsed }" :style="filesCollapsed ? {} : { width: filesWidth + 'px', flexShrink: 0 }">
@@ -792,6 +819,202 @@ const pendingImages = ref([])
 const knowledgeBases = ref([])
 const selectedKnowledgeIds = ref([])
 const MAX_IMAGES = 4
+
+// 是否为桌面端（Electron 环境）
+const isDesktopApp = computed(() => typeof window !== 'undefined' && window.desktop && window.desktop.isDesktop)
+
+// F7：截图相关状态
+const screenshotOverlayOpen = ref(false)
+const screenshotImage = ref('')
+const screenshotImgWidth = ref(0)
+const screenshotImgHeight = ref(0)
+const screenshotStartX = ref(0)
+const screenshotStartY = ref(0)
+const screenshotEndX = ref(0)
+const screenshotEndY = ref(0)
+const screenshotDragging = ref(false)
+const screenshotHasSelection = ref(false)
+
+const screenshotSelectionStyle = computed(() => {
+  const left = Math.min(screenshotStartX.value, screenshotEndX.value)
+  const top = Math.min(screenshotStartY.value, screenshotEndY.value)
+  const width = Math.abs(screenshotEndX.value - screenshotStartX.value)
+  const height = Math.abs(screenshotEndY.value - screenshotStartY.value)
+  return {
+    left: left + 'px',
+    top: top + 'px',
+    width: width + 'px',
+    height: height + 'px',
+  }
+})
+
+const screenshotMaskStyle = computed(() => {
+  const left = Math.min(screenshotStartX.value, screenshotEndX.value)
+  const top = Math.min(screenshotStartY.value, screenshotEndY.value)
+  const width = Math.abs(screenshotEndX.value - screenshotStartX.value)
+  const height = Math.abs(screenshotEndY.value - screenshotStartY.value)
+  if (!screenshotHasSelection.value) {
+    return { boxShadow: 'inset 0 0 0 9999px rgba(0,0,0,0.6)' }
+  }
+  return {
+    boxShadow: 'inset 0 0 0 9999px rgba(0,0,0,0.6)',
+    clipPath: `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${left}px ${top}px, ${left}px ${top + height}px, ${left + width}px ${top + height}px, ${left + width}px ${top}px, ${left}px ${top}px)`,
+  }
+})
+
+const screenshotToolbarStyle = computed(() => {
+  const left = Math.min(screenshotStartX.value, screenshotEndX.value)
+  const top = Math.min(screenshotStartY.value, screenshotEndY.value)
+  const height = Math.abs(screenshotEndY.value - screenshotStartY.value)
+  return {
+    left: left + 'px',
+    top: (top + height + 8) + 'px',
+  }
+})
+
+const screenshotSelectionWidth = computed(() => {
+  // 按比例换算成原图尺寸
+  const ratio = screenshotImgWidth.value / (document.querySelector('.screenshot-overlay')?.clientWidth || 1)
+  return Math.round(Math.abs(screenshotEndX.value - screenshotStartX.value) * ratio)
+})
+
+const screenshotSelectionHeight = computed(() => {
+  const ratio = screenshotImgHeight.value / (document.querySelector('.screenshot-overlay')?.clientHeight || 1)
+  return Math.round(Math.abs(screenshotEndY.value - screenshotStartY.value) * ratio)
+})
+
+async function startScreenshot() {
+  if (!isDesktopApp.value) {
+    alert('截图功能仅在桌面端可用')
+    return
+  }
+  try {
+    const result = await window.desktop.captureScreen()
+    if (result.error) {
+      alert('截图失败：' + result.error)
+      return
+    }
+    screenshotImage.value = result.dataUrl
+    screenshotImgWidth.value = result.width
+    screenshotImgHeight.value = result.height
+    screenshotOverlayOpen.value = true
+    screenshotHasSelection.value = false
+    screenshotStartX.value = 0
+    screenshotStartY.value = 0
+    screenshotEndX.value = 0
+    screenshotEndY.value = 0
+  } catch (e) {
+    alert('截图失败：' + e.message)
+  }
+}
+
+function onScreenshotMouseDown(e) {
+  if (e.button !== 0) return
+  screenshotDragging.value = true
+  screenshotHasSelection.value = false
+  const rect = e.currentTarget.getBoundingClientRect()
+  screenshotStartX.value = e.clientX - rect.left
+  screenshotStartY.value = e.clientY - rect.top
+  screenshotEndX.value = screenshotStartX.value
+  screenshotEndY.value = screenshotStartY.value
+}
+
+function onScreenshotMouseMove(e) {
+  if (!screenshotDragging.value) return
+  const rect = e.currentTarget.getBoundingClientRect()
+  screenshotEndX.value = e.clientX - rect.left
+  screenshotEndY.value = e.clientY - rect.top
+  const w = Math.abs(screenshotEndX.value - screenshotStartX.value)
+  const h = Math.abs(screenshotEndY.value - screenshotStartY.value)
+  if (w > 5 && h > 5) {
+    screenshotHasSelection.value = true
+  }
+}
+
+function onScreenshotMouseUp() {
+  screenshotDragging.value = false
+}
+
+function resetScreenshotSelection() {
+  screenshotHasSelection.value = false
+  screenshotStartX.value = 0
+  screenshotStartY.value = 0
+  screenshotEndX.value = 0
+  screenshotEndY.value = 0
+}
+
+function closeScreenshot() {
+  screenshotOverlayOpen.value = false
+  screenshotImage.value = ''
+  resetScreenshotSelection()
+}
+
+async function sendScreenshot() {
+  if (!screenshotHasSelection.value) return
+
+  // 计算原图坐标下的裁剪区域
+  const overlayEl = document.querySelector('.screenshot-overlay')
+  if (!overlayEl) return
+  const overlayW = overlayEl.clientWidth
+  const overlayH = overlayEl.clientHeight
+  const scaleX = screenshotImgWidth.value / overlayW
+  const scaleY = screenshotImgHeight.value / overlayH
+
+  const x = Math.min(screenshotStartX.value, screenshotEndX.value) * scaleX
+  const y = Math.min(screenshotStartY.value, screenshotEndY.value) * scaleY
+  const width = Math.abs(screenshotEndX.value - screenshotStartX.value) * scaleX
+  const height = Math.abs(screenshotEndY.value - screenshotStartY.value) * scaleY
+
+  if (width < 10 || height < 10) {
+    alert('选区太小')
+    return
+  }
+
+  try {
+    const result = await window.desktop.cropImage({
+      dataUrl: screenshotImage.value,
+      x, y, width, height,
+    })
+    if (result.error) {
+      alert('裁剪失败：' + result.error)
+      return
+    }
+
+    // 将 dataUrl 转换为 File 对象，加入 pendingImages
+    const base64Data = result.dataUrl.split(',')[1]
+    const byteString = atob(base64Data)
+    const ab = new ArrayBuffer(byteString.length)
+    const ia = new Uint8Array(ab)
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i)
+    }
+    const blob = new Blob([ab], { type: 'image/png' })
+    const file = new File([blob], `screenshot_${Date.now()}.png`, { type: 'image/png' })
+
+    if (pendingImages.value.length >= MAX_IMAGES) {
+      pendingImages.value.shift()
+    }
+    pendingImages.value.push(file)
+
+    closeScreenshot()
+    // 自动发送？不，让用户确认发送，先添加到图片预览
+    nextTick(() => {
+      inputEl.value?.focus()
+    })
+  } catch (e) {
+    alert('裁剪失败：' + e.message)
+  }
+}
+
+// Ctrl+Shift+S 截图快捷键
+function handleScreenshotShortcut(e) {
+  if (e.ctrlKey && e.shiftKey && e.key === 'S') {
+    e.preventDefault()
+    if (isDesktopApp.value && !currentSession.value?.sending) {
+      startScreenshot()
+    }
+  }
+}
 
 // F4：顶部命令输入框
 const cmdBoxOpen = ref(false)
@@ -2105,11 +2328,19 @@ function stopAgent() {
   saveSessions()
 }
 
-// Esc 快捷键停止当前任务
+// Esc 快捷键停止当前任务 / 关闭截图层
 function handleEscStop(e) {
-  if (e.key === 'Escape' && currentSession.value?.sending) {
-    e.preventDefault()
-    stopAgent()
+  if (e.key === 'Escape') {
+    // 优先关闭截图层
+    if (screenshotOverlayOpen.value) {
+      e.preventDefault()
+      closeScreenshot()
+      return
+    }
+    if (currentSession.value?.sending) {
+      e.preventDefault()
+      stopAgent()
+    }
   }
 }
 
@@ -2745,6 +2976,7 @@ onMounted(async () => {
   document.addEventListener('keydown', handleEscStop)
   document.addEventListener('keydown', handleCmdK)
   document.addEventListener('keydown', handleEraserShortcut)
+  document.addEventListener('keydown', handleScreenshotShortcut)
   await loadWorkspaceList()
   loadWorkspaceFiles()
   if (!sessions.value.length) {
@@ -2763,6 +2995,7 @@ onUnmounted(() => {
   document.removeEventListener('keydown', handleEscStop)
   document.removeEventListener('keydown', handleCmdK)
   document.removeEventListener('keydown', handleEraserShortcut)
+  document.removeEventListener('keydown', handleScreenshotShortcut)
   // 清理所有仍在运行的任务订阅/SSE 连接
   for (const s of sessions.value) {
     for (const m of s.messages || []) {
@@ -4139,6 +4372,121 @@ function onFilePick(node) {
   height: 1px;
   background: var(--border);
   margin: 4px 0;
+}
+
+/* F7：截图裁剪覆盖层 */
+.screenshot-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 9999;
+  background: #000;
+  cursor: crosshair;
+  user-select: none;
+  overflow: hidden;
+}
+.screenshot-full-image {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.screenshot-mask {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+}
+.screenshot-selection {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
+}
+.screenshot-selection-border {
+  position: absolute;
+  inset: 0;
+  border: 1px dashed rgba(255,255,255,0.7);
+  animation: screenshot-dash 1s linear infinite;
+}
+@keyframes screenshot-dash {
+  to { stroke-dashoffset: -20; }
+}
+.screenshot-selection-size {
+  position: absolute;
+  bottom: -28px;
+  left: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #fff;
+  background: rgba(139, 92, 246, 0.9);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.screenshot-toolbar {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  z-index: 10000;
+}
+.screenshot-tool-btn {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--bg-tertiary);
+  color: var(--text);
+  transition: all .15s;
+}
+.screenshot-tool-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.screenshot-tool-cancel:hover {
+  background: #ef4444;
+  color: #fff;
+}
+.screenshot-tip {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 14px;
+  color: #fff;
+  background: rgba(0,0,0,0.6);
+  padding: 8px 20px;
+  border-radius: 20px;
+  pointer-events: none;
+}
+
+/* F7：截图按钮 */
+.chat-screenshot-btn {
+  flex-shrink: 0;
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.chat-screenshot-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.08);
+}
+.chat-screenshot-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .chat-input-images {
   display: flex;
