@@ -3942,6 +3942,16 @@ def delete_memory(memory_id: str):
     return {"ok": True}
 
 
+@app.post("/api/memory/clear_workspace")
+def clear_workspace_memory(workspace_id: str = Query("")):
+    """清除指定工作空间的全部记忆。"""
+    import memory
+    if not workspace_id:
+        return JSONResponse({"error": "workspace_id 不能为空"}, status_code=400)
+    count = memory.clear_workspace_memories(workspace_id)
+    return {"ok": True, "cleared": count}
+
+
 @app.get("/api/git/status")
 def git_status(workspace_id: str | None = Query(None)):
     """查询当前 Git 工作区是否有可提交的变更。"""

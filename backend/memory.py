@@ -87,6 +87,16 @@ def delete_memory(memory_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def clear_workspace_memories(workspace_id: str) -> int:
+    """清除指定工作空间的全部记忆，返回删除条数。"""
+    if not workspace_id:
+        return 0
+    with db._get_conn() as conn:
+        cur = conn.execute("DELETE FROM memory_entries WHERE workspace_id=?", (workspace_id,))
+        conn.commit()
+    return cur.rowcount or 0
+
+
 def save_memory(llm_call, workspace_id: str, user_request: str, final_answer: str, kind: str = "episodic") -> bool:
     """任务完成后调用：LLM 摘要 → 向量化 → 入库。失败返回 False，不抛出。
 

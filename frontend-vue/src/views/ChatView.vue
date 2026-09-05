@@ -568,6 +568,40 @@
         </div>
         <div class="chat-input-row">
           <button class="chat-upload" @click="triggerImageUpload" title="上传图片">＋</button>
+          <!-- F5：橡皮擦按钮（清除菜单） -->
+          <div class="chat-eraser-wrap" v-click-outside="eraserMenuOpen = false">
+            <button
+              class="chat-eraser-btn"
+              @click.stop="toggleEraserMenu"
+              title="清除 (Alt+X)"
+              :class="{ active: eraserMenuOpen }"
+            >🧽</button>
+            <div v-if="eraserMenuOpen" class="chat-eraser-menu">
+              <div class="chat-eraser-item" @click="clearInputText">
+                <span class="chat-eraser-icon">✏️</span>
+                <div class="chat-eraser-body">
+                  <div class="chat-eraser-title">清除输入</div>
+                  <div class="chat-eraser-desc">清空输入框中的文字和图片</div>
+                </div>
+                <span class="chat-eraser-shortcut">Esc</span>
+              </div>
+              <div class="chat-eraser-divider"></div>
+              <div class="chat-eraser-item" @click="clearCurrentFromEraser">
+                <span class="chat-eraser-icon">💬</span>
+                <div class="chat-eraser-body">
+                  <div class="chat-eraser-title">清除会话消息</div>
+                  <div class="chat-eraser-desc">清空当前会话的所有对话记录</div>
+                </div>
+              </div>
+              <div class="chat-eraser-item" @click="clearWorkspaceMemory">
+                <span class="chat-eraser-icon">🧠</span>
+                <div class="chat-eraser-body">
+                  <div class="chat-eraser-title">清除工作空间记忆</div>
+                  <div class="chat-eraser-desc">删除当前工作空间的所有记忆条目</div>
+                </div>
+              </div>
+            </div>
+          </div>
           <textarea
             ref="inputEl"
             v-model="inputText"
@@ -938,6 +972,55 @@ function jumpToSearchHit(hit) {
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
 const currentMessages = computed(() => currentSession.value?.messages || [])
+
+// F5：橡皮擦菜单
+const eraserMenuOpen = ref(false)
+
+function toggleEraserMenu() {
+  eraserMenuOpen.value = !eraserMenuOpen.value
+}
+
+function clearInputText() {
+  inputText.value = ''
+  pendingImages.value = []
+  eraserMenuOpen.value = false
+  inputEl.value?.focus()
+  // 重置 textarea 高度
+  nextTick(() => autoResize())
+}
+
+function clearCurrentFromEraser() {
+  eraserMenuOpen.value = false
+  clearCurrent()
+}
+
+async function clearWorkspaceMemory() {
+  eraserMenuOpen.value = false
+  if (!(await appConfirm('确定清除当前工作空间的所有记忆吗？此操作不可撤销。'))) return
+  try {
+    const ws = currentWorkspace.value
+    if (!ws) return
+    const res = await fetch(`/api/memory/clear_workspace?workspace_id=${encodeURIComponent(ws.id)}`, {
+      method: 'POST',
+    })
+    if (res.ok) {
+      appAlert('工作空间记忆已清除', '成功')
+    } else {
+      const data = await res.json().catch(() => ({}))
+      appAlert(data.detail || '清除失败', '错误')
+    }
+  } catch (e) {
+    appAlert('网络错误', '错误')
+  }
+}
+
+// Alt+X 快捷键打开橡皮擦菜单
+function handleEraserShortcut(e) {
+  if (e.altKey && e.key === 'x') {
+    e.preventDefault()
+    toggleEraserMenu()
+  }
+}
 
 // 发送按钮是否可用：有输入内容或图片，且不在发送中
 const canSend = computed(() => {
@@ -2661,6 +2744,7 @@ onMounted(async () => {
   document.addEventListener('paste', handleGlobalPaste)
   document.addEventListener('keydown', handleEscStop)
   document.addEventListener('keydown', handleCmdK)
+  document.addEventListener('keydown', handleEraserShortcut)
   await loadWorkspaceList()
   loadWorkspaceFiles()
   if (!sessions.value.length) {
@@ -2678,6 +2762,7 @@ onUnmounted(() => {
   document.removeEventListener('paste', handleGlobalPaste)
   document.removeEventListener('keydown', handleEscStop)
   document.removeEventListener('keydown', handleCmdK)
+  document.removeEventListener('keydown', handleEraserShortcut)
   // 清理所有仍在运行的任务订阅/SSE 连接
   for (const s of sessions.value) {
     for (const m of s.messages || []) {
@@ -3973,6 +4058,87 @@ function onFilePick(node) {
   color: var(--primary);
   border-color: var(--primary);
   background: rgba(59, 130, 246, 0.08);
+}
+
+/* F5：橡皮擦按钮 */
+.chat-eraser-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.chat-eraser-btn {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.chat-eraser-btn:hover,
+.chat-eraser-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.08);
+}
+.chat-eraser-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 260px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.1);
+  padding: 4px;
+  z-index: 200;
+}
+.chat-eraser-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .1s;
+}
+.chat-eraser-item:hover {
+  background: rgba(139, 92, 246, 0.1);
+}
+.chat-eraser-icon {
+  font-size: 16px;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.chat-eraser-body {
+  flex: 1;
+  min-width: 0;
+}
+.chat-eraser-title {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+}
+.chat-eraser-desc {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.chat-eraser-shortcut {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.chat-eraser-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
 }
 .chat-input-images {
   display: flex;
