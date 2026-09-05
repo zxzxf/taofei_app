@@ -25,6 +25,13 @@
             <div class="chat-search-hit-snippet">{{ hit.snippet }}</div>
           </div>
         </div>
+        <div v-if="sessionsLoading" class="chat-session-skeleton-list">
+          <div v-for="i in 5" :key="i" class="chat-session-skeleton">
+            <div class="chat-skeleton-line title"></div>
+            <div class="chat-skeleton-line meta"></div>
+          </div>
+        </div>
+        <template v-else>
         <div
           v-for="s in pinnedSessions"
           :key="s.id"
@@ -121,6 +128,7 @@
         <div v-if="!filteredSessions.length && !searchHits.length" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
           暂无会话
         </div>
+        </template>
       </div>
     </div>
     <div v-if="!sidebarCollapsed" class="chat-resizer" :class="{ active: resizing }" @mousedown="startResize"></div>
@@ -868,6 +876,7 @@ import { appConfirm, appAlert, appPrompt } from '../utils/appDialog.js'
 
 const sessions = ref([])
 const currentId = ref(null)
+const sessionsLoading = ref(true) // 初始加载中状态
 const inputText = ref('')
 const inputEl = ref(null)
 const searchTerm = ref('')
@@ -3073,24 +3082,29 @@ function presetNameById(id) {
 }
 
 function loadSessions() {
-  try {
-    const saved = localStorage.getItem('chatSessions')
-    if (saved) {
-      sessions.value = JSON.parse(saved)
-      // 页面刚加载时不可能有任务在发送；重置残留的 sending/pending 状态，
-      // 否则上次关闭前卡住的会话会一直"发送中"，输入框按回车没反应
-      for (const s of sessions.value) {
-        if (s.sending) s.sending = false
-        for (const m of (s.messages || [])) {
-          if (m.pending) {
-            m.pending = false
-            if (!m.text) m.text = '（上次任务被中断）'
+  // 加载前先显示骨架屏（至少 200ms，避免闪烁）
+  sessionsLoading.value = true
+  setTimeout(() => {
+    try {
+      const saved = localStorage.getItem('chatSessions')
+      if (saved) {
+        sessions.value = JSON.parse(saved)
+        // 页面刚加载时不可能有任务在发送；重置残留的 sending/pending 状态，
+        // 否则上次关闭前卡住的会话会一直"发送中"，输入框按回车没反应
+        for (const s of sessions.value) {
+          if (s.sending) s.sending = false
+          for (const m of (s.messages || [])) {
+            if (m.pending) {
+              m.pending = false
+              if (!m.text) m.text = '（上次任务被中断）'
+            }
           }
         }
+        currentId.value = sessions.value[0]?.id || null
       }
-      currentId.value = sessions.value[0]?.id || null
-    }
-  } catch (e) { console.error('加载会话失败', e) }
+    } catch (e) { console.error('加载会话失败', e) }
+    sessionsLoading.value = false
+  }, 200)
 }
 
 function onWorkspaceChanged(evt) {
