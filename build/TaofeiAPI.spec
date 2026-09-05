@@ -93,8 +93,9 @@ a = Analysis(
         # agent/delegator：子代理并行执行器（agent_tools.py 内 from agent.delegator import）
         "agent",
         "agent.delegator",
-        # tools：联网工具（agent_tools.py 内 from tools.xxx import）
+        # tools：联网工具 + 注册中心（agent_tools.py 内 from tools.xxx import）
         "tools",
+        "tools.registry",
         "tools.web_search",
         "tools.web_extract",
         # skills_lifecycle：技能创建/沉淀（main.py + agent_tools.py 内延迟导入）

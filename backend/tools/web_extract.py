@@ -221,3 +221,54 @@ def extract_web(url: str, max_chars: int = 8000) -> str:
         truncated = len(text) - max_chars
         text = f"{text[:max_chars]}\n...(已截断 {truncated} 字符)"
     return text
+
+
+# ---------------------------------------------------------------
+# 注册到工具中心
+# ---------------------------------------------------------------
+def _check_extract() -> bool:
+    """web_extract 始终可用（内部有降级路径：html2text 失败用正则提取）。"""
+    return True
+
+
+def _web_extract_handler(_workspace, args, **_kwargs):
+    """web_extract 工具的 registry 适配层。"""
+    url = str(args.get("url", "")).strip()
+    try:
+        mc = max(1000, min(int(args.get("max_chars", 8000) or 8000), 50000))
+    except Exception:
+        mc = 8000
+    text = extract_web(url, max_chars=mc)
+    if text.startswith("Error:"):
+        return {"observation": "", "error": text}
+    return {"observation": text, "error": ""}
+
+
+try:
+    from .registry import registry
+
+    registry.register(
+        name="web_extract",
+        description=(
+            "抓取指定网页 URL 的内容并转为纯文本（自动剥离导航/脚本/样式）。"
+            "适合读取文章正文、API 文档、新闻等。配合 web_search 使用："
+            "先搜索找到 URL，再抓取阅读。超过 max_chars 自动截断。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "要抓取的网页 URL"},
+                "max_chars": {
+                    "type": "integer",
+                    "description": "最大字符数（默认 8000，最大 50000）",
+                    "default": 8000,
+                },
+            },
+            "required": ["url"],
+        },
+        handler=_web_extract_handler,
+        tags=["default", "research"],
+        check_fn=_check_extract,
+    )
+except Exception:
+    pass

@@ -989,7 +989,51 @@ def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list
             if str(sk.get("id", "")) == sid:
                 return call_skill(sk, args)
         return {"observation": "", "error": f"技能不存在：{sid}"}
+
+    # 阶段 5：工具注册中心兜底——如果工具在 registry 中注册了，走 registry dispatch
+    try:
+        from tools.registry import registry
+        if registry.has_tool(name):
+            return registry.dispatch(name, workspace_path, args, llm_call=llm_call, tool_line_cb=tool_line_cb)
+    except Exception:
+        pass  # registry 不可用时跳过，不影响原有逻辑
+
     return {"observation": "", "error": f"未知工具：{name}"}
+
+
+# ------------------------------------------------------------------
+# 阶段 5：工具注册中心兼容层
+# ------------------------------------------------------------------
+def get_all_tools() -> list[dict]:
+    """返回全部可用工具（硬编码 TOOLS + registry 注册的工具，合并去重）。
+
+    同名工具以 registry 版本为准（鼓励迁移到自注册模式）。
+    """
+    try:
+        from tools.registry import registry
+        reg_tools = registry.get_tools("all")
+        reg_names = {t["name"] for t in reg_tools}
+        base = [t for t in TOOLS if t["name"] not in reg_names]
+        return base + reg_tools
+    except Exception:
+        return list(TOOLS)
+
+
+def get_tools_by_tag(tag: str = "default") -> list[dict]:
+    """按 tag/toolset 返回工具。
+
+    - ``"default"``：默认工具集
+    - ``"research"``：联网调研工具集
+    - ``"all"``：全部工具
+    """
+    try:
+        from tools.registry import registry
+        return registry.get_tools(tag)
+    except Exception:
+        # registry 不可用时降级：default/all 都返回 TOOLS
+        if tag in ("all", "default"):
+            return list(TOOLS)
+        return []
 
 
 # ------------------------------------------------------------------

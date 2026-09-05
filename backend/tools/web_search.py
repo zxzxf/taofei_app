@@ -243,3 +243,59 @@ def search_web(query: str, max_results: int = 5) -> str:
         last_err = f"Bing: {type(e).__name__}: {e}"
 
     return f"Error: 搜索失败 —— {last_err}"
+
+
+# ---------------------------------------------------------------
+# 注册到工具中心
+# ---------------------------------------------------------------
+def _check_httpx() -> bool:
+    """检查 httpx 是否可用（缺依赖时隐藏工具）。"""
+    try:
+        import httpx  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _web_search_handler(_workspace, args, **_kwargs):
+    """web_search 工具的 registry 适配层。"""
+    query = str(args.get("query", "")).strip()
+    try:
+        n = max(1, min(int(args.get("max_results", 5) or 5), 10))
+    except Exception:
+        n = 5
+    text = search_web(query, max_results=n)
+    if text.startswith("Error:"):
+        return {"observation": "", "error": text}
+    return {"observation": text, "error": ""}
+
+
+try:
+    from .registry import registry
+
+    registry.register(
+        name="web_search",
+        description=(
+            "联网搜索互联网信息（DuckDuckGo+Bing 双兜底，无需 API key）。"
+            "返回最多 max_results 条结果的标题/URL/摘要文本。"
+            "适合查询最新资讯、文档、事实、代码示例等需要外部信息的问题。"
+            "搜索失败会返回 Error 文本，可换关键词重试。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词"},
+                "max_results": {
+                    "type": "integer",
+                    "description": "最多返回的结果条数（默认 5，最大 10）",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+        handler=_web_search_handler,
+        tags=["default", "research"],
+        check_fn=_check_httpx,
+    )
+except Exception:
+    pass  # registry 不可用时跳过注册（不影响原始函数使用）
