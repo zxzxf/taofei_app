@@ -127,12 +127,15 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# 目录构建（onedir）：替代原单文件(onefile)方案。
+# 单文件 exe 每次启动需把 ~997MB 自解压到 %TEMP%\_MEIxxxx（实测占启动耗时
+# 13~15s / 共 20~27s）；目录构建免解压，启动直接进入 Python 引导，
+# 冷启动可从 ~20s+ 降到 ~8s 以内。
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name=NAME,
     debug=False,
     bootloader_ignore_signals=False,
@@ -146,4 +149,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name=NAME,
 )

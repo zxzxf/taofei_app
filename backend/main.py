@@ -51,6 +51,10 @@ else:
     EXE_DIR = BASE_DIR
 
 load_dotenv(EXE_DIR / ".env")  # 先读 exe 同目录 .env
+# 目录构建(onedir)下 exe 位于 resources/backend/TaofeiAPI/，
+# electron-builder 把 .env 放在父级 resources/backend/.env，兜底读取
+if not os.getenv("DEEPSEEK_API_KEY") and PACKAGED:
+    load_dotenv(EXE_DIR.parent / ".env")
 if not os.getenv("DEEPSEEK_API_KEY") and not PACKAGED:
     load_dotenv(BASE_DIR / ".env")  # 开发模式兜底再读项目根 .env
 

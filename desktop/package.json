@@ -34,8 +34,8 @@
     ],
     "extraResources": [
       {
-        "from": "../dist/TaofeiAPI.exe",
-        "to": "backend/TaofeiAPI.exe"
+        "from": "../dist/TaofeiAPI",
+        "to": "backend/TaofeiAPI"
       },
       {
         "from": "../.env",

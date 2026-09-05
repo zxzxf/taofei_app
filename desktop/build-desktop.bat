@@ -10,14 +10,14 @@ REM    build-desktop.bat /e    = Electron installer only
 REM    build-desktop.bat /u    = Update D:\TaofeiAI only
 REM
 REM  Output:
-REM    dist\TaofeiAPI.exe                        = PyInstaller backend (onefile, includes frontend)
+REM    dist\TaofeiAPI\TaofeiAPI.exe              = PyInstaller backend (onedir dir, includes frontend)
 REM    desktop\release_v4\TaofeiAI Setup 1.2.1.exe = NSIS installer (final release)
 REM    desktop\release_v4\win-unpacked\            = Portable version
 REM
 REM  Prerequisites: .venv created + Node.js installed
 REM  Steps:
 REM    [0/4] frontend-vue npm install + npm run build -> output to project root\frontend\
-REM    [1/4] PyInstaller collects frontend\ + backend\ -> dist\TaofeiAPI.exe (onefile)
+REM    [1/4] PyInstaller collects frontend\ + backend\ -> dist\TaofeiAPI\ (onedir, no self-extract on launch)
 REM    [2/4] electron-builder combines Electron + extraResources -> release_v4\
 REM    [3/4] (optional) copy win-unpacked to D:\TaofeiAI
 REM ============================================
@@ -43,7 +43,7 @@ cd /d "%~dp0.."
 set "PROJECT_ROOT=%cd%"
 set "DESKTOP_DIR=%PROJECT_ROOT%\desktop"
 set "DIST_DIR=%PROJECT_ROOT%\dist"
-set "BACKEND_EXE=%DIST_DIR%\TaofeiAPI.exe"
+set "BACKEND_EXE=%DIST_DIR%\TaofeiAPI\TaofeiAPI.exe"
 
 echo.
 echo ========================================
@@ -134,7 +134,7 @@ if errorlevel 1 (
     if errorlevel 1 ( echo [ERROR] PyInstaller install failed & pause & exit /b 1 )
 )
 
-echo        PyInstaller building (onefile)...
+echo        PyInstaller building (onedir, no self-extract)...
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean ^
     --distpath "dist" ^
     --workpath "build\pyinstaller" ^
@@ -212,9 +212,9 @@ if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (
 
 REM Guard 3: extraResources MUST contain the freshly built backend exe,
 REM otherwise the deployed desktop app would silently run OLD code
-if not exist "%RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI.exe" (
+if not exist "%RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI\TaofeiAPI.exe" (
     echo [ERROR] VERIFICATION FAILED:
-    echo        %RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI.exe not found
+    echo        %RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI\TaofeiAPI.exe not found
     echo        extraResources did not include the backend exe.
     echo        Do NOT deploy this build - fix electron-builder config and rebuild.
     pause
@@ -239,8 +239,8 @@ if not exist "%RELEASE_VER%\win-unpacked\TaofeiAI.exe" (
 )
 
 REM Guard 4: source build must contain backend exe before deploying
-if not exist "%RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI.exe" (
-    echo [ERROR] %RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI.exe not found
+if not exist "%RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI\TaofeiAPI.exe" (
+    echo [ERROR] %RELEASE_VER%\win-unpacked\resources\backend\TaofeiAPI\TaofeiAPI.exe not found
     echo        Build is incomplete - run full build first, never deploy without backend exe
     pause
     exit /b 1
@@ -262,8 +262,8 @@ if errorlevel 1 (
 )
 
 REM Guard 5: verify backend exe exists in target dir after copy
-if not exist "%INSTALL_DIR%\resources\backend\TaofeiAPI.exe" (
-    echo [ERROR] Verify failed: %INSTALL_DIR%\resources\backend\TaofeiAPI.exe missing
+if not exist "%INSTALL_DIR%\resources\backend\TaofeiAPI\TaofeiAPI.exe" (
+    echo [ERROR] Verify failed: %INSTALL_DIR%\resources\backend\TaofeiAPI\TaofeiAPI.exe missing
     pause
     exit /b 1
 )
@@ -277,7 +277,7 @@ echo ========================================
 echo  Packaging completed successfully!
 echo ========================================
 echo.
-echo  Backend:   %PROJECT_ROOT%\dist\TaofeiAPI.exe
+echo  Backend:   %PROJECT_ROOT%\dist\TaofeiAPI\TaofeiAPI.exe
 echo  Installer: %DESKTOP_DIR%\%RELEASE_VER%\TaofeiAI Setup 1.2.1.exe
 echo  Portable:  %DESKTOP_DIR%\%RELEASE_VER%\win-unpacked\
 echo  Installed: %INSTALL_DIR%

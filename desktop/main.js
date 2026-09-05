@@ -122,8 +122,10 @@ function getBackendCommand() {
       env: process.env,
     };
   }
-  // 生产模式：打包进 resources/backend 的 PyInstaller 目录构建
-  const backendDir = path.join(process.resourcesPath, 'backend');
+  // 生产模式：打包进 resources/backend 的 PyInstaller 目录构建（onedir）
+  //   resources/backend/TaofeiAPI/TaofeiAPI.exe + _internal/
+  // 说明：onedir 免去单文件 exe 每次启动自解压 ~1GB 的开销（实测省 13~15s）
+  const backendDir = path.join(process.resourcesPath, 'backend', 'TaofeiAPI');
   return {
     cmd: path.join(backendDir, 'TaofeiAPI.exe'),
     args: ['--no-browser'],
