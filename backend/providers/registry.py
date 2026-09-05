@@ -162,25 +162,28 @@ class ProviderRegistry:
         return added
 
     def load_from_db(self) -> None:
-        """从数据库 model_presets 表加载配置。"""
+        """从数据库 model_presets 表加载配置（presets 全部注册为候选）。"""
         try:
             import db
-            presets = db.list_model_presets()
-            for p in presets:
-                cfg = p if isinstance(p, dict) else p.__dict__ if hasattr(p, "__dict__") else {"id": str(p)}
-                pid = str(cfg.get("id", ""))
+            data = db.load_presets()  # {presets: [{id,name,provider,model,base_url,api_key}], active_id}
+            presets = data.get("presets", []) if isinstance(data, dict) else []
+            for idx, p in enumerate(presets):
+                if not isinstance(p, dict):
+                    continue
+                pid = str(p.get("id", ""))
                 if not pid:
                     continue
+                provider_name = str(p.get("provider", "")).lower()
                 self.register_from_dict({
                     "id": pid,
-                    "name": cfg.get("name", pid),
-                    "provider_type": cfg.get("provider_type", "openai_compat"),
-                    "model": cfg.get("model", ""),
-                    "api_key": cfg.get("api_key", ""),
-                    "base_url": cfg.get("base_url", ""),
-                    "timeout": cfg.get("timeout", 120.0),
-                    "priority": cfg.get("priority", 0),
-                    "enabled": cfg.get("enabled", True),
+                    "name": p.get("name") or pid,
+                    # DB 存的是 provider 名称（deepseek/openai/anthropic/...），映射到 provider_type
+                    "provider_type": "anthropic" if provider_name == "anthropic" else "openai_compat",
+                    "model": p.get("model", ""),
+                    "api_key": p.get("api_key", ""),
+                    "base_url": p.get("base_url", ""),
+                    "priority": idx,  # 列表顺序即优先级
+                    "enabled": True,
                 })
             self._loaded_from_db = True
         except Exception:
@@ -261,22 +264,27 @@ class ProviderRegistry:
     # -----------------------------------------------------------
     # FallbackChain 构建
     # -----------------------------------------------------------
-    def build_fallback_chain(self, preset_ids: list[str] | None = None) -> FallbackChain | None:
+    def build_fallback_chain(self, preset_ids: list[str] | None = None,
+                             exclude_ids: list[str] | None = None) -> FallbackChain | None:
         """构建 FallbackChain。
 
         - preset_ids 指定优先级顺序；为 None 时按所有可用配置的 priority 排序
+        - exclude_ids 排除指定配置（如当前正在使用的主 provider）
         """
+        exclude = set(exclude_ids or [])
         providers: list[BaseProvider] = []
 
         if preset_ids:
             for pid in preset_ids:
+                if pid in exclude:
+                    continue
                 p = self.get_provider(pid)
                 if p is not None:
                     providers.append(p)
         else:
             # 按优先级排序
             configs = sorted(
-                [c for c in self._configs.values() if c.enabled and c.api_key],
+                [c for c in self._configs.values() if c.enabled and c.api_key and c.id not in exclude],
                 key=lambda c: c.priority,
             )
             for cfg in configs:

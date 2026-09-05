@@ -1122,7 +1122,9 @@ def _build_llm(preset_id: str | None = None):
     # 路径 1：OpenAI 兼容端点直连（去中间层 → 原生 usage / 前缀缓存统计）
     try:
         from providers.openai_compat import OpenAICompatLLM
-        return OpenAICompatLLM(**kwargs)
+        llm = OpenAICompatLLM(**kwargs)
+        # 阶段 6：有其它可用 provider 时升级为 FallbackLLM（自动故障转移）
+        return _maybe_wrap_fallback_llm(llm, preset_id)
     except Exception:
         pass
 
@@ -1139,6 +1141,89 @@ def _build_llm(preset_id: str | None = None):
         return _LLMCompat(**kwargs)
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------
+# 阶段 6.7：故障转移链（FallbackLLM）
+# ---------------------------------------------------------------
+_llm_fallback_cache: dict[str, Any] = {}
+_llm_fallback_cache_lock = threading.Lock()
+
+
+def _norm_url(url: str | None) -> str:
+    """URL 归一化：去空白/尾斜杠/小写，None 或空 → ''。"""
+    if not url:
+        return ""
+    return str(url).strip().rstrip("/").lower()
+
+
+def _same_endpoint(key_a: str, url_a: str, key_b: str, url_b: str) -> bool:
+    """判断两个 provider 是否指向同一端点（同 key 或同 base_url）。"""
+    return _norm_url(url_a) == _norm_url(url_b) and bool(_norm_url(url_a)) \
+        or (key_a.strip() and key_a.strip() == key_b.strip())
+
+
+def _maybe_wrap_fallback_llm(llm: Any, preset_id: str | None = None) -> Any:
+    """若 registry 存在其它可用 provider，把单例 llm 升级为 FallbackLLM。
+
+    - 仅标准 BaseProvider（chat/chat_stream 接口）可进链；
+      _AnthropicLLM / taofei LLM / _LLMCompat 等旧形态原样返回
+    - 与主 provider 同端点（同 key 或同 base_url）的配置跳过，避免重复
+    - 结果按 preset 缓存，避免每次请求重建
+    """
+    from providers.base import BaseProvider  # noqa: E402
+    if not isinstance(llm, BaseProvider):
+        return llm
+
+    cache_key = preset_id or f"{llm.model}|{_norm_url(getattr(llm, 'base_url', ''))}|{(getattr(llm, 'api_key', '') or '').strip()}"
+    with _llm_fallback_cache_lock:
+        if cache_key in _llm_fallback_cache:
+            return _llm_fallback_cache[cache_key]
+
+    try:
+        from providers.registry import ProviderRegistry  # noqa: E402
+        from providers.fallback_llm import FallbackLLM  # noqa: E402
+
+        reg = ProviderRegistry.get_instance()
+        reg.load_from_db()
+        reg.auto_discover_env()
+
+        main_url = _norm_url(getattr(llm, "base_url", ""))
+        main_key = (getattr(llm, "api_key", "") or "").strip()
+        backups: list[Any] = []
+        for cfg in sorted(reg._configs.values(), key=lambda c: (c.priority, c.id)):
+            if not cfg.enabled or not (cfg.api_key or "").strip():
+                continue
+            if _same_endpoint(main_key, main_url, cfg.api_key, cfg.base_url):
+                continue  # 同端点（同 key 或同 base_url）→ 不算备用
+            try:
+                p = reg.get_provider(cfg.id)
+            except Exception:
+                p = None
+            if p is not None:
+                backups.append(p)
+
+        if not backups:
+            return llm
+
+        wrapped: Any = FallbackLLM([llm] + backups)
+        with _llm_fallback_cache_lock:
+            _llm_fallback_cache[cache_key] = wrapped
+        try:
+            log_buffer.emit(
+                "INFO", "system",
+                f"阶段6：已启用故障转移链（主={getattr(llm,'model','')}，"
+                f"备用={[getattr(b,'model','') for b in backups]}）",
+            )
+        except Exception:
+            pass
+        return wrapped
+    except Exception as exc:
+        try:
+            log_buffer.emit("WARNING", "system", f"故障转移链构建失败（继续单例）：{exc}")
+        except Exception:
+            pass
+        return llm
 
 # ---------------------------------------------------------------
 # 日志采集系统
@@ -1570,6 +1655,53 @@ def get_version():
         "build_time": BUILD_TIME,
         "dirty": BUILD_DIRTY,
         "packaged": PACKAGED,
+    }
+
+
+@app.get("/api/providers/status")
+def providers_status(health: int = 0):
+    """阶段 6：多提供商 + 故障转移状态。
+
+    返回：
+    - providers: registry 中所有已配置提供商（不含 API Key）
+    - chain: 当前 FallbackLLM 故障转移链状态（若有）
+    - health: 各 provider 实时健康检查（?health=1 才触发，逐个真实调用 LLM）
+
+    说明：默认不触发 health 检查（每个 provider 一次真实 LLM 调用，
+    耗时 ~1s+ 且消耗 token）；仅排查问题时加 ?health=1。
+    """
+    from providers.registry import ProviderRegistry
+
+    reg = ProviderRegistry.get_instance()
+    reg.load_from_db()
+    reg.auto_discover_env()
+
+    providers = reg.list_configs()
+    chain_report = []
+    health_results = []
+
+    # 当前激活的 llm 若是 FallbackLLM，展示其链状态
+    try:
+        active = _build_llm()
+        from providers.fallback_llm import FallbackLLM
+        if isinstance(active, FallbackLLM):
+            chain_report = active.status_report()
+    except Exception:
+        pass
+
+    # 健康检查（仅 ?health=1 时触发，逐个 provider 真实调用）
+    if health:
+        try:
+            health_results = reg.health_check_all()
+        except Exception:
+            health_results = []
+
+    return {
+        "providers": providers,
+        "chain": chain_report,
+        "health": health_results,
+        "fallback_enabled": len(chain_report) > 1,
+        "total_providers": len(providers),
     }
 
 
@@ -2065,8 +2197,17 @@ def chat(req: ChatRequest):
         return {"reply": reply_text, "skills_injected": bool(skill_prompt), "workspace_injected": bool(workspace_prompt)}
     except Exception as e:
         err_msg = str(e)
-        log_buffer.emit("ERROR", "system", f"对话中心 LLM 调用失败：{err_msg}")
-        return JSONResponse({"error": err_msg}, status_code=500)
+        # 阶段 6.4：错误分类器 → 结构化错误码 + 恢复建议
+        try:
+            from agent.error_classifier import classify_error, describe as _ec_describe
+            _ec = classify_error(e)
+            log_buffer.emit("ERROR", "system", f"对话中心 LLM 调用失败：{_ec_describe(e)}")
+            return JSONResponse({"error": err_msg, "error_type": _ec.error_type,
+                                 "retryable": _ec.retryable,
+                                 "hints": _ec.hints}, status_code=500)
+        except Exception:
+            log_buffer.emit("ERROR", "system", f"对话中心 LLM 调用失败：{err_msg}")
+            return JSONResponse({"error": err_msg}, status_code=500)
 
 
 # ---------------------------------------------------------------
@@ -3029,20 +3170,83 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     raise TimeoutError(f"模型调用超时（{timeout}秒），请检查网络或换用更快的模型")
 
         def llm_stream_fn(messages: list[dict], tools: list[dict] | None = None):
-            """流式 LLM 调用生成器：基于 taofei_api.LLM 底层 OpenAI client 原生流式。
+            """流式 LLM 调用生成器。
 
+            优先走标准接口 ``llm.chat_stream()``（支持阶段 6 故障转移）：
             生成器 yield (delta_type, delta_value):
               ("content", str) — 文本 token
               ("tool_call_delta", dict) — 工具调用增量
               ("done", response_obj) — 完成，返回完整响应
+
+            对没有标准接口的旧形态 LLM（_AnthropicLLM / taofei LLM 等），
+            兜底走底层 OpenAI client 原生流式。
             """
             import json as _j
-            from types import SimpleNamespace
-
-            # 直接获取底层 OpenAI client 做原生流式调用
-            client = llm._get_sync_client()
+            from types import SimpleNamespace as _SN
 
             _inject_profile(messages)  # 用户画像注入 system
+
+            std_chat_stream = getattr(llm, "chat_stream", None)
+            if std_chat_stream is not None and not hasattr(llm, "_get_sync_client_only"):
+                # ---------- 标准接口路径（自动故障转移） ----------
+                content_parts: list[str] = []
+                tool_call_chunks: dict[int, dict] = {}
+                stream_usage = None
+                try:
+                    stream_iter = llm.chat_stream(messages, tools=tools or None)
+                except Exception as exc:
+                    # 图片不支持等降级逻辑由上层 try/except 兜底（保持原语义）
+                    raise
+                for delta_type, delta, _raw in stream_iter:
+                    if delta_type == "content":
+                        content_parts.append(delta)
+                        yield ("content", delta)
+                    elif delta_type == "tool_call_delta":
+                        idx = int(delta.get("index", 0))
+                        if idx not in tool_call_chunks:
+                            tool_call_chunks[idx] = {"id": "", "name": "", "args_parts": []}
+                        if delta.get("id"):
+                            tool_call_chunks[idx]["id"] = delta["id"]
+                        if delta.get("name"):
+                            tool_call_chunks[idx]["name"] += delta["name"]
+                        if delta.get("arguments"):
+                            tool_call_chunks[idx]["args_parts"].append(delta["arguments"])
+                        yield ("tool_call_delta", delta)
+                    elif delta_type == "usage":
+                        stream_usage = delta
+                    elif delta_type == "done":
+                        full = delta if isinstance(delta, dict) else {}
+                        if stream_usage is None:
+                            stream_usage = full.get("usage")
+                        break
+                # 组装最终响应（与旧路径形状一致：message.content / message.tool_calls）
+                full_text = "".join(content_parts)
+                full_tcs = []
+                for idx in sorted(tool_call_chunks.keys()):
+                    tc = tool_call_chunks[idx]
+                    args_str = "".join(tc["args_parts"])
+                    args_dict = {}
+                    if args_str.strip():
+                        try:
+                            args_dict = _j.loads(args_str)
+                        except Exception:
+                            pass
+                    full_tcs.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": args_dict},
+                    })
+                if stream_usage is not None:
+                    try:
+                        _record_llm_usage(stream_usage if isinstance(stream_usage, dict) else {"raw": str(stream_usage)})
+                    except Exception:
+                        pass
+                msg = _SN(content=full_text, tool_calls=full_tcs)
+                yield ("done", _SN(message=msg))
+                return
+
+            # ---------- 旧路径兜底：底层 OpenAI client 原生流式 ----------
+            client = llm._get_sync_client()
 
             kwargs = {
                 "model": llm.model,
@@ -3053,8 +3257,8 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
             if tools:
                 kwargs["tools"] = tools
 
-            content_parts: list[str] = []
-            tool_call_chunks: dict[int, dict] = {}
+            content_parts = []
+            tool_call_chunks = {}
             stream_usage = None  # include_usage 的最终 chunk
 
             stream = client.chat.completions.create(**kwargs)
@@ -3119,8 +3323,8 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
                     _record_llm_usage(usage_to_dict(stream_usage))
                 except Exception:
                     pass
-            msg = SimpleNamespace(content=full_text, tool_calls=full_tcs)
-            yield ("done", SimpleNamespace(message=msg))
+            msg = _SN(content=full_text, tool_calls=full_tcs)
+            yield ("done", _SN(message=msg))
 
         def _record_llm_usage(usage: dict | None) -> None:
             """记录一次 LLM 调用的 token / 前缀缓存统计到任务与日志。"""
@@ -3429,6 +3633,19 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
         now = datetime.now(timezone.utc).astimezone().isoformat()
         with _tasks_lock:
             _tasks[task_id].update(status="failed", error=err_msg, completed_at=now)
+        # 阶段 6.4：把错误类型写入任务（前端可展示 error_type / retryable）
+        try:
+            from agent.error_classifier import classify_error as _ec_cls
+            _ec = _ec_cls(exc)
+            if _ec.error_type != "unknown":
+                with _tasks_lock:
+                    _t = _tasks.get(task_id)
+                    if _t is not None:
+                        _t["error_type"] = _ec.error_type
+                        _t["error_retryable"] = _ec.retryable
+                        _t["error_hints"] = _ec.hints
+        except Exception:
+            pass
     finally:
         # 任务结束后清理取消标志，释放会话 busy 标记
         _task_cancel.pop(task_id, None)

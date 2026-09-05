@@ -93,10 +93,13 @@ a = Analysis(
         "providers.openai_compat",
         "providers.anthropic",
         "providers.fallback_chain",
+        "providers.fallback_llm",
         "providers.registry",
         # agent/delegator：子代理并行执行器（agent_tools.py 内 from agent.delegator import）
         "agent",
         "agent.delegator",
+        # agent/error_classifier：阶段 6.4 错误分类器（main.py / fallback_chain 函数内导入）
+        "agent.error_classifier",
         # tools：联网工具 + 注册中心（agent_tools.py 内 from tools.xxx import）
         "tools",
         "tools.registry",
