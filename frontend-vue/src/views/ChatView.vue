@@ -296,16 +296,72 @@
               <div v-else v-html="renderedHtml(msg)"></div>
             </div>
             <div v-if="msg.role === 'ai' && msg.metrics" class="chat-msg-metrics">{{ msg.metrics }}</div>
-            <!-- Hermes B4：后台技能建议 → 一键沉淀 -->
-            <div v-if="msg.role === 'ai' && msg.skillSuggestion && !msg._skillSaved" class="chat-skill-suggest">
-              <span class="chat-skill-suggest-icon">📌</span>
-              <span class="chat-skill-suggest-text">发现可复用流程：{{ msg.skillSuggestion.name }}</span>
-              <button class="chat-skill-save-btn" :disabled="msg._skillSaving" @click="saveSuggestedSkill(msg)">
-                {{ msg._skillSaving ? '保存中…' : '沉淀为技能' }}
-              </button>
-              <span v-if="msg._skillError" class="chat-skill-error">{{ msg._skillError }}</span>
+            <!-- Hermes B4：后台技能建议 → 可展开预览/编辑 → 一键沉淀 -->
+            <div v-if="msg.role === 'ai' && msg.skillSuggestion && !msg._skillSaved && !msg._skillDismissed" class="chat-skill-suggest">
+              <div class="chat-skill-suggest-head">
+                <span class="chat-skill-suggest-icon">📌</span>
+                <span class="chat-skill-suggest-text" @click="toggleSkillSuggest(msg)" title="点击展开/收起详情">
+                  发现可复用流程：{{ msg.skillSuggestion.name }}
+                </span>
+                <span v-if="msg.skillSuggestion.confidence" class="chat-skill-confidence" :title="'LLM 置信度 ' + Math.round(msg.skillSuggestion.confidence * 100) + '%'">
+                  {{ Math.round(msg.skillSuggestion.confidence * 100) }}%
+                </span>
+                <button class="chat-skill-expand-btn" @click="toggleSkillSuggest(msg)" :title="msg._skillExpanded ? '收起' : '展开详情'">
+                  {{ msg._skillExpanded ? '▲' : '▼' }}
+                </button>
+                <button class="chat-skill-dismiss-btn" @click="dismissSkillSuggest(msg)" title="忽略此建议">✕</button>
+              </div>
+
+              <!-- 展开区：草稿预览 + 编辑 -->
+              <div v-if="msg._skillExpanded" class="chat-skill-suggest-body">
+                <div class="chat-skill-field">
+                  <label>技能名称</label>
+                  <input
+                    type="text"
+                    class="chat-skill-input"
+                    :value="msg.skillSuggestion.name"
+                    @input="msg.skillSuggestion.name = $event.target.value"
+                    maxlength="60"
+                    placeholder="简短动词短语，如「部署 FastAPI 到服务器」"
+                  />
+                </div>
+                <div class="chat-skill-field">
+                  <label>技能描述 <span class="chat-skill-field-hint">（可选，不超过 300 字）</span></label>
+                  <input
+                    type="text"
+                    class="chat-skill-input"
+                    :value="msg.skillSuggestion.description"
+                    @input="msg.skillSuggestion.description = $event.target.value"
+                    maxlength="300"
+                    placeholder="一句话说明这个技能是干什么的"
+                  />
+                </div>
+                <div class="chat-skill-field">
+                  <label>技能内容 <span class="chat-skill-field-hint">（可复用的步骤/方法论）</span></label>
+                  <textarea
+                    class="chat-skill-textarea"
+                    :value="msg.skillSuggestion.content"
+                    @input="msg.skillSuggestion.content = $event.target.value"
+                    maxlength="8000"
+                    rows="6"
+                    placeholder="分步骤写清楚可复用的流程"
+                  ></textarea>
+                </div>
+                <div class="chat-skill-actions">
+                  <span v-if="msg._skillError" class="chat-skill-error">{{ msg._skillError }}</span>
+                  <button
+                    class="chat-skill-save-btn"
+                    :disabled="msg._skillSaving || !msg.skillSuggestion.name || !msg.skillSuggestion.content"
+                    @click="saveSuggestedSkill(msg)"
+                  >
+                    {{ msg._skillSaving ? '保存中…' : '💾 保存为技能' }}
+                  </button>
+                </div>
+              </div>
             </div>
-            <div v-else-if="msg.role === 'ai' && msg._skillSaved" class="chat-skill-saved">✅ 已沉淀为技能：{{ msg.skillSuggestion && msg.skillSuggestion.name }}</div>
+            <div v-else-if="msg.role === 'ai' && msg._skillSaved" class="chat-skill-saved">
+              ✅ 已沉淀为技能：{{ msg.skillSuggestion && msg.skillSuggestion.name }}
+            </div>
             <div class="chat-time">{{ formatTime(msg.time) }}</div>
           </div>
         </div>
@@ -593,6 +649,20 @@ async function openSearchHit(hit) {
   currentId.value = s.id
   expandedEarly.value = true   // 内容可能较早，展开全部消息
   searchHits.value = []
+  saveSessions()
+}
+
+// ---- Hermes B4：技能建议 展开/收起 ----
+function toggleSkillSuggest(msg) {
+  if (!msg) return
+  msg._skillExpanded = !msg._skillExpanded
+  saveSessions()
+}
+
+// ---- Hermes B4：技能建议 忽略/关闭 ----
+function dismissSkillSuggest(msg) {
+  if (!msg) return
+  msg._skillDismissed = true
   saveSessions()
 }
 
@@ -3167,34 +3237,112 @@ function onFilePick(node) {
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
 }
-/* Hermes B4：技能沉淀建议条 */
+/* Hermes B4：技能沉淀建议卡片（可展开预览/编辑） */
 .chat-skill-suggest {
-  margin-top: 6px;
-  padding: 6px 10px;
+  margin-top: 8px;
   border: 1px dashed var(--border);
-  border-radius: 8px;
-  background: rgba(139, 92, 246, .05);
+  border-radius: 10px;
+  background: rgba(139, 92, 246, .06);
+  font-size: 12.5px;
+  overflow: hidden;
+}
+.chat-skill-suggest-head {
+  padding: 7px 10px;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
   flex-wrap: wrap;
 }
-.chat-skill-suggest-text { color: var(--text-muted); flex: 1; min-width: 120px; }
+.chat-skill-suggest-icon { flex-shrink: 0; font-size: 14px; }
+.chat-skill-suggest-text {
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 120px;
+  cursor: pointer;
+  user-select: none;
+}
+.chat-skill-suggest-text:hover { color: var(--text); }
+.chat-skill-confidence {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(139, 92, 246, .15);
+  color: var(--accent, #8b5cf6);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.chat-skill-expand-btn,
+.chat-skill-dismiss-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.chat-skill-expand-btn:hover,
+.chat-skill-dismiss-btn:hover {
+  background: rgba(0, 0, 0, .06);
+  color: var(--text);
+}
+.chat-skill-suggest-body {
+  padding: 10px 14px 12px;
+  border-top: 1px dashed var(--border);
+  background: rgba(255, 255, 255, .02);
+}
+.chat-skill-field { margin-bottom: 10px; }
+.chat-skill-field:last-of-type { margin-bottom: 12px; }
+.chat-skill-field label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.chat-skill-field-hint { font-weight: 400; opacity: .7; }
+.chat-skill-input,
+.chat-skill-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: 6px;
+  background: var(--bg-soft, #fff);
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: inherit;
+  resize: vertical;
+}
+.chat-skill-input:focus,
+.chat-skill-textarea:focus {
+  outline: none;
+  border-color: var(--accent, #8b5cf6);
+}
+.chat-skill-textarea { min-height: 80px; line-height: 1.5; }
+.chat-skill-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
 .chat-skill-save-btn {
   background: var(--accent, #8b5cf6);
   color: #fff;
   border: none;
   border-radius: 6px;
-  padding: 3px 10px;
-  font-size: 12px;
+  padding: 5px 14px;
+  font-size: 12.5px;
   cursor: pointer;
+  font-weight: 500;
 }
-.chat-skill-save-btn:disabled { opacity: .6; cursor: default; }
-.chat-skill-error { color: #ef4444; font-size: 11px; }
+.chat-skill-save-btn:disabled { opacity: .5; cursor: not-allowed; }
+.chat-skill-error { color: #ef4444; font-size: 11.5px; flex: 1; }
 .chat-skill-saved {
-  margin-top: 4px;
-  font-size: 11px;
+  margin-top: 6px;
+  font-size: 12px;
   color: #22c55e;
 }
 /* Hermes D4：历史内容命中 */
