@@ -39,7 +39,34 @@
       <button class="nav-item" :class="{ active: route.name === 'settings' }" @click="router.push('/settings')">
         <span class="icon">⚙️</span> 系统设置
       </button>
+
+      <!-- 3.3 插件贡献项（nav section） -->
+      <template v-if="pluginNavItems.length">
+        <div class="nav-plugin-sep"></div>
+        <button
+          v-for="it in pluginNavItems"
+          :key="it.id"
+          class="nav-item plugin"
+          :class="{ active: it.path && route.path === it.path }"
+          @click="runPluginItem(it)"
+        >
+          <span class="icon">{{ it.icon }}</span> {{ it.label }}
+          <span v-if="it.badge" class="nav-badge">{{ it.badge }}</span>
+        </button>
+      </template>
     </nav>
+
+    <!-- 3.3 插件贡献项（bottom section） -->
+    <div v-if="pluginBottomItems.length" class="nav-bottom-plugins">
+      <button
+        v-for="it in pluginBottomItems"
+        :key="it.id"
+        class="nav-item plugin bottom"
+        @click="runPluginItem(it)"
+      >
+        <span class="icon">{{ it.icon }}</span> {{ it.label }}
+      </button>
+    </div>
 
     <div class="nav-bottom">
       <div class="api-status">
@@ -86,9 +113,37 @@ import { useRouter as useAppRouter } from 'vue-router'
 import wsManager from './utils/wsManager.js'
 import AppDialog from './components/AppDialog.vue'
 import { appConfirm, appPrompt } from './utils/appDialog.js'
+// 3.3 插件化扩展机制：注册表 + 自动发现 modules/
+import { pluginRegistry, getSidebarContributions, loadPluginModules } from './plugins/registry.js'
 
 const route = useRoute()
 const router = useRouter()
+
+// ===== 3.3 插件化扩展机制 =====
+const pluginNavItems = computed(() => getSidebarContributions('nav'))
+const pluginBottomItems = computed(() => getSidebarContributions('bottom'))
+
+function runPluginItem(item) {
+  if (!item) return
+  if (item.path) {
+    router.push(item.path)
+    return
+  }
+  if (typeof item.action === 'function') {
+    try {
+      // 注入宿主能力
+      item.action({
+        router,
+        toast: showToast,
+        appConfirm,
+        appPrompt,
+      })
+    } catch (e) {
+      console.error(`[plugin] 执行动作失败（${item.pluginId}/${item.id}）`, e)
+      showToast('插件动作执行失败')
+    }
+  }
+}
 
 const workspaces = ref([])
 const currentWsId = ref(null)
@@ -323,6 +378,8 @@ function onDeleteWorkspaceRequest(evt) {
 }
 
 onMounted(async () => {
+  // 3.3 插件化：启动时扫描加载 plugins/modules/
+  loadPluginModules()
   const savedTheme = localStorage.getItem('theme')
   if (savedTheme === 'light') {
     isLight.value = true

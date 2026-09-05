@@ -112,6 +112,12 @@ option { background: var(--panel); padding: 6px 8px; }
 .nav-item.active { background: rgba(59, 130, 246, 0.15); color: var(--primary); font-weight: 600; }
 .nav-item .icon { font-size: 15px; width: 18px; text-align: center; }
 .nav-badge { background: rgba(239, 68, 68, 0.15); color: var(--danger); font-size: 9px; padding: 1px 5px; border-radius: 10px; font-weight: 700; }
+/* 3.3 插件项分隔线与样式 */
+.nav-plugin-sep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 6px; flex-shrink: 0; }
+.nav-item.plugin { opacity: 0.9; }
+.nav-item.plugin:hover { opacity: 1; }
+.nav-bottom-plugins { display: flex; flex-direction: row; gap: 2px; padding: 2px 8px 4px; flex-shrink: 0; }
+.nav-item.plugin.bottom { font-size: 12px; padding: 5px 10px; }
 .nav-bottom { border: none; padding: 0 14px; flex-shrink: 0; }
 .api-status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: #475569; }
