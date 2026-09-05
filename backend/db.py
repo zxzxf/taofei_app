@@ -188,12 +188,27 @@ def init_db() -> None:
                 skill_ids TEXT,
                 knowledge_ids TEXT,
                 memory_enabled INTEGER NOT NULL DEFAULT 1,
+                pinned INTEGER NOT NULL DEFAULT 0,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id)")
+
+        # 兼容旧库：pinned 字段不存在时补上
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()]
+            if "pinned" not in cols:
+                conn.execute("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass  # 老版本 SQLite 可能不支持 ALTER TABLE，忽略
+
+        # pinned 索引（必须在字段存在后创建）
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_pinned ON sessions(pinned DESC, updated_at DESC)")
+        except Exception:
+            pass
 
         # 会话消息（OpenAI 兼容原生格式，逐条存 JSON）
         conn.execute("""
@@ -663,11 +678,11 @@ def load_session(session_id: str) -> dict | None:
 
 
 def list_sessions(limit: int = 100, workspace_id: str | None = None) -> list[dict]:
-    """列出会话摘要（不含消息），按最近活跃排序。"""
+    """列出会话摘要（不含消息），置顶优先，再按最近活跃排序。"""
     try:
         with _get_conn() as conn:
             sql = """
-                SELECT s.id, s.title, s.workspace_id, s.model_preset_id, s.memory_enabled,
+                SELECT s.id, s.title, s.workspace_id, s.model_preset_id, s.memory_enabled, s.pinned,
                        s.created_at, s.updated_at,
                        (SELECT COUNT(*) FROM session_messages m WHERE m.session_id = s.id) AS message_count
                 FROM sessions s
@@ -676,13 +691,14 @@ def list_sessions(limit: int = 100, workspace_id: str | None = None) -> list[dic
             if workspace_id:
                 sql += " WHERE s.workspace_id = ?"
                 params.append(workspace_id)
-            sql += " ORDER BY s.updated_at DESC LIMIT ?"
+            sql += " ORDER BY s.pinned DESC, s.updated_at DESC LIMIT ?"
             params.append(limit)
             rows = conn.execute(sql, params).fetchall()
             out = []
             for r in rows:
                 item = _row_to_dict(r)
                 item["memory_enabled"] = bool(item.get("memory_enabled", 1))
+                item["pinned"] = bool(item.get("pinned", 0))
                 item["title"] = item.get("title") or "新对话"
                 out.append(item)
             return out
@@ -696,7 +712,7 @@ def update_session_meta(session_id: str, **fields) -> bool:
     try:
         allowed = {
             "title", "workspace_id", "model_preset_id", "skill_ids",
-            "knowledge_ids", "memory_enabled", "updated_at",
+            "knowledge_ids", "memory_enabled", "pinned", "updated_at",
         }
         sets, params = [], []
         for k, v in fields.items():
@@ -705,6 +721,8 @@ def update_session_meta(session_id: str, **fields) -> bool:
             if k in ("skill_ids", "knowledge_ids"):
                 v = json.dumps(v or [], ensure_ascii=False)
             elif k == "memory_enabled":
+                v = 1 if v else 0
+            elif k == "pinned":
                 v = 1 if v else 0
             sets.append(f"{k} = ?")
             params.append(v)

@@ -105,6 +105,18 @@ class SessionManager:
             self._sessions.pop(session_id, None)
             return db.delete_session(session_id)
 
+    def set_pinned(self, session_id: str, pinned: bool) -> bool:
+        """设置会话置顶状态。"""
+        with self._lock:
+            # 先尝试内存中的会话
+            s = self._sessions.get(session_id)
+            if s is not None:
+                s.pinned = pinned
+                s.updated_at = time.time()
+            # 直接写 DB（保证即使内存中没有也能更新）
+            ok = db.update_session_meta(session_id, pinned=pinned)
+            return ok
+
     def list(self, limit: int = 100, workspace_id: str | None = None) -> list[dict]:
         """列出会话摘要（DB 为准，不加载内存消息）。"""
         return db.list_sessions(limit=limit, workspace_id=workspace_id)
@@ -121,6 +133,7 @@ class SessionManager:
                 skill_ids=session.skill_ids,
                 knowledge_ids=session.knowledge_ids,
                 memory_enabled=session.memory_enabled,
+                pinned=session.pinned,
                 updated_at=session.updated_at,
             )
             # 增量消息

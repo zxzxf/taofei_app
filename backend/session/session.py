@@ -30,6 +30,7 @@ class ChatSession:
         skill_ids: list[str] | None = None,
         knowledge_ids: list[str] | None = None,
         memory_enabled: bool = True,
+        pinned: bool = False,
         messages: list[dict] | None = None,
     ) -> None:
         now = time.time()
@@ -40,6 +41,7 @@ class ChatSession:
         self.skill_ids = list(skill_ids or [])
         self.knowledge_ids = list(knowledge_ids or [])
         self.memory_enabled = memory_enabled
+        self.pinned = pinned
         self.created_at = now
         self.updated_at = now
         self.messages: list[dict] = [dict(m) for m in (messages or [])]
@@ -88,6 +90,7 @@ class ChatSession:
             "skill_ids": list(self.skill_ids),
             "knowledge_ids": list(self.knowledge_ids),
             "memory_enabled": self.memory_enabled,
+            "pinned": self.pinned,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -109,6 +112,7 @@ class ChatSession:
             skill_ids=meta.get("skill_ids") or [],
             knowledge_ids=meta.get("knowledge_ids") or [],
             memory_enabled=bool(meta.get("memory_enabled", True)),
+            pinned=bool(meta.get("pinned", False)),
             messages=messages,
         )
         s.created_at = float(meta.get("created_at") or s.created_at)

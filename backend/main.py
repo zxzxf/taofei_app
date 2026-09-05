@@ -3861,6 +3861,28 @@ def api_delete_session(session_id: str):
     return {"ok": True}
 
 
+@app.post("/api/sessions/{session_id}/pin")
+def api_pin_session(session_id: str):
+    """置顶会话。"""
+    from session.manager import get_session_manager
+    mgr = get_session_manager()
+    ok = mgr.set_pinned(session_id, True)
+    if not ok:
+        return JSONResponse({"error": "会话不存在"}, status_code=404)
+    return {"ok": True, "pinned": True}
+
+
+@app.post("/api/sessions/{session_id}/unpin")
+def api_unpin_session(session_id: str):
+    """取消置顶。"""
+    from session.manager import get_session_manager
+    mgr = get_session_manager()
+    ok = mgr.set_pinned(session_id, False)
+    if not ok:
+        return JSONResponse({"error": "会话不存在"}, status_code=404)
+    return {"ok": True, "pinned": False}
+
+
 # ---------------------------------------------------------------
 # 知识库（RAG）
 # ---------------------------------------------------------------

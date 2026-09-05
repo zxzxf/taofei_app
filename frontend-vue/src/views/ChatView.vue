@@ -26,7 +26,44 @@
           </div>
         </div>
         <div
-          v-for="s in filteredSessions"
+          v-for="s in pinnedSessions"
+          :key="s.id"
+          class="chat-session pinned"
+          :class="{ active: s.id === currentId }"
+          @click="currentId = s.id"
+        >
+          <div class="chat-session-info">
+            <div class="chat-session-title">
+              <span class="chat-session-pin-icon" title="已置顶">📌</span>
+              {{ s.title }}
+              <span v-if="s.sending" class="session-running-dot" title="正在思考中"></span>
+            </div>
+            <div class="chat-session-meta">
+              {{ formatTime(s.time) }} · {{ s.messages.length }} 条消息
+              <button
+                class="session-memory-icon"
+                :class="{ on: s.memoryEnabled !== false }"
+                :title="s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
+                @click.stop="toggleSessionMemory(s)"
+              >🧠</button>
+            </div>
+            <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
+              <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
+                🤖 {{ presetNameById(s.modelPresetId) }}
+              </span>
+              <span v-for="sk in s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
+            </div>
+          </div>
+          <div class="chat-session-actions">
+            <button class="chat-session-pin" @click.stop="togglePin(s.id)" title="取消置顶">📌</button>
+            <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
+          </div>
+        </div>
+        <div v-if="pinnedSessions.length && normalSessions.length" class="chat-session-divider">
+          <span>历史会话</span>
+        </div>
+        <div
+          v-for="s in normalSessions"
           :key="s.id"
           class="chat-session"
           :class="{ active: s.id === currentId }"
@@ -53,7 +90,10 @@
               <span v-for="sk in s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
             </div>
           </div>
-          <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
+          <div class="chat-session-actions">
+            <button class="chat-session-pin" @click.stop="togglePin(s.id)" title="置顶">📌</button>
+            <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
+          </div>
         </div>
         <div v-if="!filteredSessions.length && !searchHits.length" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
           暂无会话
@@ -1311,6 +1351,27 @@ const filteredSessions = computed(() => {
   if (!term) return sessions.value
   return sessions.value.filter(s => s.title.toLowerCase().includes(term))
 })
+
+// 置顶会话与普通会话分组（基于 filteredSessions）
+const pinnedSessions = computed(() => filteredSessions.value.filter(s => s.pinned))
+const normalSessions = computed(() => filteredSessions.value.filter(s => !s.pinned))
+
+// 切换置顶
+async function togglePin(sessionId) {
+  const s = sessions.value.find(x => x.id === sessionId)
+  if (!s) return
+  const newPinned = !s.pinned
+  s.pinned = newPinned
+  saveSessions()
+
+  // 同步到后端（如果会话有 sid）
+  if (s.sid) {
+    try {
+      const endpoint = newPinned ? 'pin' : 'unpin'
+      await fetch(`/api/sessions/${s.sid}/${endpoint}`, { method: 'POST' })
+    } catch { /* 忽略后端同步错误，本地为准 */ }
+  }
+}
 
 // ---- Hermes D4：会话内容全文搜索（命中显示于会话列表顶部）----
 const searchHits = ref([])
