@@ -17,7 +17,7 @@
       <div v-if="!sidebarCollapsed" class="chat-search">
         <input v-model="searchTerm" type="text" placeholder="搜索会话">
       </div>
-      <div v-if="!sidebarCollapsed" class="chat-session-list" @click="closeSessionMenu">
+      <div v-if="!sidebarCollapsed" ref="sessionListEl" class="chat-session-list" @click="closeSessionMenu" @scroll.passive="onSessionListScroll">
         <div v-if="searchHits.length" class="chat-search-hits">
           <div class="chat-search-hits-label">📄 历史内容命中 {{ searchHits.length }}</div>
           <div v-for="hit in searchHits" :key="hit.session_id" class="chat-search-hit" @click="openSearchHit(hit)">
@@ -32,91 +32,65 @@
           </div>
         </div>
         <template v-else>
+        <!-- 虚拟滚动 spacer（仅 >50 条时撑起滚动高度） -->
         <div
-          v-for="s in pinnedSessions"
-          :key="s.id"
-          class="chat-session pinned"
-          :class="{ active: s.id === currentId, dragging: isSessionDragging(s.id) }"
-          draggable="true"
-          @click="currentId = s.id; onMobileSessionClick()"
-          @contextmenu.prevent="openSessionMenu($event, s)"
-          @dragstart="startSessionDrag($event, s, 'pinned')"
-          @dragover="onSessionDragOver($event, 'pinned')"
-          @drop="dropSessionReorder($event, s, 'pinned')"
-          @dragend="endSessionDrag"
+          v-if="useSessionVirtual"
+          class="chat-session-list-spacer"
+          :style="{ height: sessionListSpacerH + 'px' }"
+        ></div>
+        <!-- 统一 item 渲染：组头 / 会话行 -->
+        <div
+          v-for="(it, idx) in renderedSessionItems"
+          :key="it.type === 'group' ? 'g-' + it.key : it.s.id"
+          class="chat-session-list-item"
+          :class="{ virtual: useSessionVirtual }"
+          :style="useSessionVirtual ? { top: it._top + 'px' } : {}"
         >
-          <div class="chat-session-info">
-            <div class="chat-session-title">
-              <span class="chat-session-pin-icon" title="已置顶">📌</span>
-              {{ s.title }}
-              <span v-if="s.sending" class="session-running-dot" title="正在思考中"></span>
-            </div>
-            <div class="chat-session-meta">
-              {{ formatTime(s.time) }} · {{ s.messages.length }} 条消息
-              <button
-                class="session-memory-icon"
-                :class="{ on: s.memoryEnabled !== false }"
-                :title="s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
-                @click.stop="toggleSessionMemory(s)"
-              >🧠</button>
-            </div>
-            <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
-              <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
-                🤖 {{ presetNameById(s.modelPresetId) }}
-              </span>
-              <span v-for="sk in s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
-            </div>
+          <!-- 组头 -->
+          <div v-if="it.type === 'group'" class="chat-session-divider">
+            <span>{{ it.label }}</span>
           </div>
-          <div class="chat-session-actions">
-            <button class="chat-session-pin" @click.stop="togglePin(s.id)" title="取消置顶">📌</button>
-            <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
-          </div>
-        </div>
-        <!-- 日期分组渲染：每组一个分隔标题 + 组内会话 -->
-        <template v-for="grp in groupedNormalSessions" :key="grp.key">
-          <div v-if="pinnedSessions.length || grp.key !== groupedNormalSessions[0].key" class="chat-session-divider">
-            <span>{{ grp.label }}</span>
-          </div>
+          <!-- 会话行 -->
           <div
-            v-for="s in grp.items"
-            :key="s.id"
+            v-else
             class="chat-session"
-            :class="{ active: s.id === currentId, dragging: isSessionDragging(s.id) }"
+            :class="{ pinned: it.s.pinned, active: it.s.id === currentId, dragging: isSessionDragging(it.s.id) }"
             draggable="true"
-            @click="currentId = s.id; onMobileSessionClick()"
-            @contextmenu.prevent="openSessionMenu($event, s)"
-            @dragstart="startSessionDrag($event, s, grp.key)"
-            @dragover="onSessionDragOver($event, grp.key)"
-            @drop="dropSessionReorder($event, s, grp.key)"
+            @click="currentId = it.s.id; onMobileSessionClick()"
+            @contextmenu.prevent="openSessionMenu($event, it.s)"
+            @dragstart="startSessionDrag($event, it.s, it.groupKey)"
+            @dragover="onSessionDragOver($event, it.groupKey)"
+            @drop="dropSessionReorder($event, it.s, it.groupKey)"
             @dragend="endSessionDrag"
           >
             <div class="chat-session-info">
               <div class="chat-session-title">
-                {{ s.title }}
-                <span v-if="s.sending" class="session-running-dot" title="正在思考中"></span>
+                <span v-if="it.s.pinned" class="chat-session-pin-icon" title="已置顶">📌</span>
+                {{ it.s.title }}
+                <span v-if="it.s.sending" class="session-running-dot" title="正在思考中"></span>
               </div>
               <div class="chat-session-meta">
-                {{ formatTime(s.time) }} · {{ s.messages.length }} 条消息
+                {{ formatTime(it.s.time) }} · {{ it.s.messages.length }} 条消息
                 <button
                   class="session-memory-icon"
-                  :class="{ on: s.memoryEnabled !== false }"
-                  :title="s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
-                  @click.stop="toggleSessionMemory(s)"
+                  :class="{ on: it.s.memoryEnabled !== false }"
+                  :title="it.s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
+                  @click.stop="toggleSessionMemory(it.s)"
                 >🧠</button>
               </div>
-              <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
-                <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
-                  🤖 {{ presetNameById(s.modelPresetId) }}
+              <div v-if="it.s.skills && it.s.skills.length || it.s.modelPresetId" class="chat-session-tags">
+                <span v-if="it.s.modelPresetId && presetNameById(it.s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(it.s.modelPresetId)}`">
+                  🤖 {{ presetNameById(it.s.modelPresetId) }}
                 </span>
-                <span v-for="sk in s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
+                <span v-for="sk in it.s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
               </div>
             </div>
             <div class="chat-session-actions">
-              <button class="chat-session-pin" @click.stop="togglePin(s.id)" title="置顶">📌</button>
-              <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
+              <button class="chat-session-pin" @click.stop="togglePin(it.s.id)" :title="it.s.pinned ? '取消置顶' : '置顶'">📌</button>
+              <button class="chat-session-delete" @click.stop="deleteSession(it.s.id)">🗑</button>
             </div>
           </div>
-        </template>
+        </div>
         <!-- 右键菜单 -->
         <div
           v-if="sessionMenuOpen && sessionMenuTarget"
@@ -1546,6 +1520,99 @@ const groupedNormalSessions = computed(() => {
   }
   return groups
 })
+
+// ===== 4.6 虚拟滚动：会话列表拍平为统一 item 流 =====
+// item: { type:'group', key, label } | { type:'session', s, groupKey }
+const sessionItems = computed(() => {
+  const items = []
+  // 置顶组
+  if (pinnedSessions.value.length) {
+    items.push({ type: 'group', key: 'pinned', label: '📌 置顶' })
+    for (const s of pinnedSessions.value) items.push({ type: 'session', s, groupKey: 'pinned' })
+  }
+  // 日期组
+  for (const grp of groupedNormalSessions.value) {
+    items.push({ type: 'group', key: grp.key, label: grp.label })
+    for (const s of grp.items) items.push({ type: 'session', s, groupKey: grp.key })
+  }
+  return items
+})
+
+// 虚拟滚动状态（仅总会话 > 阈值时启用窗口渲染）
+const SESSION_ITEM_H = 56   // 会话行估算高度（含 margin）
+const GROUP_ITEM_H = 26     // 组头估算高度
+const VIRTUAL_OVERSCAN = 6  // 可视窗口外多渲染的项数（缓冲滚动）
+const VIRTUAL_THRESHOLD = 50
+const sessionListScrollTop = ref(0)
+const sessionListViewportH = ref(600)
+const sessionListEl = ref(null)
+
+const useSessionVirtual = computed(() => filteredSessions.value.length > VIRTUAL_THRESHOLD)
+
+// 估算每个 item 的高度
+function estItemH(it) {
+  if (it.type === 'group') return GROUP_ITEM_H
+  const s = it.s
+  // 有技能/模型标签的行更高
+  let extra = 0
+  if (s.skills && s.skills.length) extra += 22
+  if (s.modelPresetId && presetNameById(s.modelPresetId)) extra += 22
+  return SESSION_ITEM_H + extra
+}
+
+// 总高 + 每个 item 的累计偏移（用于绝对定位）
+const sessionItemOffsets = computed(() => {
+  const offsets = []
+  let acc = 0
+  for (const it of sessionItems.value) {
+    offsets.push(acc)
+    acc += estItemH(it)
+  }
+  return { offsets, totalH: acc }
+})
+
+// 当前可见窗口的 items（虚拟模式）或全量（普通模式）
+const renderedSessionItems = computed(() => {
+  const all = sessionItems.value
+  const { offsets, totalH } = sessionItemOffsets.value
+  if (!useSessionVirtual.value || !all.length) {
+    return all.map((it, idx) => ({ ...it, _top: offsets[idx] || 0 }))
+  }
+  const top = sessionListScrollTop.value
+  const bottom = top + sessionListViewportH.value
+  // 二分找 start（第一个偏移+高度 >= top 的 item）
+  const heights = all.map(it => estItemH(it))
+  let start = 0
+  // 线性扫描即可（50+ 条性能可忽略，且保证正确）
+  let accTop = 0
+  for (let i = 0; i < all.length; i++) {
+    if (accTop + heights[i] >= top) { start = i; break }
+    accTop += heights[i]
+  }
+  // 结束
+  let end = start
+  let accBottom = accTop
+  while (end < all.length && accBottom < bottom) {
+    accBottom += heights[end]
+    end++
+  }
+  start = Math.max(0, start - VIRTUAL_OVERSCAN)
+  end = Math.min(all.length, end + VIRTUAL_OVERSCAN)
+  const visible = []
+  for (let i = start; i < end; i++) {
+    visible.push({ ...all[i], _top: offsets[i] })
+  }
+  return visible
+})
+
+const sessionListSpacerH = computed(() => sessionItemOffsets.value.totalH)
+
+function onSessionListScroll() {
+  const el = sessionListEl.value
+  if (!el) return
+  sessionListScrollTop.value = el.scrollTop
+  sessionListViewportH.value = el.clientHeight
+}
 
 // 切换置顶
 async function togglePin(sessionId) {
@@ -3307,6 +3374,8 @@ onMounted(async () => {
   // 移动端检测：初始化 + resize 监听
   checkMobile()
   window.addEventListener('resize', checkMobile)
+  // 虚拟滚动：初始化 viewport 高度 + 滚动位置
+  nextTick(() => onSessionListScroll())
   if (!sessions.value.length) {
     openNewSessionDialog()
   }
