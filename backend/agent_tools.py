@@ -958,12 +958,23 @@ def execute_tool(name: str, workspace_path: str | None, llm_call: Callable[[list
             return {"observation": "", "error": "delegate_tasks: tasks 为空或格式错误"}
         # 子代理可用工具 = 内置 + 当前绑定的 HTTP 技能
         sub_schemas = tools_to_openai_functions(TOOLS + build_skill_tools(skills or []))
+
+        # C4：进度回调——把子任务状态通过 tool_line_cb 流式推给前端
+        def _progress_cb(evt: dict) -> None:
+            if tool_line_cb is None:
+                return
+            try:
+                tool_line_cb("delegate", json.dumps(evt, ensure_ascii=False))
+            except Exception:
+                pass  # 进度推送失败不影响主流程
+
         result = delegate_tasks(
             specs,
             llm_call=llm_call,
             tool_schemas=sub_schemas,
             execute_tool=execute_tool,
             workspace_path=workspace_path,
+            progress_cb=_progress_cb,
         )
         lines = []
         for r in result.get("results", []):

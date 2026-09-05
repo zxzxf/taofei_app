@@ -317,6 +317,7 @@ def delegate_tasks(
     workspace_path: Optional[str] = None,
     max_workers: int = 4,
     max_steps: int = 6,
+    progress_cb: Optional[Callable[[dict], None]] = None,
 ) -> dict:
     """并行执行一批相互独立的子任务（Hermes delegate_task 风格）。
 
@@ -343,6 +344,12 @@ def delegate_tasks(
     max_steps : int
         每个子任务最多执行的 llm 轮数（function-calling 循环轮数上限）。
         <=0 时按默认 6 处理。
+    progress_cb : callable | None
+        进度回调，子任务状态变化时调用，参数为 dict：
+        ``{"type": "subtask_update", "id": str, "request": str,
+        "status": "running"|"completed"|"failed",
+        "answer": str, "error": str, "duration_ms": int, "steps": int}``
+        用于前端实时渲染并行子任务卡片。
 
     返回
     ----
@@ -365,6 +372,14 @@ def delegate_tasks(
     # 按 id(spec) 收集完成结果，最后按输入顺序重排，保证返回顺序稳定
     ordered: dict[int, dict] = {}
 
+    def _emit(event: dict) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(event)
+        except Exception:
+            pass  # 进度回调失败不影响主流程
+
     try:
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="delegate") as pool:
             future_to_spec = {
@@ -379,12 +394,24 @@ def delegate_tasks(
                 ): spec
                 for spec in specs
             }
+            # 启动时发送 running 通知
+            for spec in specs:
+                _emit({
+                    "type": "subtask_update",
+                    "id": str(spec.get("id", "?")),
+                    "request": str(spec.get("request", "")),
+                    "status": "running",
+                    "answer": "",
+                    "error": "",
+                    "duration_ms": 0,
+                    "steps": 0,
+                })
             for future in as_completed(future_to_spec):
                 spec = future_to_spec[future]
                 try:
-                    ordered[id(spec)] = future.result()  # _run_subtask 不抛，双保险
+                    result = future.result()  # _run_subtask 不抛，双保险
                 except Exception as exc:  # pragma: no cover —— 理论不可达
-                    ordered[id(spec)] = {
+                    result = {
                         "id": str(spec.get("id", "?")),
                         "status": "failed",
                         "answer": "",
@@ -392,6 +419,18 @@ def delegate_tasks(
                         "duration_ms": 0,
                         "steps": 0,
                     }
+                ordered[id(spec)] = result
+                # 完成时发送最终状态通知（带上 request 方便前端展示）
+                _emit({
+                    "type": "subtask_update",
+                    "id": result["id"],
+                    "request": str(spec.get("request", "")),
+                    "status": result["status"],
+                    "answer": result.get("answer", ""),
+                    "error": result.get("error", ""),
+                    "duration_ms": result.get("duration_ms", 0),
+                    "steps": result.get("steps", 0),
+                })
         results = [ordered[id(spec)] for spec in specs]
     except Exception as exc:
         # 极端情况（如线程池创建失败）：整体降级为逐条失败记录，绝不外抛

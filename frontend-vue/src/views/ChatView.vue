@@ -236,7 +236,33 @@
                           <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
                           <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                         </div>
-                        <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
+                        <!-- C4：delegate_tasks 工具显示并行子任务卡片 -->
+                        <div v-if="isTimelineItemExpanded(msg, idx) && item.name === 'delegate_tasks' && msg._subtasks && msg._subtasks.length" class="delegate-subtasks">
+                          <div
+                            v-for="sub in msg._subtasks"
+                            :key="sub.id"
+                            class="delegate-subtask-card"
+                            :class="sub.status"
+                          >
+                            <div class="delegate-subtask-head">
+                              <span class="delegate-subtask-icon">
+                                {{ sub.status === 'completed' ? '✅' : sub.status === 'failed' ? '❌' : '⏳' }}
+                              </span>
+                              <span class="delegate-subtask-title" :title="sub.request">{{ sub.request || sub.id }}</span>
+                              <span v-if="sub.duration_ms" class="delegate-subtask-duration">{{ (sub.duration_ms / 1000).toFixed(1) }}s</span>
+                            </div>
+                            <div v-if="sub.status === 'completed' && sub.answer" class="delegate-subtask-body">
+                              {{ sub.answer }}
+                            </div>
+                            <div v-else-if="sub.status === 'failed' && sub.error" class="delegate-subtask-body error">
+                              失败：{{ sub.error }}
+                            </div>
+                            <div v-else-if="sub.status === 'running'" class="delegate-subtask-body running">
+                              <span class="delegate-spinner"></span> 子代理执行中…
+                            </div>
+                          </div>
+                        </div>
+                        <div v-else-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
                       </div>
                     </div>
                   </div>
@@ -283,7 +309,33 @@
                         <span class="timeline-elapsed">耗时 {{ formatThinkingDuration(getStepElapsed(msg, idx)) }}</span>
                         <span class="timeline-arrow" :class="{ expanded: isTimelineItemExpanded(msg, idx) }">▼</span>
                       </div>
-                      <div v-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
+                      <!-- C4：delegate_tasks 工具显示并行子任务卡片 -->
+                      <div v-if="isTimelineItemExpanded(msg, idx) && item.name === 'delegate_tasks' && msg._subtasks && msg._subtasks.length" class="delegate-subtasks">
+                        <div
+                          v-for="sub in msg._subtasks"
+                          :key="sub.id"
+                          class="delegate-subtask-card"
+                          :class="sub.status"
+                        >
+                          <div class="delegate-subtask-head">
+                            <span class="delegate-subtask-icon">
+                              {{ sub.status === 'completed' ? '✅' : sub.status === 'failed' ? '❌' : '⏳' }}
+                            </span>
+                            <span class="delegate-subtask-title" :title="sub.request">{{ sub.request || sub.id }}</span>
+                            <span v-if="sub.duration_ms" class="delegate-subtask-duration">{{ (sub.duration_ms / 1000).toFixed(1) }}s</span>
+                          </div>
+                          <div v-if="sub.status === 'completed' && sub.answer" class="delegate-subtask-body">
+                            {{ sub.answer }}
+                          </div>
+                          <div v-else-if="sub.status === 'failed' && sub.error" class="delegate-subtask-body error">
+                            失败：{{ sub.error }}
+                          </div>
+                          <div v-else-if="sub.status === 'running'" class="delegate-subtask-body running">
+                            <span class="delegate-spinner"></span> 子代理执行中…
+                          </div>
+                        </div>
+                      </div>
+                      <div v-else-if="isTimelineItemExpanded(msg, idx)" class="timeline-command-result"><pre>{{ item.result }}</pre></div>
                     </div>
                   </div>
                 </div>
@@ -1742,6 +1794,21 @@ async function sendAgent(s, text, images = []) {
       const toolItem = aiMsg.timeline[st.toolIdx]
       if (toolItem && toolItem.type === 'command') {
         toolItem.result += data.line + '\n'
+      }
+      // C4：delegate_tasks 工具的子任务进度事件（stream = "delegate"）
+      if (data.stream === 'delegate' && data.line) {
+        try {
+          const evt = JSON.parse(data.line)
+          if (evt && evt.type === 'subtask_update') {
+            if (!aiMsg._subtasks) aiMsg._subtasks = []
+            const existing = aiMsg._subtasks.find(t => t.id === evt.id)
+            if (existing) {
+              Object.assign(existing, evt)
+            } else {
+              aiMsg._subtasks.push({ ...evt })
+            }
+          }
+        } catch { /* 非 JSON 行忽略 */ }
       }
     } else if (type === 'tool_end') {
       // 工具执行完成
@@ -3592,6 +3659,84 @@ function onFilePick(node) {
   font-size: 11.5px;
   max-height: 220px;
   overflow-y: auto;
+}
+
+/* ===== C4：子代理并行卡片 ===== */
+.delegate-subtasks {
+  margin: 0 10px 8px 33px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+.delegate-subtask-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  overflow: hidden;
+  transition: border-color .2s;
+}
+.delegate-subtask-card.running { border-color: rgba(139, 92, 246, .4); }
+.delegate-subtask-card.completed { border-color: rgba(34, 197, 94, .4); }
+.delegate-subtask-card.failed { border-color: rgba(239, 68, 68, .4); }
+
+.delegate-subtask-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  background: rgba(139, 92, 246, .04);
+}
+.delegate-subtask-card.completed .delegate-subtask-head {
+  background: rgba(34, 197, 94, .06);
+}
+.delegate-subtask-card.failed .delegate-subtask-head {
+  background: rgba(239, 68, 68, .06);
+}
+.delegate-subtask-icon { flex-shrink: 0; font-size: 13px; }
+.delegate-subtask-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.delegate-subtask-duration {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.delegate-subtask-body {
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-height: 160px;
+  overflow-y: auto;
+  word-break: break-word;
+}
+.delegate-subtask-body.error { color: #ef4444; }
+.delegate-subtask-body.running {
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.delegate-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent, #8b5cf6);
+  border-radius: 50%;
+  animation: delegate-spin .8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes delegate-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ===== 思考过程（任务运行初期独立卡片） ===== */
