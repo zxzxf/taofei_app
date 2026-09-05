@@ -190,6 +190,7 @@ def run_agent_task_streaming(
             tool_call_states: dict[int, dict] = {}  # index -> {id, name, args_parts}
 
             # 推送 step_start 事件
+            step_start_time = time.perf_counter()
             push_delta("step_start", {
                 "step": step_idx + 1,
                 "type": "thinking",
@@ -254,6 +255,12 @@ def run_agent_task_streaming(
                 elif delta_type == "done":
                     final_response = delta
                     # done 不 push delta，前端用 step_end 标记
+                    # 收集本步性能指标
+                    step_perf = _extract_perf(final_response, step_start_time, len(step_content_parts))
+                    with task_lock:
+                        perf_list = task_store[task_id].setdefault("_perf_steps", [])
+                        perf_list.append(step_perf)
+                    push_delta("perf_step", step_perf)
 
             if is_cancelled():
                 break
@@ -568,3 +575,79 @@ def run_agent_task_streaming(
         except Exception:
             pass
         push_delta("error", {"message": err})
+
+
+# ------------------------------------------------------------------
+# 性能指标提取
+# ------------------------------------------------------------------
+def _extract_perf(final_response, step_start_time, token_count: int) -> dict:
+    """从 LLM 最终响应中提取本步性能指标。
+
+    返回：{
+        first_token_ms: 首字延迟(ms),  # 流式中从 step_start 到第一个 content token
+        total_ms: 本步总耗时(ms),
+        completion_tokens: 输出 token 数,
+        prompt_tokens: 输入 token 数,
+        prompt_cache_hit_tokens: 前缀缓存命中,
+        prompt_cache_miss_tokens: 前缀缓存未命中,
+        cache_hit_ratio: 缓存命中率(0-1),
+        tokens_per_second: 输出速度(tokens/s),
+        has_tool_call: 是否为工具调用步,
+    }
+    """
+    elapsed = time.perf_counter() - step_start_time
+    total_ms = int(elapsed * 1000)
+
+    usage = None
+    has_tool_call = False
+
+    # 从 final_response 中提取 usage
+    if final_response is not None:
+        # openai SDK ChatCompletion 对象
+        if hasattr(final_response, "usage") and final_response.usage is not None:
+            try:
+                if hasattr(final_response.usage, "model_dump"):
+                    usage = final_response.usage.model_dump()
+                elif hasattr(final_response.usage, "dict"):
+                    usage = final_response.usage.dict()
+                else:
+                    usage = dict(final_response.usage)
+            except Exception:
+                usage = None
+        # 或者是 dict
+        elif isinstance(final_response, dict):
+            usage = final_response.get("usage")
+
+        # 判断是否有工具调用
+        try:
+            msg = final_response.choices[0].message if hasattr(final_response, "choices") else None
+            if msg and hasattr(msg, "tool_calls") and msg.tool_calls:
+                has_tool_call = True
+        except Exception:
+            pass
+
+    prompt_tokens = usage.get("prompt_tokens") if usage else None
+    completion_tokens = usage.get("completion_tokens") if usage else None
+    cache_hit = usage.get("prompt_cache_hit_tokens") if usage else None
+    cache_miss = usage.get("prompt_cache_miss_tokens") if usage else None
+
+    cache_hit_ratio = None
+    if cache_hit is not None and cache_miss is not None and (cache_hit + cache_miss) > 0:
+        cache_hit_ratio = round(cache_hit / (cache_hit + cache_miss), 3)
+
+    # 计算输出速度（用 completion_tokens 更准，没有就用流式收集的 token_count 估算）
+    tps = None
+    ct = completion_tokens if completion_tokens else token_count
+    if ct and elapsed > 0:
+        tps = round(ct / elapsed, 1)
+
+    return {
+        "total_ms": total_ms,
+        "completion_tokens": completion_tokens,
+        "prompt_tokens": prompt_tokens,
+        "prompt_cache_hit_tokens": cache_hit,
+        "prompt_cache_miss_tokens": cache_miss,
+        "cache_hit_ratio": cache_hit_ratio,
+        "tokens_per_second": tps,
+        "has_tool_call": has_tool_call,
+    }

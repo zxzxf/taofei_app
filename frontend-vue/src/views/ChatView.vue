@@ -164,9 +164,14 @@
           <button class="btn-ghost" @click="clearCurrent">清空当前</button>
         </div>
       </div>
-      <div class="chat-messages" ref="messagesEl">
-        <div v-if="!expandedEarly && currentMessages.length > RENDER_WINDOW" class="chat-earlier-bar" @click="expandEarlier">
-          ↑ 已折叠更早的 {{ currentMessages.length - RENDER_WINDOW }} 条消息，点击加载
+      <div class="chat-messages" ref="messagesEl" @scroll="onMessagesScroll">
+        <div v-if="hiddenCount > 0" class="chat-earlier-bar" @click="expandEarlier">
+          <template v-if="hiddenCount > 0 && !expandedEarly">
+            ↑ 已折叠更早的 {{ hiddenCount }} 条消息（上滚自动加载，点击展开全部）
+          </template>
+          <template v-else>
+            ↑ 已加载全部 {{ currentMessages.length }} 条消息
+          </template>
         </div>
         <div v-for="(msg, i) in displayMessages" :key="i" class="chat-msg" :class="msg.role">
           <div class="chat-avatar" :class="msg.role">
@@ -347,7 +352,37 @@
               <div v-if="msg.pending" class="msg-streaming-text">{{ msg.text }}</div>
               <div v-else v-html="renderedHtml(msg)"></div>
             </div>
-            <div v-if="msg.role === 'ai' && msg.metrics" class="chat-msg-metrics">{{ msg.metrics }}</div>
+            <!-- 9.4：性能指标栏（首字延迟 / Token 速度 / 缓存命中 / 步数） -->
+            <div v-if="msg.role === 'ai' && (msg._perfSummary || msg.metrics)" class="chat-perf-bar">
+              <template v-if="msg._perfSummary">
+                <span v-if="msg._perfSummary.first_token_ms != null" class="perf-item" :title="'首字延迟（从发送到第一个字符）'">
+                  <span class="perf-icon">⚡</span>
+                  <span class="perf-value">{{ msg._perfSummary.first_token_ms }}ms</span>
+                  <span class="perf-label">首字</span>
+                </span>
+                <span v-if="msg._perfSummary.tokens_per_second != null" class="perf-item" :title="'Token 输出速度'">
+                  <span class="perf-icon">📊</span>
+                  <span class="perf-value">{{ msg._perfSummary.tokens_per_second }}</span>
+                  <span class="perf-label">t/s</span>
+                </span>
+                <span v-if="msg._perfSummary.cache_hit_ratio != null" class="perf-item" :title="'DeepSeek 前缀缓存命中率'">
+                  <span class="perf-icon">💾</span>
+                  <span class="perf-value">{{ msg._perfSummary.cache_hit_ratio }}%</span>
+                  <span class="perf-label">缓存</span>
+                </span>
+                <span v-if="msg._perfSummary.steps" class="perf-item" :title="'Agent 执行步数（含工具调用）'">
+                  <span class="perf-icon">🔢</span>
+                  <span class="perf-value">{{ msg._perfSummary.steps }}</span>
+                  <span class="perf-label">步</span>
+                </span>
+                <span v-if="msg._perfSummary.completion_tokens" class="perf-item" :title="'输出 token 总数'">
+                  <span class="perf-icon">📝</span>
+                  <span class="perf-value">{{ msg._perfSummary.completion_tokens }}</span>
+                  <span class="perf-label">tok</span>
+                </span>
+              </template>
+              <span v-else class="perf-item">{{ msg.metrics }}</span>
+            </div>
             <!-- Hermes B4：后台技能建议 → 可展开预览/编辑 → 一键沉淀 -->
             <div v-if="msg.role === 'ai' && msg.skillSuggestion && !msg._skillSaved && !msg._skillDismissed" class="chat-skill-suggest">
               <div class="chat-skill-suggest-head">
@@ -629,18 +664,55 @@ const currentMessages = computed(() => currentSession.value?.messages || [])
 
 // 8.2 渲染窗口：超长会话只渲染最近 N 条，防止 DOM 膨胀；可手动展开更早消息
 const RENDER_WINDOW = 150
+const RENDER_STEP = 50     // 每次往上滚加载的条数
 const expandedEarly = ref(false)
+const visibleCount = ref(RENDER_WINDOW)  // 当前渲染的消息数（从末尾往前数）
+
 const displayMessages = computed(() => {
   const all = currentSession.value?.messages || []
-  if (!expandedEarly.value && all.length > RENDER_WINDOW) {
-    return all.slice(-RENDER_WINDOW)
+  if (all.length <= RENDER_WINDOW || expandedEarly.value) {
+    return all
   }
-  return all
+  // 从末尾取 visibleCount 条
+  const count = Math.min(visibleCount.value, all.length)
+  return all.slice(all.length - count)
 })
-watch(currentId, () => { expandedEarly.value = false })
+
+const hiddenCount = computed(() => {
+  const all = currentSession.value?.messages || []
+  if (all.length <= RENDER_WINDOW || expandedEarly.value) return 0
+  return all.length - displayMessages.value.length
+})
+
+watch(currentId, () => {
+  expandedEarly.value = false
+  visibleCount.value = RENDER_WINDOW
+})
+
 function expandEarlier() {
   expandedEarly.value = true
   nextTick(() => scrollToBottom(true))
+}
+
+// 8.2：向上滚动到顶部时，自动加载更多历史消息
+function onMessagesScroll() {
+  const el = messagesEl.value
+  if (!el) return
+  // 滚动到顶部附近（< 50px）且还有隐藏消息，自动加载
+  if (el.scrollTop < 50 && hiddenCount.value > 0 && !expandedEarly.value) {
+    const all = currentSession.value?.messages || []
+    const beforeCount = displayMessages.value.length
+    visibleCount.value = Math.min(visibleCount.value + RENDER_STEP, all.length)
+    // 加载后保持滚动位置相对稳定（新增的 50 条在顶部，所以 scrollTop 要下移）
+    nextTick(() => {
+      const afterCount = displayMessages.value.length
+      const added = afterCount - beforeCount
+      if (added > 0 && el.scrollHeight > 0) {
+        // 粗略估算：每条消息约 80px
+        el.scrollTop = added * 80
+      }
+    })
+  }
 }
 
 const filteredSessions = computed(() => {
@@ -1874,6 +1946,39 @@ async function sendAgent(s, text, images = []) {
       aiMsg.thinkingActive = false
     } else if (type === 'error') {
       aiMsg.thinkingActive = false
+    } else if (type === 'perf_step') {
+      // 性能指标：累积每步数据
+      if (!aiMsg._perfSteps) aiMsg._perfSteps = []
+      aiMsg._perfSteps.push(data)
+      // 计算整体指标
+      const steps = aiMsg._perfSteps
+      const answerSteps = steps.filter(s => !s.has_tool_call)
+      const totalMs = steps.reduce((sum, s) => sum + (s.total_ms || 0), 0)
+      const totalCompletion = steps.reduce((sum, s) => sum + (s.completion_tokens || 0), 0)
+      const totalPrompt = steps.reduce((sum, s) => sum + (s.prompt_tokens || 0), 0)
+      const totalCacheHit = steps.reduce((sum, s) => sum + (s.prompt_cache_hit_tokens || 0), 0)
+      const totalCacheMiss = steps.reduce((sum, s) => sum + (s.prompt_cache_miss_tokens || 0), 0)
+      const cacheRatio = (totalCacheHit + totalCacheMiss) > 0
+        ? Math.round(totalCacheHit / (totalCacheHit + totalCacheMiss) * 100)
+        : null
+      const tps = totalMs > 0 && totalCompletion > 0
+        ? Math.round(totalCompletion / (totalMs / 1000) * 10) / 10
+        : null
+      const firstTokenMs = aiMsg._firstTokenAt && aiMsg._sendAt
+        ? (aiMsg._firstTokenAt - aiMsg._sendAt)
+        : null
+      aiMsg._perfSummary = {
+        steps: steps.length,
+        answerSteps: answerSteps.length,
+        total_ms: totalMs,
+        completion_tokens: totalCompletion,
+        prompt_tokens: totalPrompt,
+        cache_hit_tokens: totalCacheHit,
+        cache_miss_tokens: totalCacheMiss,
+        cache_hit_ratio: cacheRatio,
+        tokens_per_second: tps,
+        first_token_ms: firstTokenMs,
+      }
     }
 
     saveSessions()
@@ -3596,6 +3701,42 @@ function onFilePick(node) {
 .code-diff-head {
   color: #9ca3af;
   font-weight: 600;
+}
+
+/* 9.4：性能指标栏 */
+.chat-perf-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--text-muted, #9ca3af);
+  background: var(--perf-bar-bg, rgba(128, 128, 128, 0.06));
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.12));
+  user-select: none;
+}
+.chat-perf-bar .perf-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.chat-perf-bar .perf-icon {
+  font-size: 12px;
+  opacity: .8;
+}
+.chat-perf-bar .perf-value {
+  font-weight: 600;
+  color: var(--perf-value-color, #8b5cf6);
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 11.5px;
+}
+.chat-perf-bar .perf-label {
+  color: var(--text-muted, #9ca3af);
+  font-size: 10.5px;
+  opacity: .8;
 }
 
 /* 8.3：长代码块/长输出限高滚动，避免 DOM 撑爆视口 */

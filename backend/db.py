@@ -170,6 +170,8 @@ def init_db() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_ws ON memory_entries(workspace_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory_entries(kind)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_ws_kind ON memory_entries(workspace_id, kind)")
         # 老库迁移：对已存在的 memory_entries 表补充 kind 列（新库建表已含该列，此处会失败并被忽略）
         try:
             conn.execute("ALTER TABLE memory_entries ADD COLUMN kind TEXT DEFAULT 'episodic'")
