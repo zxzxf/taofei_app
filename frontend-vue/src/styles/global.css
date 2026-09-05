@@ -610,6 +610,65 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .chat-session-divider span { font-size: 11px; color: var(--text-muted); font-weight: 500; letter-spacing: 0.5px; }
 .chat-session-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
+/* 会话列表空状态 */
+.chat-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 20px;
+  text-align: center;
+}
+.chat-empty-icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 4px;
+  opacity: 0.9;
+  animation: emptyFloat 3s ease-in-out infinite;
+}
+@keyframes emptyFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+.chat-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.chat-empty-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 200px;
+}
+.chat-empty-btn {
+  margin-top: 8px;
+  padding: 7px 16px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+}
+.chat-empty-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+.chat-empty-btn:active {
+  transform: scale(0.97);
+}
+.chat-empty-btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.chat-empty-btn.ghost:hover {
+  background: var(--bg-soft);
+}
+
 /* 会话右键菜单 */
 .chat-ctx-menu {
   position: absolute;

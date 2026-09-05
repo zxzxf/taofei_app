@@ -138,8 +138,19 @@
             <span class="chat-ctx-label">删除会话</span>
           </div>
         </div>
-        <div v-if="!filteredSessions.length && !searchHits.length" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
-          暂无会话
+        <!-- 空状态：完全无会话 -->
+        <div v-if="!filteredSessions.length && !searchHits.length && !sessions.length" class="chat-empty-state">
+          <div class="chat-empty-icon">💬</div>
+          <div class="chat-empty-title">还没有会话</div>
+          <div class="chat-empty-desc">开始一段新对话，Agent 会帮你分析、写码、处理任务</div>
+          <button class="chat-empty-btn" @click="openNewSessionDialog">＋ 新建对话</button>
+        </div>
+        <!-- 空状态：搜索无结果 -->
+        <div v-else-if="!filteredSessions.length && !searchHits.length && searchTerm.trim()" class="chat-empty-state">
+          <div class="chat-empty-icon">🔍</div>
+          <div class="chat-empty-title">没有匹配的会话</div>
+          <div class="chat-empty-desc">换个关键词试试，或清空搜索查看全部会话</div>
+          <button class="chat-empty-btn ghost" @click="searchTerm = ''">清空搜索</button>
         </div>
         </template>
       </div>
