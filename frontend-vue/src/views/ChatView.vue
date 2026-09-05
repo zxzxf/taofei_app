@@ -36,9 +36,14 @@
           v-for="s in pinnedSessions"
           :key="s.id"
           class="chat-session pinned"
-          :class="{ active: s.id === currentId }"
+          :class="{ active: s.id === currentId, dragging: isSessionDragging(s.id) }"
+          draggable="true"
           @click="currentId = s.id"
           @contextmenu.prevent="openSessionMenu($event, s)"
+          @dragstart="startSessionDrag($event, s, 'pinned')"
+          @dragover="onSessionDragOver($event, 'pinned')"
+          @drop="dropSessionReorder($event, s, 'pinned')"
+          @dragend="endSessionDrag"
         >
           <div class="chat-session-info">
             <div class="chat-session-title">
@@ -76,9 +81,14 @@
             v-for="s in grp.items"
             :key="s.id"
             class="chat-session"
-            :class="{ active: s.id === currentId }"
+            :class="{ active: s.id === currentId, dragging: isSessionDragging(s.id) }"
+            draggable="true"
             @click="currentId = s.id"
             @contextmenu.prevent="openSessionMenu($event, s)"
+            @dragstart="startSessionDrag($event, s, grp.key)"
+            @dragover="onSessionDragOver($event, grp.key)"
+            @drop="dropSessionReorder($event, s, grp.key)"
+            @dragend="endSessionDrag"
           >
             <div class="chat-session-info">
               <div class="chat-session-title">
@@ -1388,8 +1398,86 @@ const filteredSessions = computed(() => {
 })
 
 // 置顶会话与普通会话分组（基于 filteredSessions）
-const pinnedSessions = computed(() => filteredSessions.value.filter(s => s.pinned))
+const pinnedSessions = computed(() => {
+  const list = filteredSessions.value.filter(s => s.pinned)
+  return [...list].sort(sessionCompare)
+})
 const normalSessions = computed(() => filteredSessions.value.filter(s => !s.pinned))
+
+// 组内排序：有 order 的排前面（order 小的先），无 order 按时间倒序
+function sessionCompare(a, b) {
+  const hasA = typeof a.order === 'number'
+  const hasB = typeof b.order === 'number'
+  if (hasA && hasB) return a.order - b.order
+  if (hasA) return -1
+  if (hasB) return 1
+  return (b.time || 0) - (a.time || 0)
+}
+
+// 拖拽排序状态
+const dragSessionId = ref(null)
+const dragOverSessionId = ref(null)
+
+// 会话行拖拽：只允许同组内（置顶组/日期组各为独立组）
+// 通过 data-group 区分组：置顶组 'pinned'，日期组 'today'/'yesterday'/...
+function startSessionDrag(e, session, groupKey) {
+  dragSessionId.value = session.id
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', JSON.stringify({ id: session.id, group: groupKey }))
+  // Firefox 需要 setData 才能拖拽
+}
+
+function onSessionDragOver(e, groupKey) {
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'move'
+}
+
+function dropSessionReorder(e, targetSession, groupKey) {
+  e.preventDefault()
+  const raw = e.dataTransfer.getData('text/plain')
+  let dragId = null
+  let dragGroup = null
+  try {
+    const parsed = JSON.parse(raw)
+    dragId = parsed.id
+    dragGroup = parsed.group
+  } catch { /* 非 JSON，忽略 */ }
+  if (!dragId || dragGroup !== groupKey || dragId === targetSession.id) return // 跨组/自身禁止
+
+  // 取出该组当前显示顺序（按 sessionCompare）
+  const members = sessions.value.filter(s => {
+    if (groupKey === 'pinned') return s.pinned
+    return !s.pinned && dateKeyOf(s.time) === groupKey
+  }).sort(sessionCompare)
+
+  const fromIdx = members.findIndex(s => s.id === dragId)
+  const toIdx = members.findIndex(s => s.id === targetSession.id)
+  if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return
+
+  // 组内移动：移除拖拽项，插入到目标位置
+  const [moved] = members.splice(fromIdx, 1)
+  const insertAt = members.findIndex(s => s.id === targetSession.id)
+  members.splice(insertAt + (fromIdx < toIdx ? 0 : 0), 0, moved)
+
+  // 按新顺序重写 order（0,1,2,...）
+  members.forEach((s, i) => { s.order = i })
+
+  dragSessionId.value = null
+  saveSessions()
+}
+
+// 拖拽结束清理状态
+function endSessionDrag() {
+  dragSessionId.value = null
+}
+
+// 会话行是否处于拖拽中
+function isSessionDragging(sessionId) {
+  return dragSessionId.value === sessionId
+}
+function isDragOverSession(sessionId) {
+  return dragOverSessionId.value === sessionId
+}
 
 // 日期分组：普通会话按 今天/昨天/7天内/更早 分组
 function dateKeyOf(ts) {
@@ -1421,8 +1509,8 @@ const groupedNormalSessions = computed(() => {
   for (const key of SESSION_GROUP_ORDER) {
     const items = normalSessions.value.filter(s => dateKeyOf(s.time) === key)
     if (items.length) {
-      // 组内按时间倒序（最近的在前）
-      items.sort((a, b) => (b.time || 0) - (a.time || 0))
+      // 组内排序：自定义 order 优先，其余按时间倒序
+      items.sort(sessionCompare)
       groups.push({ key, label: SESSION_GROUP_LABELS[key], items })
     }
   }

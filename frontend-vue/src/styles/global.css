@@ -583,6 +583,7 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .chat-session { padding: 11px 12px; border-radius: var(--radius-sm); cursor: pointer; margin-bottom: 4px; display: flex; align-items: flex-start; gap: 8px; transition: all .15s; }
 .chat-session:hover { background: rgba(59, 130, 246, 0.08); }
 .chat-session.active { background: rgba(59, 130, 246, 0.14); border-left: 3px solid var(--primary); }
+.chat-session.dragging { opacity: 0.4; border: 1px dashed var(--accent); }
 .chat-session-info { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .chat-session-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
 .session-running-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; animation: sessionRunningPulse 1.2s ease-in-out infinite; }
