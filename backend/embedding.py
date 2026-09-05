@@ -93,8 +93,15 @@ def _load_local_model():
         return _local_model
     try:
         from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        raise RuntimeError("sentence-transformers 未安装，请执行 pip install sentence-transformers") from exc
+    except ImportError:
+        # sentence-transformers 包未安装：直接启用 fallback，不抛出
+        _use_fallback = True
+        print(
+            "[embedding] 提示：sentence-transformers 未安装，已启用离线兜底 embedding"
+            "（hash n-gram，语义召回效果弱于深度学习模型）。"
+            "如需更好效果，请执行 pip install sentence-transformers"
+        )
+        return None
 
     # 国内环境优先使用 HF_ENDPOINT 镜像下载
     if HF_ENDPOINT:
@@ -130,9 +137,23 @@ def _load_local_model():
         return None
 
 
-def is_loaded() -> bool:
+def is_available() -> bool:
     """embedding 是否可用（本地模型或 fallback 任一就绪）。"""
-    return _local_model is not None or _use_fallback
+    # 注意：fallback 是懒启用的，首次 get_embedding 调用后 _use_fallback 才会变 True
+    # 这里用一个更直接的判断：要么模型已加载，要么 _use_fallback 为 True，
+    # 要么连 sentence_transformers 都没装（此时首次调用会自动进 fallback）
+    if _local_model is not None or _use_fallback:
+        return True
+    # 检查 sentence_transformers 是否可用，不可用则 fallback 一定可用
+    try:
+        from sentence_transformers import SentenceTransformer  # noqa: F401
+    except ImportError:
+        return True  # 会走 fallback
+    return False
+
+
+# 兼容旧调用名
+is_loaded = is_available
 
 
 def get_embedding(text: str) -> list[float]:

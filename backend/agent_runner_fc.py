@@ -27,6 +27,7 @@ from agent_tools import (
     TOOLS,
     build_skill_tools,
     execute_tool_fc,
+    get_all_tools,
     tools_to_openai_functions,
 )
 
@@ -377,7 +378,7 @@ def run_agent_task_fc(
     # 构建工具列表
     skills = skills or []
     skill_tools = build_skill_tools(skills)
-    all_tools = TOOLS + skill_tools
+    all_tools = get_all_tools() + skill_tools
     openai_tools = tools_to_openai_functions(all_tools)
 
     # 构建系统提示

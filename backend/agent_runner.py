@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from agent_tools import MAX_OUTPUT_LEN, TOOLS, _short, build_skill_tools, execute_tool
+from agent_tools import MAX_OUTPUT_LEN, TOOLS, _short, build_skill_tools, execute_tool, get_all_tools
 
 MAX_STEPS = 25
 
@@ -464,7 +464,7 @@ def run_agent_task(
     # 会话绑定技能：HTTP 技能注册为动态工具，Claude 技能 instructions 注入 system prompt
     skills = skills or []
     skill_tools = build_skill_tools(skills)
-    all_tools = TOOLS + skill_tools
+    all_tools = get_all_tools() + skill_tools
     system_content = REACT_SYSTEM_PROMPT.format(tools_desc=_format_tools(all_tools))
     skill_prompt = _build_skill_prompts(skills)
     if skill_prompt:

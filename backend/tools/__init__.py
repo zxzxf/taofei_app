@@ -11,5 +11,6 @@
 
 from .web_search import search_web
 from .web_extract import extract_web
+from .memory_tool import memory_save, memory_recall, memory_forget, memory_list
 
-__all__ = ["search_web", "extract_web"]
+__all__ = ["search_web", "extract_web", "memory_save", "memory_recall", "memory_forget", "memory_list"]
