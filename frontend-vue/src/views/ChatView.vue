@@ -164,6 +164,72 @@
           <button class="btn-ghost" @click="clearCurrent">清空当前</button>
         </div>
       </div>
+      <!-- F4：顶部命令输入框（快捷指令 + 搜索） -->
+      <div class="chat-cmd-bar">
+        <div v-if="cmdBoxOpen" class="chat-cmd-box" v-click-outside="() => closeCmdBox">
+          <div class="chat-cmd-input-wrap">
+            <span class="chat-cmd-icon">⌘</span>
+            <input
+              ref="cmdInputEl"
+              v-model="cmdInput"
+              type="text"
+              class="chat-cmd-input"
+              :placeholder="cmdPlaceholder"
+              @input="onCmdInput"
+              @keydown.enter.prevent="onCmdEnter"
+              @keydown.esc="closeCmdBox"
+              @keydown.down.prevent="cmdActiveIdx = Math.min(cmdActiveIdx + 1, cmdSuggestions.length - 1)"
+              @keydown.up.prevent="cmdActiveIdx = Math.max(cmdActiveIdx - 1, 0)"
+            />
+            <span v-if="cmdInput" class="chat-cmd-clear" @click="clearCmdInput">✕</span>
+          </div>
+          <!-- 快捷指令列表 -->
+          <div v-if="cmdSuggestions.length" class="chat-cmd-suggestions">
+            <div
+              v-for="(s, i) in cmdSuggestions"
+              :key="s.cmd"
+              class="chat-cmd-item"
+              :class="{ active: i === cmdActiveIdx }"
+              @click="runCmd(s)"
+              @mouseenter="cmdActiveIdx = i"
+            >
+              <span class="chat-cmd-item-icon">{{ s.icon }}</span>
+              <div class="chat-cmd-item-body">
+                <div class="chat-cmd-item-title">
+                  <span class="chat-cmd-item-cmd">{{ s.cmd }}</span>
+                  <span class="chat-cmd-item-name">{{ s.name }}</span>
+                </div>
+                <div v-if="s.desc" class="chat-cmd-item-desc">{{ s.desc }}</div>
+              </div>
+            </div>
+          </div>
+          <!-- 搜索结果（非斜杠命令时显示 -->
+          <div v-else-if="cmdSearchResults.length" class="chat-cmd-search-results">
+            <div class="chat-cmd-search-label">🔍 会话内搜索 {{ cmdSearchResults.length }} 条结果</div>
+            <div
+              v-for="(hit, i) in cmdSearchResults"
+              :key="i"
+              class="chat-cmd-item"
+              :class="{ active: i === cmdActiveIdx }"
+              @click="jumpToSearchHit(hit)"
+              @mouseenter="cmdActiveIdx = i"
+            >
+              <span class="chat-cmd-item-icon">💬</span>
+              <div class="chat-cmd-item-body">
+                <div class="chat-cmd-item-title">
+                  <span class="chat-cmd-item-name">{{ hit.session_title || '当前会话' }}</span>
+                </div>
+                <div class="chat-cmd-item-desc">{{ hit.snippet }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <button v-else class="chat-cmd-toggle" @click="toggleCmdBox" title="命令 / 搜索 (Ctrl+K)">
+          <span class="chat-cmd-toggle-icon">⌘</span>
+          <span class="chat-cmd-toggle-text">输入命令或搜索…</span>
+          <span class="chat-cmd-kbd">Ctrl+K</span>
+        </button>
+      </div>
       <div class="chat-messages" ref="messagesEl" @scroll="onMessagesScroll">
         <div v-if="hiddenCount > 0" class="chat-earlier-bar" @click="expandEarlier">
           <template v-if="hiddenCount > 0 && !expandedEarly">
@@ -692,6 +758,183 @@ const pendingImages = ref([])
 const knowledgeBases = ref([])
 const selectedKnowledgeIds = ref([])
 const MAX_IMAGES = 4
+
+// F4：顶部命令输入框
+const cmdBoxOpen = ref(false)
+const cmdInput = ref('')
+const cmdInputEl = ref(null)
+const cmdActiveIdx = ref(0)
+
+// 快捷指令定义
+const CMD_LIST = [
+  { cmd: '/clear', name: '清空会话', icon: '🧹', desc: '清空当前会话的消息记录', action: 'clearCurrent' },
+  { cmd: '/new', name: '新建对话', icon: '💬', desc: '创建一个新的会话', action: 'openNewSessionDialog' },
+  { cmd: '/model', name: '切换模型', icon: '🤖', desc: '打开模型选择菜单', action: 'toggleModelMenu' },
+  { cmd: '/skills', name: '管理技能', icon: '🛠️', desc: '为当前会话配置技能', action: 'editSkills' },
+  { cmd: '/memory', name: '记忆管理', icon: '🧠', desc: '查看和管理工作空间记忆', action: 'openMemoryManager' },
+  { cmd: '/commit', name: '提交代码', icon: '📤', desc: '提交当前工作空间的代码变更', action: 'quickCommit' },
+  { cmd: '/stop', name: '停止生成', icon: '⏹️', desc: '停止当前正在执行的任务', action: 'stopAgent' },
+  { cmd: '/theme', name: '切换主题', icon: '🎨', desc: '切换明暗主题', action: 'toggleThemeApp' },
+]
+
+// 计算：根据输入过滤建议
+const cmdSuggestions = computed(() => {
+  const val = cmdInput.value.trim()
+  if (!val) return CMD_LIST
+  if (val.startsWith('/')) {
+    const q = val.toLowerCase()
+    return CMD_LIST.filter(c =>
+      c.cmd.toLowerCase().startsWith(q) ||
+      c.name.toLowerCase().includes(q.slice(1))
+    )
+  }
+  return []
+})
+
+// 计算：会话内搜索结果（非命令模式）
+const cmdSearchResults = computed(() => {
+  const val = cmdInput.value.trim()
+  if (!val || val.startsWith('/')) return []
+  const msgs = currentMessages.value || []
+  const results = []
+  const q = val.toLowerCase()
+  for (let i = msgs.length - 1; i >= 0 && results.length < 10; i--) {
+    const m = msgs[i]
+    const text = m.text || ''
+    if (text.toLowerCase().includes(q)) {
+      // 生成 snippet
+      const idx = text.toLowerCase().indexOf(q)
+      const start = Math.max(0, idx - 20)
+      const end = Math.min(text.length, idx + q.length + 40)
+      const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')
+      results.push({
+        msgIndex: i,
+        snippet,
+        session_title: currentSession.value?.title,
+      })
+    }
+  }
+  return results
+})
+
+// 占位符
+const cmdPlaceholder = computed(() => {
+  if (!cmdInput.value) return '输入 / 查看快捷指令，或搜索会话内容…'
+  if (cmdInput.value.startsWith('/')) return '选择或输入快捷指令…'
+  return '搜索会话内容…'
+})
+
+function toggleCmdBox() {
+  cmdBoxOpen.value = !cmdBoxOpen.value
+  if (cmdBoxOpen.value) {
+    nextTick(() => {
+      cmdInputEl.value?.focus()
+    })
+  }
+}
+
+function closeCmdBox() {
+  cmdBoxOpen.value = false
+  cmdInput.value = ''
+  cmdActiveIdx.value = 0
+}
+
+function clearCmdInput() {
+  cmdInput.value = ''
+  cmdInputEl.value?.focus()
+  cmdActiveIdx.value = 0
+}
+
+function focusCmdInput() {
+  cmdInputEl.value?.focus()
+}
+
+function onCmdInput() {
+  cmdActiveIdx.value = 0
+}
+
+function onCmdEnter() {
+  const val = cmdInput.value.trim()
+  if (!val) return
+
+  // 如果是快捷指令模式
+  if (val.startsWith('/')) {
+    // 优先执行选中的建议
+    if (cmdSuggestions.value.length > 0) {
+      const item = cmdSuggestions.value[cmdActiveIdx.value]
+      if (item) {
+        runCmd(item)
+        return
+      }
+    }
+    // 精确匹配
+    const exact = CMD_LIST.find(c => c.cmd === val)
+    if (exact) {
+      runCmd(exact)
+      return
+    }
+    return
+  }
+
+  // 搜索模式：跳转到第一条结果
+  if (cmdSearchResults.value.length > 0) {
+    jumpToSearchHit(cmdSearchResults.value[cmdActiveIdx.value] || cmdSearchResults.value[0])
+  }
+}
+
+function runCmd(item) {
+  closeCmdBox()
+  const action = item.action
+  // 调用对应函数
+  switch (action) {
+    case 'clearCurrent':
+      clearCurrent()
+      break
+    case 'openNewSessionDialog':
+      openNewSessionDialog()
+      break
+    case 'toggleModelMenu':
+      modelMenuOpen.value = true
+      break
+    case 'editSkills':
+      editSkills()
+      break
+    case 'openMemoryManager':
+      // 记忆管理暂未做，显示提示
+      alert('记忆管理功能开发中…')
+      break
+    case 'quickCommit':
+      // 触发提交代码
+      inputText.value = '提交代码 '
+      nextTick(() => inputEl.value?.focus())
+      break
+    case 'stopAgent':
+      stopAgent()
+      break
+    case 'toggleThemeApp':
+      // 通过 App.vue 的 toggleTheme
+      window.dispatchEvent(new CustomEvent('toggle-theme'))
+      break
+  }
+}
+
+function jumpToSearchHit(hit) {
+  if (hit == null || hit.msgIndex == null) return
+  closeCmdBox()
+  // 滚动到对应消息
+  nextTick(() => {
+    const msgEls = document.querySelectorAll('.chat-msg')
+    const el = msgEls[hit.msgIndex]
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.style.transition = 'background .3s'
+      el.style.background = 'rgba(139, 92, 246, 0.2)'
+      setTimeout(() => {
+        el.style.background = ''
+      }, 1000)
+    }
+  })
+}
 
 const currentSession = computed(() => sessions.value.find(s => s.id === currentId.value))
 const currentMessages = computed(() => currentSession.value?.messages || [])
@@ -1787,6 +2030,14 @@ function handleEscStop(e) {
   }
 }
 
+// Ctrl+K 打开命令框
+function handleCmdK(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault()
+    toggleCmdBox()
+  }
+}
+
 // ===== 快捷指令：提交代码到 GitHub =====
 async function sendGitCommit(s, userText, commitMessage) {
   // 1) 推入用户消息
@@ -2409,6 +2660,7 @@ onMounted(async () => {
   document.addEventListener('click', onDocClickWorkspace)
   document.addEventListener('paste', handleGlobalPaste)
   document.addEventListener('keydown', handleEscStop)
+  document.addEventListener('keydown', handleCmdK)
   await loadWorkspaceList()
   loadWorkspaceFiles()
   if (!sessions.value.length) {
@@ -2425,6 +2677,7 @@ onUnmounted(() => {
   document.removeEventListener('click', onDocClickWorkspace)
   document.removeEventListener('paste', handleGlobalPaste)
   document.removeEventListener('keydown', handleEscStop)
+  document.removeEventListener('keydown', handleCmdK)
   // 清理所有仍在运行的任务订阅/SSE 连接
   for (const s of sessions.value) {
     for (const m of s.messages || []) {
@@ -3030,6 +3283,153 @@ function onFilePick(node) {
 .chat-area-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .chat-area-head-left { flex: 1; min-width: 0; }
 .chat-area-head-right { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* F4：顶部命令输入框 */
+.chat-cmd-bar {
+  padding: 8px 16px;
+}
+.chat-cmd-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(var(--bg-secondary-rgb), 0.5);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: text;
+  transition: all .15s ease;
+  text-align: left;
+}
+.chat-cmd-toggle:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(139, 92, 246, 0.05);
+}
+.chat-cmd-toggle-icon {
+  font-size: 14px;
+  color: var(--accent);
+}
+.chat-cmd-toggle-text {
+  flex: 1;
+}
+.chat-cmd-kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.chat-cmd-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-cmd-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.1);
+}
+.chat-cmd-icon {
+  font-size: 14px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.chat-cmd-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+}
+.chat-cmd-clear {
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.chat-cmd-clear:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
+}
+.chat-cmd-suggestions,
+.chat-cmd-search-results {
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  max-height: 320px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+.chat-cmd-search-label {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.chat-cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background .1s;
+}
+.chat-cmd-item:hover,
+.chat-cmd-item.active {
+  background: rgba(139, 92, 246, 0.1);
+}
+.chat-cmd-item-icon {
+  font-size: 16px;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.chat-cmd-item-body {
+  flex: 1;
+  min-width: 0;
+}
+.chat-cmd-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-cmd-item-cmd {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--accent);
+  background: rgba(139, 92, 246, 0.1);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.chat-cmd-item-name {
+  font-size: 13.5px;
+  color: var(--text);
+  font-weight: 500;
+}
+.chat-cmd-item-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ===== 工作空间选择器（头部） ===== */
 .ws-selector-wrap { position: relative; }
