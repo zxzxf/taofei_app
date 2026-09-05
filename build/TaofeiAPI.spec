@@ -107,6 +107,9 @@ a = Analysis(
         "tools.web_extract",
         # skills_lifecycle：技能创建/沉淀（main.py + agent_tools.py 内延迟导入）
         "skills_lifecycle",
+        # cron：定时任务调度器（main.py 函数内 from cron.scheduler import）
+        "cron",
+        "cron.scheduler",
     ],
     hookspath=[],
     hooksconfig={},

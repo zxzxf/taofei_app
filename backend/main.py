@@ -3788,6 +3788,108 @@ def agent_cancel(task_id: str):
 
 
 # ---------------------------------------------------------------
+# Cron 定时任务（7.6）
+# ---------------------------------------------------------------
+class CronJobRequest(BaseModel):
+    """创建/更新定时任务请求。id 省略时新建（后端生成）。"""
+    id: str | None = None
+    name: str | None = None
+    schedule: str | None = None      # "every:N"（N 分钟）或标准 5 段 cron
+    prompt: str | None = None
+    workspace_id: str | None = None
+    preset_id: str | None = None
+    enabled: bool | None = None
+
+
+def _cron_executor(job: dict) -> dict:
+    """CronScheduler 注入的执行器：以独立 task 跑一轮 Agent（复用主链路）。"""
+    task_id = create_agent_task_id()
+    workspace_id = job.get("workspace_id") or ""
+    workspace_path = _workspace_path_by_id(workspace_id) if workspace_id else None
+    preset_id = job.get("preset_id") or None
+    prompt = (job.get("prompt") or "").strip()
+    now = datetime.now(timezone.utc).astimezone().isoformat()
+    with _tasks_lock:
+        _tasks[task_id] = {
+            "id": task_id,
+            "topic": (prompt[:60] or "定时任务"),
+            "status": "queued",
+            "workspace_id": workspace_id,
+            "result": None,
+            "error": None,
+            "steps": [],
+            "current_step": "",
+            "type": "agent",
+            "thinking": "",
+            "thinking_duration": 0,
+            "timeline": [],
+            "created_at": now,
+            "completed_at": None,
+        }
+    log_buffer.emit("INFO", "system", f"[定时任务] {job.get('name') or '未命名'}：{prompt[:50]}", task_id)
+    threading.Thread(
+        target=_run_agent_async,
+        args=(
+            task_id, prompt, workspace_path, preset_id,
+            [], [], [], workspace_id or None, True, [], None,
+        ),
+        daemon=True,
+    ).start()
+    return {"task_id": task_id, "summary": f"定时任务已启动：{prompt[:50]}"}
+
+
+@app.get("/api/cron/jobs")
+def cron_list_jobs():
+    """列出全部定时任务（含运行状态）。"""
+    from cron.scheduler import scheduler
+    return {"jobs": scheduler.list_jobs()}
+
+
+@app.post("/api/cron/jobs")
+def cron_create_job(req: CronJobRequest):
+    """新建定时任务。"""
+    from cron.scheduler import scheduler
+    try:
+        job = scheduler.upsert_job(req.model_dump(exclude_none=True))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "job": job}
+
+
+@app.patch("/api/cron/jobs/{job_id}")
+def cron_update_job(job_id: str, req: CronJobRequest):
+    """部分更新定时任务（schedule/prompt/enabled 等）。"""
+    from cron.scheduler import scheduler
+    if scheduler.get_job(job_id) is None:
+        return JSONResponse({"error": "定时任务不存在"}, status_code=404)
+    try:
+        job = scheduler.upsert_job({"id": job_id, **req.model_dump(exclude_none=True)})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "job": job}
+
+
+@app.delete("/api/cron/jobs/{job_id}")
+def cron_delete_job(job_id: str):
+    """删除定时任务。"""
+    from cron.scheduler import scheduler
+    ok = scheduler.delete_job(job_id)
+    if not ok:
+        return JSONResponse({"error": "定时任务不存在"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/cron/jobs/{job_id}/run")
+def cron_run_job_now(job_id: str):
+    """立即执行一次定时任务（不改变下次调度）。"""
+    from cron.scheduler import scheduler
+    job = scheduler.run_now(job_id)
+    if job is None:
+        return JSONResponse({"error": "定时任务不存在"}, status_code=404)
+    return {"ok": True, "message": f"已触发：{job.get('name') or job_id}"}
+
+
+# ---------------------------------------------------------------
 # 会话（Session）管理
 # ---------------------------------------------------------------
 @app.get("/api/sessions")
@@ -4563,12 +4665,28 @@ def main():
     except Exception:
         pass
 
+    # Cron 定时任务调度器（7.6）：服务存活期间随进程调度
+    _cron_scheduler = None
+    try:
+        from cron.scheduler import scheduler as _cron_scheduler
+        _cron_scheduler.start(_cron_executor)
+        print("[cron] 定时任务调度器已启动")
+    except Exception as exc:
+        print(f"[cron] 调度器启动失败（不影响主服务）：{exc}", flush=True)
+
     if not no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    finally:
+        if _cron_scheduler is not None:
+            try:
+                _cron_scheduler.stop()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
