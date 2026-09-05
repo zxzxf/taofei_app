@@ -121,6 +121,14 @@ a = Analysis(
         "lancedb",
         "lance_namespace",
         "lance_namespace_urllib3_client",
+        # ---- 启动瘦身（阶段：启动优化）：taofei_app 运行时 0 处 import 的重库，
+        #      由 taofei_api 静态分析拖入。排除后包体 ~1GB→~600MB，
+        #      减少磁盘占用/安装体积/杀软扫描面。若未来用到对应功能需加回。----
+        "playwright",       # 浏览器自动化（taofei_app 未用）
+        "av",               # PyAV/ffmpeg 音视频（taofei_app 未用）
+        "pyarrow",          # 数据列式存储（taofei_app 未用）
+        "fitz",             # PyMuPDF 导入名（旧版别名）
+        "pymupdf",          # PyMuPDF 1.24+ 实际导入名（PDF 解析 taofei_app 走 PyPDF2）
     ],
     noarchive=False,
 )
