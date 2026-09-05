@@ -936,6 +936,83 @@ body.light-theme .integration-nav-item:hover, body.light-theme .settings-tab:hov
 .flow-run-result { margin-top: 12px; padding: 10px 16px; border-radius: 8px; background: rgba(16,185,129,.06); border: 1px solid rgba(16,185,129,.2); font-size: 12.5px; color: var(--text-secondary); white-space: pre-wrap; line-height: 1.6; flex-shrink: 0; max-height: 120px; overflow-y: auto; }
 
 /* ===== 响应式适配 ===== */
+/* 移动端：chat 会话列表抽屉模式 */
+@media (max-width: 768px) {
+  .chat-view {
+    height: calc(100vh - 120px);
+    min-height: 400px;
+  }
+  /* 会话列表 → 左侧抽屉浮层 */
+  .chat-sessions.mobile-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(320px, 88vw) !important;
+    min-width: 0 !important;
+    flex-shrink: 0;
+    z-index: 300;
+    border-radius: 0;
+    border-right: 1px solid var(--border);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+    transform: translateX(-110%);
+    transition: transform .25s ease;
+  }
+  .chat-sessions.mobile-drawer.open {
+    transform: translateX(0);
+  }
+  .chat-sessions-backdrop {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 290;
+    animation: fadeIn .2s ease;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  /* 移动端不显示折叠态窄栏（抽屉模式） */
+  .chat-sessions.mobile-drawer.collapsed {
+    width: min(320px, 88vw) !important;
+  }
+  .chat-resizer, .chat-resizer-right {
+    display: none;
+  }
+  /* 文件面板：移动端隐藏（保留聊天为主） */
+  .chat-files {
+    display: none;
+  }
+  /* 汉堡按钮 */
+  .chat-mobile-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .chat-mobile-menu-btn:hover {
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--primary);
+  }
+  .chat-area-head {
+    gap: 8px;
+  }
+}
+/* 桌面端隐藏汉堡按钮（移动端 v-if 已控，样式兜底） */
+@media (min-width: 769px) {
+  .chat-mobile-menu-btn { display: none !important; }
+}
+@media (max-width: 768px) {
+  .chat-mobile-menu-btn { display: inline-flex; }
+}
+
 @media (max-width: 768px) {
   .dashboard-nav, .task-nav, .integration-nav, .settings-tabs { width: 140px; }
   .content { padding: 16px 14px; }

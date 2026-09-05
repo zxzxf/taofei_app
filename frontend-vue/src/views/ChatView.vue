@@ -1,6 +1,6 @@
 <template>
   <div class="chat-view">
-    <div class="chat-sessions" :class="{ collapsed: sidebarCollapsed }" :style="sidebarCollapsed ? {} : { width: sessionsWidth + 'px', flexShrink: 0 }">
+    <div class="chat-sessions" :class="{ collapsed: sidebarCollapsed && !isMobile, 'mobile-drawer': isMobile, open: mobileOpen }" :style="(!isMobile && !sidebarCollapsed) ? { width: sessionsWidth + 'px', flexShrink: 0 } : {}">
       <div class="chat-sessions-head">
         <div class="chat-sessions-head-left">
           <button class="chat-collapse-btn" @click="toggleSidebar" :title="sidebarCollapsed ? '展开会话列表' : '收起会话列表'">
@@ -38,7 +38,7 @@
           class="chat-session pinned"
           :class="{ active: s.id === currentId, dragging: isSessionDragging(s.id) }"
           draggable="true"
-          @click="currentId = s.id"
+          @click="currentId = s.id; onMobileSessionClick()"
           @contextmenu.prevent="openSessionMenu($event, s)"
           @dragstart="startSessionDrag($event, s, 'pinned')"
           @dragover="onSessionDragOver($event, 'pinned')"
@@ -83,7 +83,7 @@
             class="chat-session"
             :class="{ active: s.id === currentId, dragging: isSessionDragging(s.id) }"
             draggable="true"
-            @click="currentId = s.id"
+            @click="currentId = s.id; onMobileSessionClick()"
             @contextmenu.prevent="openSessionMenu($event, s)"
             @dragstart="startSessionDrag($event, s, grp.key)"
             @dragover="onSessionDragOver($event, grp.key)"
@@ -148,6 +148,18 @@
     <div class="chat-area">
       <div class="chat-area-head">
         <div class="chat-area-head-left">
+          <button
+            v-if="isMobile"
+            class="chat-mobile-menu-btn"
+            @click="openMobileSessions"
+            title="会话列表"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
           <span class="chat-area-title">{{ currentSession?.title || '新对话' }}</span>
           <div v-if="currentSession?.skills?.length" class="chat-area-skills">
             <span v-for="sk in currentSession.skills" :key="sk.id" class="chat-skill-tag">
@@ -879,6 +891,13 @@
         </div>
       </div>
     </div>
+
+    <!-- 移动端：会话抽屉遮罩 -->
+    <div
+      v-if="isMobile && mobileOpen"
+      class="chat-sessions-backdrop"
+      @click="mobileOpen = false"
+    ></div>
   </div>
 </template>
 
@@ -3274,6 +3293,9 @@ onMounted(async () => {
   document.addEventListener('keydown', handleScreenshotShortcut)
   await loadWorkspaceList()
   loadWorkspaceFiles()
+  // 移动端检测：初始化 + resize 监听
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
   if (!sessions.value.length) {
     openNewSessionDialog()
   }
@@ -3282,6 +3304,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
   window.removeEventListener('taofei-model-changed', onModelChanged)
   window.removeEventListener('taofei-workspace-changed', onWorkspaceChanged)
   document.removeEventListener('click', onDocClickChat)
@@ -3391,7 +3414,34 @@ const sessionsWidth = ref(parseInt(localStorage.getItem('chatSessionsWidth') || 
 const resizing = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('chatSidebarCollapsed') === 'true')
 
+// 2.3 移动端适配：≤768px 时侧栏转抽屉
+const isMobile = ref(false)
+const mobileOpen = ref(false)
+
+function checkMobile() {
+  isMobile.value = window.innerWidth <= 768
+  if (!isMobile.value) mobileOpen.value = false
+}
+
+function openMobileSessions() {
+  mobileOpen.value = true
+}
+
+function closeMobileSessions() {
+  mobileOpen.value = false
+}
+
+// 移动端点击会话后自动关闭抽屉
+function onMobileSessionClick() {
+  if (isMobile.value) mobileOpen.value = false
+}
+
 function toggleSidebar() {
+  if (isMobile.value) {
+    // 移动端：toggleSidebar 打开抽屉
+    mobileOpen.value = !mobileOpen.value
+    return
+  }
   sidebarCollapsed.value = !sidebarCollapsed.value
   localStorage.setItem('chatSidebarCollapsed', String(sidebarCollapsed.value))
 }
