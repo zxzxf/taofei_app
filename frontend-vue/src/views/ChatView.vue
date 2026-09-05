@@ -67,43 +67,46 @@
             <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
           </div>
         </div>
-        <div v-if="pinnedSessions.length && normalSessions.length" class="chat-session-divider">
-          <span>历史会话</span>
-        </div>
-        <div
-          v-for="s in normalSessions"
-          :key="s.id"
-          class="chat-session"
-          :class="{ active: s.id === currentId }"
-          @click="currentId = s.id"
-          @contextmenu.prevent="openSessionMenu($event, s)"
-        >
-          <div class="chat-session-info">
-            <div class="chat-session-title">
-              {{ s.title }}
-              <span v-if="s.sending" class="session-running-dot" title="正在思考中"></span>
+        <!-- 日期分组渲染：每组一个分隔标题 + 组内会话 -->
+        <template v-for="grp in groupedNormalSessions" :key="grp.key">
+          <div v-if="pinnedSessions.length || grp.key !== groupedNormalSessions[0].key" class="chat-session-divider">
+            <span>{{ grp.label }}</span>
+          </div>
+          <div
+            v-for="s in grp.items"
+            :key="s.id"
+            class="chat-session"
+            :class="{ active: s.id === currentId }"
+            @click="currentId = s.id"
+            @contextmenu.prevent="openSessionMenu($event, s)"
+          >
+            <div class="chat-session-info">
+              <div class="chat-session-title">
+                {{ s.title }}
+                <span v-if="s.sending" class="session-running-dot" title="正在思考中"></span>
+              </div>
+              <div class="chat-session-meta">
+                {{ formatTime(s.time) }} · {{ s.messages.length }} 条消息
+                <button
+                  class="session-memory-icon"
+                  :class="{ on: s.memoryEnabled !== false }"
+                  :title="s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
+                  @click.stop="toggleSessionMemory(s)"
+                >🧠</button>
+              </div>
+              <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
+                <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
+                  🤖 {{ presetNameById(s.modelPresetId) }}
+                </span>
+                <span v-for="sk in s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
+              </div>
             </div>
-            <div class="chat-session-meta">
-              {{ formatTime(s.time) }} · {{ s.messages.length }} 条消息
-              <button
-                class="session-memory-icon"
-                :class="{ on: s.memoryEnabled !== false }"
-                :title="s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
-                @click.stop="toggleSessionMemory(s)"
-              >🧠</button>
-            </div>
-            <div v-if="s.skills && s.skills.length || s.modelPresetId" class="chat-session-tags">
-              <span v-if="s.modelPresetId && presetNameById(s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(s.modelPresetId)}`">
-                🤖 {{ presetNameById(s.modelPresetId) }}
-              </span>
-              <span v-for="sk in s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
+            <div class="chat-session-actions">
+              <button class="chat-session-pin" @click.stop="togglePin(s.id)" title="置顶">📌</button>
+              <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
             </div>
           </div>
-          <div class="chat-session-actions">
-            <button class="chat-session-pin" @click.stop="togglePin(s.id)" title="置顶">📌</button>
-            <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
-          </div>
-        </div>
+        </template>
         <!-- 右键菜单 -->
         <div
           v-if="sessionMenuOpen && sessionMenuTarget"
@@ -1387,6 +1390,44 @@ const filteredSessions = computed(() => {
 // 置顶会话与普通会话分组（基于 filteredSessions）
 const pinnedSessions = computed(() => filteredSessions.value.filter(s => s.pinned))
 const normalSessions = computed(() => filteredSessions.value.filter(s => !s.pinned))
+
+// 日期分组：普通会话按 今天/昨天/7天内/更早 分组
+function dateKeyOf(ts) {
+  if (!ts) return 'earlier'
+  const d = new Date(ts)
+  const now = new Date()
+  // 取当天零点比较
+  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const dayStart = startOfDay(d)
+  const todayStart = startOfDay(now)
+  const diffDays = Math.floor((todayStart - dayStart) / 86400000)
+  if (diffDays <= 0) return 'today'       // 今天（含未来时间容错）
+  if (diffDays === 1) return 'yesterday'  // 昨天
+  if (diffDays < 7) return 'week'         // 7 天内
+  return 'earlier'                        // 更早
+}
+
+const SESSION_GROUP_LABELS = {
+  today: '今天',
+  yesterday: '昨天',
+  week: '7 天内',
+  earlier: '更早',
+}
+
+const SESSION_GROUP_ORDER = ['today', 'yesterday', 'week', 'earlier']
+
+const groupedNormalSessions = computed(() => {
+  const groups = []
+  for (const key of SESSION_GROUP_ORDER) {
+    const items = normalSessions.value.filter(s => dateKeyOf(s.time) === key)
+    if (items.length) {
+      // 组内按时间倒序（最近的在前）
+      items.sort((a, b) => (b.time || 0) - (a.time || 0))
+      groups.push({ key, label: SESSION_GROUP_LABELS[key], items })
+    }
+  }
+  return groups
+})
 
 // 切换置顶
 async function togglePin(sessionId) {
