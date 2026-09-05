@@ -17,7 +17,7 @@
       <div v-if="!sidebarCollapsed" class="chat-search">
         <input v-model="searchTerm" type="text" placeholder="搜索会话">
       </div>
-      <div v-if="!sidebarCollapsed" class="chat-session-list">
+      <div v-if="!sidebarCollapsed" class="chat-session-list" @click="closeSessionMenu">
         <div v-if="searchHits.length" class="chat-search-hits">
           <div class="chat-search-hits-label">📄 历史内容命中 {{ searchHits.length }}</div>
           <div v-for="hit in searchHits" :key="hit.session_id" class="chat-search-hit" @click="openSearchHit(hit)">
@@ -31,6 +31,7 @@
           class="chat-session pinned"
           :class="{ active: s.id === currentId }"
           @click="currentId = s.id"
+          @contextmenu.prevent="openSessionMenu($event, s)"
         >
           <div class="chat-session-info">
             <div class="chat-session-title">
@@ -68,6 +69,7 @@
           class="chat-session"
           :class="{ active: s.id === currentId }"
           @click="currentId = s.id"
+          @contextmenu.prevent="openSessionMenu($event, s)"
         >
           <div class="chat-session-info">
             <div class="chat-session-title">
@@ -93,6 +95,27 @@
           <div class="chat-session-actions">
             <button class="chat-session-pin" @click.stop="togglePin(s.id)" title="置顶">📌</button>
             <button class="chat-session-delete" @click.stop="deleteSession(s.id)">🗑</button>
+          </div>
+        </div>
+        <!-- 右键菜单 -->
+        <div
+          v-if="sessionMenuOpen && sessionMenuTarget"
+          class="chat-ctx-menu"
+          :style="sessionMenuStyle"
+          @click.stop
+        >
+          <div class="chat-ctx-item" @click="renameSession(sessionMenuTarget.id)">
+            <span class="chat-ctx-icon">✏️</span>
+            <span class="chat-ctx-label">重命名</span>
+          </div>
+          <div class="chat-ctx-item" @click="togglePin(sessionMenuTarget.id); closeSessionMenu()">
+            <span class="chat-ctx-icon">📌</span>
+            <span class="chat-ctx-label">{{ sessionMenuTarget.pinned ? '取消置顶' : '置顶会话' }}</span>
+          </div>
+          <div class="chat-ctx-divider"></div>
+          <div class="chat-ctx-item danger" @click="deleteSession(sessionMenuTarget.id); closeSessionMenu()">
+            <span class="chat-ctx-icon">🗑️</span>
+            <span class="chat-ctx-label">删除会话</span>
           </div>
         </div>
         <div v-if="!filteredSessions.length && !searchHits.length" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
@@ -1373,6 +1396,68 @@ async function togglePin(sessionId) {
   }
 }
 
+// 右键菜单
+const sessionMenuOpen = ref(false)
+const sessionMenuTarget = ref(null)
+const sessionMenuX = ref(0)
+const sessionMenuY = ref(0)
+
+function openSessionMenu(e, session) {
+  sessionMenuTarget.value = session
+  sessionMenuOpen.value = true
+  // 计算位置，防止溢出
+  const listEl = document.querySelector('.chat-session-list')
+  if (listEl) {
+    const rect = listEl.getBoundingClientRect()
+    let x = e.clientX - rect.left
+    let y = e.clientY - rect.top
+    // 防止右侧溢出
+    const menuW = 160
+    if (x + menuW > rect.width) x = rect.width - menuW - 4
+    // 防止底部溢出
+    const menuH = 140
+    if (y + menuH > rect.height) y = rect.height - menuH - 4
+    sessionMenuX.value = x
+    sessionMenuY.value = y
+  } else {
+    sessionMenuX.value = e.clientX
+    sessionMenuY.value = e.clientY
+  }
+}
+
+function closeSessionMenu() {
+  sessionMenuOpen.value = false
+  sessionMenuTarget.value = null
+}
+
+const sessionMenuStyle = computed(() => ({
+  left: sessionMenuX.value + 'px',
+  top: sessionMenuY.value + 'px',
+}))
+
+// 重命名会话
+async function renameSession(sessionId) {
+  const s = sessions.value.find(x => x.id === sessionId)
+  if (!s) return
+  closeSessionMenu()
+  const newName = await appPrompt('会话名称', s.title)
+  if (newName == null) return
+  const trimmed = newName.trim()
+  if (!trimmed) return
+  s.title = trimmed
+  if (s.sid) {
+    // 同步后端
+    try {
+      await fetch(`/api/sessions/${s.sid}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: trimmed }),
+      })
+    } catch { /* 忽略 */ }
+  }
+  saveSessions()
+}
+
 // ---- Hermes D4：会话内容全文搜索（命中显示于会话列表顶部）----
 const searchHits = ref([])
 let _searchTimer = null
@@ -2389,13 +2474,19 @@ function stopAgent() {
   saveSessions()
 }
 
-// Esc 快捷键停止当前任务 / 关闭截图层
+// Esc 快捷键停止当前任务 / 关闭截图层 / 关闭右键菜单
 function handleEscStop(e) {
   if (e.key === 'Escape') {
     // 优先关闭截图层
     if (screenshotOverlayOpen.value) {
       e.preventDefault()
       closeScreenshot()
+      return
+    }
+    // 关闭右键菜单
+    if (sessionMenuOpen.value) {
+      e.preventDefault()
+      closeSessionMenu()
       return
     }
     if (currentSession.value?.sending) {
