@@ -623,13 +623,16 @@ def call_skill(skill: dict, args: dict) -> dict:
 
     skill 字段：id/name/url/method/headers(JSON)/body/description
     """
+    skill_id = str(skill.get("id", ""))
     try:
         name = skill.get("name") or skill.get("id") or "未命名技能"
         if skill.get("type") != "http":
+            # 非 HTTP 技能不计数（不是调用失败，是类型不对）
             return {"observation": "", "error": f"技能「{name}」不是 HTTP 技能，无法直接调用"}
         inp = str(args.get("input", ""))
         url = str(skill.get("url", "")).replace("{{input}}", inp).strip()
         if not url:
+            _bump_skill_usage(skill_id, failed=True)
             return {"observation": "", "error": f"HTTP 技能「{name}」未配置 URL"}
         # 中文等非 ASCII 字符需 URL 编码，否则 urllib 报 ascii 编码错误
         url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=%")
@@ -664,17 +667,41 @@ def call_skill(skill: dict, args: dict) -> dict:
         except urllib.error.HTTPError as e:
             status = e.code
             raw = e.read().decode("utf-8", errors="replace")
+        # HTTP 4xx/5xx 视为调用失败
+        is_http_error = status >= 400
         try:
             parsed_body = json.loads(raw)
             # 若响应含 report 播报字段（如天气技能），直接返回该文案，便于 Agent 原样输出
             if isinstance(parsed_body, dict) and isinstance(parsed_body.get("report"), str):
+                _bump_skill_usage(skill_id, failed=is_http_error)
                 return {"observation": f"技能「{name}」响应 HTTP {status}\n{parsed_body['report']}"}
             body_out = json.dumps(parsed_body, ensure_ascii=False, indent=2)
         except Exception:
             body_out = raw
+        _bump_skill_usage(skill_id, failed=is_http_error)
         return {"observation": f"技能「{name}」响应 HTTP {status}\n{_short(body_out)}"}
     except Exception as e:
+        _bump_skill_usage(skill_id, failed=True)
         return {"observation": "", "error": f"call_skill 失败：{e}"}
+
+
+def _bump_skill_usage(skill_id: str, failed: bool = False) -> None:
+    """技能使用计数 +1（后台线程异步，不阻塞主调用链路）。
+
+    无 skill_id 或导入失败时静默忽略（埋点类操作不影响主流程）。
+    """
+    if not skill_id:
+        return
+
+    def _bump():
+        try:
+            from skills_lifecycle import bump_usage
+            bump_usage(skill_id, failed=failed)
+        except Exception:
+            pass  # 计数失败不影响业务
+
+    import threading
+    threading.Thread(target=_bump, daemon=True).start()
 
 
 # ------------------------------------------------------------------

@@ -165,6 +165,10 @@
                   {{ s.name }}
                   <span class="skill-tag" :class="s.enabled ? 'on' : 'off'">{{ s.enabled ? '已启用' : '已停用' }}</span>
                   <span v-if="s.type && s.type !== 'api'" class="skill-type-badge" :class="s.type">{{ skillTypeLabel(s.type) }}</span>
+                  <span v-if="s.usage_count" class="skill-usage" title="调用次数">{{ s.usage_count }} 次调用</span>
+                  <span v-if="skillFailRate(s) >= 0.3 && s.fail_count >= 2" class="skill-fail-warn" :title="'失败 ' + s.fail_count + ' / ' + s.usage_count + ' 次，建议检查配置或删除'">
+                    ⚠️ 高失败率
+                  </span>
                 </div>
                 <div class="skill-desc">{{ s.desc }}</div>
                 <div class="skill-url">{{ s.url }}</div>
@@ -417,6 +421,12 @@ function goToPage(page) {
 function skillTypeLabel(type) {
   const labels = { cli: 'CLI', api: 'API', installed: '已安装' }
   return labels[type] || type
+}
+
+// 技能失败率计算：fail_count / usage_count，无调用时返回 0
+function skillFailRate(s) {
+  if (!s || !s.usage_count || !s.fail_count) return 0
+  return s.fail_count / s.usage_count
 }
 
 async function queryWeather() {
@@ -753,3 +763,20 @@ onMounted(() => {
   loadSkills()
 })
 </script>
+
+<style>
+.skill-usage {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  opacity: .7;
+}
+.skill-fail-warn {
+  font-size: 11px;
+  color: #f59e0b;
+  margin-left: 6px;
+  font-weight: 600;
+  cursor: help;
+}
+</style>

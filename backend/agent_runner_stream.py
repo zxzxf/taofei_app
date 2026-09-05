@@ -32,6 +32,7 @@ from agent_runner_fc import (
     FC_SYSTEM_PROMPT,
     _build_partial_report,
     _build_skill_prompts,
+    _build_auto_skill_prompt,
     _build_user_content,
     _extract_content,
     _extract_tool_calls,
@@ -135,6 +136,11 @@ def run_agent_task_streaming(
     skill_prompt = _build_skill_prompts(skills)
     if skill_prompt:
         system_content += "\n\n## 已启用技能（请根据用户需求判断是否需要使用）\n" + skill_prompt
+
+    # B6：自动知识技能按相关度动态注入
+    auto_skill_prompt = _build_auto_skill_prompt(user_request)
+    if auto_skill_prompt:
+        system_content += "\n\n" + auto_skill_prompt
 
     # 初始化消息：system + (session 历史) + 本轮 user
     messages: list[dict] = [

@@ -67,6 +67,110 @@ def _build_skill_prompts(skills: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+# ---------------------------------------------------------------
+# B6：自动技能（source=auto，知识型）按相关度动态注入
+# ---------------------------------------------------------------
+
+# 注入上限：最多选 N 个最相关的自动技能，避免 system 过长影响前缀缓存
+_AUTO_SKILL_MAX_INJECT = 3
+# 最小相关度阈值：关键词重叠数低于此值的技能不注入
+_AUTO_SKILL_MIN_SCORE = 1
+
+
+def _auto_skill_score(skill: dict, user_text: str) -> int:
+    """计算自动技能与用户问题的相关度（关键词重叠数，轻量无依赖）。
+
+    打分规则：
+    - 把技能名 + 描述 + 内容前 500 字合成文档
+    - 分词（中文按字符 2-gram，英文按空格）
+    - 与用户问题的 token 集合求交集大小即为分数
+    分数越高越相关。纯规则，速度快，不影响前缀缓存稳定性。
+    """
+    import re
+
+    name = str(skill.get("name", ""))
+    desc = str(skill.get("description", ""))
+    content = str(skill.get("content", ""))[:500]
+    doc = f"{name} {desc} {content}".lower()
+    user = (user_text or "").lower()
+
+    # 简单 token 化：英文单词 + 中文字符 2-gram
+    def _tokens(text: str) -> set[str]:
+        tokens: set[str] = set()
+        # 英文单词
+        for m in re.findall(r"[a-z][a-z0-9_-]{2,}", text):
+            tokens.add(m)
+        # 中文 2-gram
+        cn = re.findall(r"[\u4e00-\u9fff]", text)
+        for i in range(len(cn) - 1):
+            tokens.add(cn[i] + cn[i + 1])
+        return tokens
+
+    doc_tokens = _tokens(doc)
+    user_tokens = _tokens(user)
+    if not doc_tokens or not user_tokens:
+        return 0
+    return len(doc_tokens & user_tokens)
+
+
+def _build_auto_skill_prompt(user_request: str) -> str | None:
+    """B6：从自动知识技能（source=auto）中按相关度选前 N 个注入 system prompt。
+
+    设计原则：
+    - 轻量：纯规则打分，不调用 LLM、不用向量，零额外延迟
+    - 稳定：按名称排序后输出，相同输入输出顺序固定，保护前缀缓存
+    - 克制：最多 3 个，不相关的不注入，避免撑爆 system 前缀
+    """
+    try:
+        from skills_lifecycle import list_my_skills
+    except Exception:
+        return None
+
+    all_auto = [
+        s for s in list_my_skills()
+        if str(s.get("source", "")).lower() == "auto"
+        and s.get("enabled", True)
+    ]
+    if not all_auto or not user_request:
+        return None
+
+    # 打分 + 过滤
+    scored = []
+    for s in all_auto:
+        score = _auto_skill_score(s, user_request)
+        if score >= _AUTO_SKILL_MIN_SCORE:
+            scored.append((score, s))
+
+    if not scored:
+        return None
+
+    # 按分数降序，同分按名称排序（保证输出稳定 → 前缀缓存稳定）
+    scored.sort(key=lambda x: (-x[0], str(x[1].get("name", ""))))
+    top = [s for _, s in scored[:_AUTO_SKILL_MAX_INJECT]]
+
+    # 组装片段
+    parts = []
+    for s in top:
+        name = str(s.get("name", "未命名技能"))
+        desc = str(s.get("description", "")).strip()
+        content = str(s.get("content", "")).strip()
+        if not content:
+            continue
+        head = f"### 技能「{name}」"
+        if desc:
+            head += f"：{desc}"
+        parts.append(f"{head}\n{content}")
+
+    if not parts:
+        return None
+
+    return (
+        "## 相关知识技能（自动匹配，仅供参考）\n"
+        + "\n\n".join(parts)
+        + "\n\n当用户问题与上述技能相关时，请优先参考技能中的步骤和方法。"
+    )
+
+
 def _build_user_content(user_request: str, images: list[str]):
     """构造首条用户消息内容：无图返回纯文本，有图返回 OpenAI vision 格式的 content 数组。"""
     if not images:
@@ -281,6 +385,11 @@ def run_agent_task_fc(
     skill_prompt = _build_skill_prompts(skills)
     if skill_prompt:
         system_content += "\n\n## 已启用技能（请根据用户需求判断是否需要使用）\n" + skill_prompt
+
+    # B6：自动知识技能按相关度动态注入（不相关的不注入，保护前缀缓存）
+    auto_skill_prompt = _build_auto_skill_prompt(user_request)
+    if auto_skill_prompt:
+        system_content += "\n\n" + auto_skill_prompt
 
     # 初始化消息：system + (session 历史) + 本轮 user
     messages: list[dict] = [
