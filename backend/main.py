@@ -2032,8 +2032,8 @@ def chat(req: ChatRequest):
     """直接调用大模型接口，进行多轮对话；自动注入已启用的 Claude 技能和工作空间上下文。"""
     if not req.messages:
         return JSONResponse({"error": "消息不能为空"}, status_code=400)
-    if not HAS_TAOFEI_API:
-        return JSONResponse({"error": "LLM 功能不可用：taofei_api/langchain 未安装"}, status_code=503)
+    # 注意：不再依赖 taofei_api/langchain，直接用 providers.openai_compat 直连
+    # 只要 openai SDK + API Key 配置好即可运行
     try:
         llm = _build_llm(req.model_preset_id)
         if llm is None:
@@ -2931,8 +2931,8 @@ def _run_agent_async(task_id: str, user_request: str, workspace_path: str | None
 
         if not HAS_AGENT_RUNNER:
             raise RuntimeError("agent_runner 未安装")
-        if not HAS_TAOFEI_API:
-            raise RuntimeError("LLM 功能不可用：taofei_api/langchain 未安装")
+        # 注意：不再依赖 taofei_api/langchain，直接用 providers.openai_compat 直连 OpenAI 兼容端点
+        # 只要 openai SDK + API Key 可用即可
 
         # Session 化：历史以原始消息注入 runner（不拼文本）
         session_history: list[dict] = []
@@ -3452,8 +3452,8 @@ def agent_run(req: AgentRunRequest):
         return JSONResponse({"error": "任务描述不能为空"}, status_code=400)
     if not HAS_AGENT_RUNNER:
         return JSONResponse({"error": "Agent 功能不可用：agent_runner 未安装"}, status_code=503)
-    if not HAS_TAOFEI_API:
-        return JSONResponse({"error": "LLM 功能不可用：taofei_api/langchain 未安装"}, status_code=503)
+    # 注意：不再依赖 taofei_api/langchain，直接用 providers.openai_compat 直连
+    # 只要 openai SDK + API Key 配置好即可运行
 
     task_id = create_agent_task_id()
     session = None
