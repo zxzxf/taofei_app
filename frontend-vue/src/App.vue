@@ -2,7 +2,7 @@
   <!-- 启动 loading：初始化完成前显示，避免页面短暂空白/卡顿无反馈 -->
   <div v-if="!bootReady" class="boot-loading">
     <div class="boot-logo">淘飞<span>AI</span></div>
-    <div class="boot-sub">企业级 AI 智能体平台</div>
+    <div class="boot-sub">{{ t('app.sub') }}</div>
     <div class="boot-spinner"></div>
     <div class="boot-text">{{ bootText }}</div>
   </div>
@@ -11,33 +11,33 @@
     <aside class="sidebar">
     <div class="brand">
       <div class="brand-logo">淘</div>
-      <div class="brand-name">淘飞AI</div>
+      <div class="brand-name">{{ t('app.brand') }}</div>
     </div>
 
     <nav class="nav-section">
       <button class="nav-item" :class="{ active: route.name === 'chat' }" @click="router.push('/chat')">
-        <span class="icon">💬</span> 会话中心 <span class="nav-badge">新</span>
+        <span class="icon">💬</span> {{ t('nav.chat') }} <span class="nav-badge">{{ t('nav.newBadge') }}</span>
       </button>
       <button class="nav-item" :class="{ active: route.name === 'dashboard' }" @click="router.push('/dashboard')">
-        <span class="icon">🏠</span> 工作台
+        <span class="icon">🏠</span> {{ t('nav.dashboard') }}
       </button>
       <button class="nav-item" :class="{ active: route.name === 'agents' }" @click="router.push('/agents')">
-        <span class="icon">🤖</span> 智能体
+        <span class="icon">🤖</span> {{ t('nav.agents') }}
       </button>
       <button class="nav-item" :class="{ active: route.name === 'task' }" @click="router.push('/task')">
-        <span class="icon">⚡</span> 任务编排
+        <span class="icon">⚡</span> {{ t('nav.task') }}
       </button>
       <button class="nav-item" :class="{ active: route.name === 'knowledge' }" @click="router.push('/knowledge')">
-        <span class="icon">📚</span> 知识库
+        <span class="icon">📚</span> {{ t('nav.knowledge') }}
       </button>
       <button class="nav-item" :class="{ active: route.name === 'analysis' }" @click="router.push('/analysis')">
-        <span class="icon">📊</span> 数据分析
+        <span class="icon">📊</span> {{ t('nav.analysis') }}
       </button>
       <button class="nav-item" :class="{ active: route.name === 'integration' }" @click="router.push('/integration')">
-        <span class="icon">🔌</span> 集成管理
+        <span class="icon">🔌</span> {{ t('nav.integration') }}
       </button>
       <button class="nav-item" :class="{ active: route.name === 'settings' }" @click="router.push('/settings')">
-        <span class="icon">⚙️</span> 系统设置
+        <span class="icon">⚙️</span> {{ t('nav.settings') }}
       </button>
 
       <!-- 3.3 插件贡献项（nav section） -->
@@ -89,8 +89,23 @@
         </div>
       </div>
       <div class="header-right">
-        <button class="theme-toggle" @click="toggleTheme">{{ isLight ? '☀️' : '🌙' }}</button>
-        <button class="header-btn" @click="router.push('/task')">+ 新建任务</button>
+        <!-- 6.1 i18n：语言切换 -->
+        <div class="lang-switch-wrap" v-click-outside="langOpen = false">
+          <button class="theme-toggle lang-btn" :title="t('header.language')" @click="langOpen = !langOpen">
+            <span class="lang-short">{{ currentLangShort }}</span>
+          </button>
+          <div class="lang-dropdown" :class="{ open: langOpen }">
+            <button
+              v-for="l in locales"
+              :key="l.code"
+              class="lang-option"
+              :class="{ active: l.code === currentLocale }"
+              @click="switchLang(l.code)"
+            >{{ l.label }}</button>
+          </div>
+        </div>
+        <button class="theme-toggle" @click="toggleTheme" :title="t('header.theme')">{{ isLight ? '☀️' : '🌙' }}</button>
+        <button class="header-btn" @click="router.push('/task')">{{ t('task.createNew') }}</button>
       </div>
     </div>
 
@@ -115,9 +130,22 @@ import AppDialog from './components/AppDialog.vue'
 import { appConfirm, appPrompt } from './utils/appDialog.js'
 // 3.3 插件化扩展机制：注册表 + 自动发现 modules/
 import { pluginRegistry, getSidebarContributions, loadPluginModules } from './plugins/registry.js'
+// 6.1 i18n
+import { t, locales, currentLocale, setLocale, initI18n } from './i18n'
 
 const route = useRoute()
 const router = useRouter()
+
+// ===== 6.1 i18n =====
+const langOpen = ref(false)
+const currentLangShort = computed(() => {
+  const cur = locales.find(l => l.code === currentLocale.value)
+  return cur ? cur.short : '中'
+})
+function switchLang(code) {
+  setLocale(code)
+  langOpen.value = false
+}
 
 // ===== 3.3 插件化扩展机制 =====
 const pluginNavItems = computed(() => getSidebarContributions('nav'))
@@ -149,26 +177,38 @@ const workspaces = ref([])
 const currentWsId = ref(null)
 const fullAccess = ref(false)
 const apiStatus = ref('')
-const apiText = ref('检测服务状态…')
 const wsStatus = ref('disconnected')
 const isLight = ref(false)
 const toastVisible = ref(false)
 const toastMsg = ref('')
 const bootReady = ref(false)
-const bootText = ref('正在加载工作台…')
+const bootText = ref('')
 
 const currentWsName = computed(() => {
   const ws = workspaces.value.find(w => w.id === currentWsId.value)
-  return ws ? ws.name : '选择工作空间'
+  return ws ? ws.name : t('ws.selectPlaceholder')
 })
 
-const pageTitle = computed(() => route.meta.title || '淘飞AI')
-const pageTags = computed(() => route.meta.tags || [])
+const pageTitle = computed(() => {
+  const key = route.meta?.titleKey
+  return key ? t(key) : (route.meta?.title || t('app.brand'))
+})
+const pageTags = computed(() => {
+  const keys = route.meta?.tagKeys
+  if (keys) return keys.map(k => t(k))
+  return route.meta?.tags || []
+})
 
 const wsStatusText = computed(() => {
-  if (wsStatus.value === 'connected') return '实时已连接'
-  if (wsStatus.value === 'connecting') return '实时连接中…'
-  return '实时未连接'
+  if (wsStatus.value === 'connected') return t('status.wsConnected')
+  if (wsStatus.value === 'connecting') return t('status.wsConnecting')
+  return t('status.wsDisconnected')
+})
+
+const apiText = computed(() => {
+  if (apiStatus.value === 'ok') return t('status.apiOnline')
+  if (apiStatus.value === 'bad') return t('status.apiOffline')
+  return t('status.apiChecking')
 })
 
 function toggleTheme() {
@@ -364,8 +404,8 @@ async function deleteWorkspace(id) {
 }
 
 function checkApiStatus() {
+  // apiStatus 驱动 computed apiText；此处保持探测行为由外部/WS 状态决定
   apiStatus.value = 'ok'
-  apiText.value = '服务正常'
 }
 
 function onOpenLocalFolderRequest() {
@@ -378,6 +418,8 @@ function onDeleteWorkspaceRequest(evt) {
 }
 
 onMounted(async () => {
+  // 6.1 i18n：应用文档语言
+  initI18n()
   // 3.3 插件化：启动时扫描加载 plugins/modules/
   loadPluginModules()
   const savedTheme = localStorage.getItem('theme')
@@ -401,7 +443,7 @@ onMounted(async () => {
     if (res.ok) {
       const data = await res.json()
       if (data && data.embedding_warmup === false) {
-        bootText.value = '正在预热本地模型（首次启动可能需要 1-2 分钟）…'
+        bootText.value = t('boot.warmup')
       }
     }
   } catch { /* 健康检查失败不阻塞进入 */ }
@@ -462,4 +504,43 @@ onUnmounted(() => {
   font-size: 12.5px;
   color: var(--text-muted, #64748b);
 }
+
+/* 6.1 i18n：语言切换 */
+.lang-switch-wrap { position: relative; display: inline-flex; }
+.lang-btn {
+  min-width: 36px;
+  justify-content: center;
+  border: 1px solid var(--border, #1e293b);
+  border-radius: 8px;
+}
+.lang-short { font-size: 12px; font-weight: 700; }
+.lang-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 120px;
+  background: var(--card, #0d1320);
+  border: 1px solid var(--border, #1e293b);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  display: none;
+  z-index: 300;
+}
+.lang-dropdown.open { display: block; }
+.lang-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 13px;
+  cursor: pointer;
+}
+.lang-option:hover { background: rgba(59, 130, 246, 0.1); color: var(--text, #e2e8f0); }
+.lang-option.active { color: var(--primary, #3b82f6); font-weight: 600; background: rgba(59, 130, 246, 0.08); }
+
 </style>

@@ -3,23 +3,23 @@
     <div class="chat-sessions" :class="{ collapsed: sidebarCollapsed && !isMobile, 'mobile-drawer': isMobile, open: mobileOpen }" :style="(!isMobile && !sidebarCollapsed) ? { width: sessionsWidth + 'px', flexShrink: 0 } : {}">
       <div class="chat-sessions-head">
         <div class="chat-sessions-head-left">
-          <button class="chat-collapse-btn" @click="toggleSidebar" :title="sidebarCollapsed ? '展开会话列表' : '收起会话列表'">
+          <button class="chat-collapse-btn" @click="toggleSidebar" :title="sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="3" y1="6" x2="21" y2="6"/>
               <line x1="3" y1="12" x2="21" y2="12"/>
               <line x1="3" y1="18" x2="21" y2="18"/>
             </svg>
           </button>
-          <h3 v-if="!sidebarCollapsed">会话列表</h3>
+          <h3 v-if="!sidebarCollapsed">{{ t('sidebar.sessionTitle') }}</h3>
         </div>
-        <button v-if="!sidebarCollapsed" class="chat-new-btn" @click="openNewSessionDialog">+ 新对话</button>
+        <button v-if="!sidebarCollapsed" class="chat-new-btn" @click="openNewSessionDialog">{{ t('sidebar.newChat') }}</button>
       </div>
       <div v-if="!sidebarCollapsed" class="chat-search">
-        <input v-model="searchTerm" type="text" placeholder="搜索会话">
+        <input v-model="searchTerm" type="text" :placeholder="t('sidebar.searchPlaceholder')">
       </div>
       <div v-if="!sidebarCollapsed" ref="sessionListEl" class="chat-session-list" @click="closeSessionMenu" @scroll.passive="onSessionListScroll">
         <div v-if="searchHits.length" class="chat-search-hits">
-          <div class="chat-search-hits-label">📄 历史内容命中 {{ searchHits.length }}</div>
+          <div class="chat-search-hits-label">📄 {{ t('sidebar.historyContent', { n: searchHits.length }) }}</div>
           <div v-for="hit in searchHits" :key="hit.session_id" class="chat-search-hit" @click="openSearchHit(hit)">
             <div class="chat-search-hit-title">{{ hit.title || '（历史会话）' }}</div>
             <div class="chat-search-hit-snippet">{{ hit.snippet }}</div>
@@ -48,7 +48,7 @@
         >
           <!-- 组头 -->
           <div v-if="it.type === 'group'" class="chat-session-divider">
-            <span>{{ it.label }}</span>
+            <span>{{ groupLabelOf(it.key) }}</span>
           </div>
           <!-- 会话行 -->
           <div
@@ -65,29 +65,29 @@
           >
             <div class="chat-session-info">
               <div class="chat-session-title">
-                <span v-if="it.s.pinned" class="chat-session-pin-icon" title="已置顶">📌</span>
+                <span v-if="it.s.pinned" class="chat-session-pin-icon" title="📌">📌</span>
                 {{ it.s.title }}
-                <span v-if="it.s.sending" class="session-running-dot" title="正在思考中"></span>
+                <span v-if="it.s.sending" class="session-running-dot" :title="t('sidebar.sending')"></span>
               </div>
               <div class="chat-session-meta">
-                {{ formatTime(it.s.time) }} · {{ it.s.messages.length }} 条消息
+                {{ formatTime(it.s.time) }} · {{ t('sidebar.messagesCount', { n: it.s.messages.length }) }}
                 <button
                   class="session-memory-icon"
                   :class="{ on: it.s.memoryEnabled !== false }"
-                  :title="it.s.memoryEnabled !== false ? '会话记忆已开启，点击关闭' : '会话记忆已关闭，点击开启'"
+                  :title="it.s.memoryEnabled !== false ? t('sidebar.memoryOn') : t('sidebar.memoryOff')"
                   @click.stop="toggleSessionMemory(it.s)"
                 >🧠</button>
               </div>
               <div v-if="it.s.skills && it.s.skills.length || it.s.modelPresetId" class="chat-session-tags">
-                <span v-if="it.s.modelPresetId && presetNameById(it.s.modelPresetId)" class="chat-session-model-chip" :title="`本对话使用：${presetNameById(it.s.modelPresetId)}`">
+                <span v-if="it.s.modelPresetId && presetNameById(it.s.modelPresetId)" class="chat-session-model-chip" :title="`🤖 ${presetNameById(it.s.modelPresetId)}`">
                   🤖 {{ presetNameById(it.s.modelPresetId) }}
                 </span>
                 <span v-for="sk in it.s.skills" :key="sk.id" class="session-skill-chip">{{ sk.icon || '🛠️' }} {{ sk.name }}</span>
               </div>
             </div>
             <div class="chat-session-actions">
-              <button class="chat-session-pin" @click.stop="togglePin(it.s.id)" :title="it.s.pinned ? '取消置顶' : '置顶'">📌</button>
-              <button class="chat-session-delete" @click.stop="deleteSession(it.s.id)">🗑</button>
+              <button class="chat-session-pin" @click.stop="togglePin(it.s.id)" :title="it.s.pinned ? t('sidebar.unpin') : t('sidebar.pin')">📌</button>
+              <button class="chat-session-delete" @click.stop="deleteSession(it.s.id)" :title="t('sidebar.delete')">🗑</button>
             </div>
           </div>
         </div>
@@ -100,31 +100,31 @@
         >
           <div class="chat-ctx-item" @click="renameSession(sessionMenuTarget.id)">
             <span class="chat-ctx-icon">✏️</span>
-            <span class="chat-ctx-label">重命名</span>
+            <span class="chat-ctx-label">{{ t('sidebar.rename') }}</span>
           </div>
           <div class="chat-ctx-item" @click="togglePin(sessionMenuTarget.id); closeSessionMenu()">
             <span class="chat-ctx-icon">📌</span>
-            <span class="chat-ctx-label">{{ sessionMenuTarget.pinned ? '取消置顶' : '置顶会话' }}</span>
+            <span class="chat-ctx-label">{{ sessionMenuTarget.pinned ? t('sidebar.unpin') : t('sidebar.pin') }}</span>
           </div>
           <div class="chat-ctx-divider"></div>
           <div class="chat-ctx-item danger" @click="deleteSession(sessionMenuTarget.id); closeSessionMenu()">
             <span class="chat-ctx-icon">🗑️</span>
-            <span class="chat-ctx-label">删除会话</span>
+            <span class="chat-ctx-label">{{ t('sidebar.delete') }}</span>
           </div>
         </div>
         <!-- 空状态：完全无会话 -->
         <div v-if="!filteredSessions.length && !searchHits.length && !sessions.length" class="chat-empty-state">
           <div class="chat-empty-icon">💬</div>
-          <div class="chat-empty-title">还没有会话</div>
-          <div class="chat-empty-desc">开始一段新对话，Agent 会帮你分析、写码、处理任务</div>
-          <button class="chat-empty-btn" @click="openNewSessionDialog">＋ 新建对话</button>
+          <div class="chat-empty-title">{{ t('sidebar.noSessionTitle') }}</div>
+          <div class="chat-empty-desc">{{ t('sidebar.noSessionDesc') }}</div>
+          <button class="chat-empty-btn" @click="openNewSessionDialog">{{ t('sidebar.newSessionBtn') }}</button>
         </div>
         <!-- 空状态：搜索无结果 -->
         <div v-else-if="!filteredSessions.length && !searchHits.length && searchTerm.trim()" class="chat-empty-state">
           <div class="chat-empty-icon">🔍</div>
-          <div class="chat-empty-title">没有匹配的会话</div>
-          <div class="chat-empty-desc">换个关键词试试，或清空搜索查看全部会话</div>
-          <button class="chat-empty-btn ghost" @click="searchTerm = ''">清空搜索</button>
+          <div class="chat-empty-title">{{ t('sidebar.noMatchTitle') }}</div>
+          <div class="chat-empty-desc">{{ t('sidebar.noMatchDesc') }}</div>
+          <button class="chat-empty-btn ghost" @click="searchTerm = ''">{{ t('sidebar.clearSearch') }}</button>
         </div>
         </template>
       </div>
@@ -137,7 +137,7 @@
             v-if="isMobile"
             class="chat-mobile-menu-btn"
             @click="openMobileSessions"
-            title="会话列表"
+            :title="t('sidebar.sessionTitle')"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="3" y1="6" x2="21" y2="6"/>
@@ -145,12 +145,12 @@
               <line x1="3" y1="18" x2="21" y2="18"/>
             </svg>
           </button>
-          <span class="chat-area-title">{{ currentSession?.title || '新对话' }}</span>
+          <span class="chat-area-title">{{ currentSession?.title || t('chat.newConversation') }}</span>
           <div v-if="currentSession?.skills?.length" class="chat-area-skills">
             <span v-for="sk in currentSession.skills" :key="sk.id" class="chat-skill-tag">
               {{ sk.icon || '🛠️' }} {{ sk.name }}
             </span>
-            <button class="chat-skill-edit" @click="editSkills" title="管理技能">⚙️</button>
+            <button class="chat-skill-edit" @click="editSkills" :title="t('chat.manageSkills')">⚙️</button>
           </div>
         </div>
         <div class="chat-area-head-right">
@@ -242,7 +242,7 @@
               </div>
             </div>
           </div>
-          <button class="btn-ghost" @click="clearCurrent">清空当前</button>
+          <button class="btn-ghost" @click="clearCurrent">{{ t('chat.clearCurrent') }}</button>
         </div>
       </div>
       <!-- F4：顶部命令输入框（快捷指令 + 搜索） -->
@@ -648,21 +648,21 @@
           </label>
         </div>
         <div class="chat-input-row">
-          <button class="chat-upload" @click="triggerImageUpload" title="上传图片">＋</button>
+          <button class="chat-upload" @click="triggerImageUpload" :title="t('chat.uploadImage')">＋</button>
           <!-- F5：橡皮擦按钮（清除菜单） -->
           <div class="chat-eraser-wrap" v-click-outside="eraserMenuOpen = false">
             <button
               class="chat-eraser-btn"
               @click.stop="toggleEraserMenu"
-              title="清除 (Alt+X)"
+              :title="`${t('chat.clearMenu')} (Alt+X)`"
               :class="{ active: eraserMenuOpen }"
             >🧽</button>
             <div v-if="eraserMenuOpen" class="chat-eraser-menu">
               <div class="chat-eraser-item" @click="clearInputText">
                 <span class="chat-eraser-icon">✏️</span>
                 <div class="chat-eraser-body">
-                  <div class="chat-eraser-title">清除输入</div>
-                  <div class="chat-eraser-desc">清空输入框中的文字和图片</div>
+                  <div class="chat-eraser-title">{{ t('chat.clearInput') }}</div>
+                  <div class="chat-eraser-desc">{{ t('chat.clearInputDesc') }}</div>
                 </div>
                 <span class="chat-eraser-shortcut">Esc</span>
               </div>
@@ -670,15 +670,15 @@
               <div class="chat-eraser-item" @click="clearCurrentFromEraser">
                 <span class="chat-eraser-icon">💬</span>
                 <div class="chat-eraser-body">
-                  <div class="chat-eraser-title">清除会话消息</div>
-                  <div class="chat-eraser-desc">清空当前会话的所有对话记录</div>
+                  <div class="chat-eraser-title">{{ t('chat.clearSessionMsg') }}</div>
+                  <div class="chat-eraser-desc">{{ t('chat.clearSessionMsgDesc') }}</div>
                 </div>
               </div>
               <div class="chat-eraser-item" @click="clearWorkspaceMemory">
                 <span class="chat-eraser-icon">🧠</span>
                 <div class="chat-eraser-body">
-                  <div class="chat-eraser-title">清除工作空间记忆</div>
-                  <div class="chat-eraser-desc">删除当前工作空间的所有记忆条目</div>
+                  <div class="chat-eraser-title">{{ t('chat.clearWsMemory') }}</div>
+                  <div class="chat-eraser-desc">{{ t('chat.clearWsMemoryDesc') }}</div>
                 </div>
               </div>
             </div>
@@ -689,13 +689,13 @@
             class="chat-screenshot-btn"
             @click="startScreenshot"
             :disabled="currentSession?.sending"
-            title="截图 (Ctrl+Shift+S)"
+            :title="`${t('chat.screenshot')} (Ctrl+Shift+S)`"
           >📷</button>
           <textarea
             ref="inputEl"
             v-model="inputText"
             rows="1"
-            placeholder="Agent 模式：描述任务，Agent 会自动分析、调用工具、连续执行…"
+            :placeholder="t('chat.inputPlaceholder')"
             @keydown.enter.exact.prevent="onEnterPress"
             @paste="handlePaste"
             @input="autoResize"
@@ -704,7 +704,7 @@
             v-if="currentSession && currentSession.sending"
             class="chat-stop"
             @click="stopAgent"
-            title="停止生成（Esc）"
+            :title="`${t('chat.stop')} (Esc)`"
           >⏹</button>
           <button v-else class="chat-send agent-active" @click="send" :disabled="!canSend">➤</button>
         </div>
@@ -890,6 +890,8 @@
 import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue'
 import wsManager from '../utils/wsManager.js'
 import { appConfirm, appAlert, appPrompt } from '../utils/appDialog.js'
+// 6.1 i18n
+import { t } from '../i18n'
 
 const sessions = ref([])
 const currentId = ref(null)
@@ -1527,16 +1529,25 @@ const sessionItems = computed(() => {
   const items = []
   // 置顶组
   if (pinnedSessions.value.length) {
-    items.push({ type: 'group', key: 'pinned', label: '📌 置顶' })
+    items.push({ type: 'group', key: 'pinned' })
     for (const s of pinnedSessions.value) items.push({ type: 'session', s, groupKey: 'pinned' })
   }
   // 日期组
   for (const grp of groupedNormalSessions.value) {
-    items.push({ type: 'group', key: grp.key, label: grp.label })
+    items.push({ type: 'group', key: grp.key })
     for (const s of grp.items) items.push({ type: 'session', s, groupKey: grp.key })
   }
   return items
 })
+
+// 组头文案（i18n 映射）
+function groupLabelOf(groupKey) {
+  if (groupKey === 'pinned') return t('sidebar.pinnedGroup')
+  if (groupKey === 'today') return t('sidebar.today')
+  if (groupKey === 'yesterday') return t('sidebar.yesterday')
+  if (groupKey === 'week') return t('sidebar.week')
+  return t('sidebar.earlier')
+}
 
 // 虚拟滚动状态（仅总会话 > 阈值时启用窗口渲染）
 const SESSION_ITEM_H = 56   // 会话行估算高度（含 margin）
