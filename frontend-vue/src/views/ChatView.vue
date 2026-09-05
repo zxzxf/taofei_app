@@ -198,7 +198,16 @@
             <!-- 报告卡片（点击耗时折叠/展开思考时间线，标题摘要章节始终显示） -->
             <div v-if="msg.report && msg.report.type === 'report'" class="chat-report-card">
               <div class="chat-report-header">
-                <span class="chat-report-badge" :class="msg.report.status">{{ msg.report.status === 'completed' ? '已完成' : '进行中' }}</span>
+                <div class="chat-report-header-left">
+                  <span class="chat-report-badge" :class="msg.report.status">{{ msg.report.status === 'completed' ? '已完成' : '进行中' }}</span>
+                  <!-- F2：运行中工具状态徽章 -->
+                  <span v-for="(rt, ri) in getRunningTools(msg).slice(0, 3)" :key="ri" class="chat-tool-badge" :title="rt.detail">
+                    <span class="chat-tool-badge-icon">{{ rt.icon }}</span>
+                    <span class="chat-tool-badge-label">{{ rt.label }}</span>
+                    <span v-if="rt.detail" class="chat-tool-badge-detail">{{ rt.detail }}</span>
+                    <span class="chat-tool-badge-pulse"></span>
+                  </span>
+                </div>
                 <span
                   class="chat-report-duration-toggle"
                   :class="{ expanded: msg.thinkingExpanded !== false }"
@@ -285,12 +294,21 @@
             <!-- 无报告但有时间线（任务运行初期），单独展示思考过程 -->
             <div v-else-if="msg.timeline && msg.timeline.length" class="chat-thinking-card">
               <div class="chat-thinking-header">
-                <span class="chat-thinking-icon">🧠</span>
-                <span v-if="msg.thinkingActive" class="chat-thinking-status active">
-                  思考中...
-                  <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
-                </span>
-                <span v-else class="chat-thinking-status">思考过程</span>
+                <div class="chat-thinking-header-left">
+                  <span class="chat-thinking-icon">🧠</span>
+                  <span v-if="msg.thinkingActive" class="chat-thinking-status active">
+                    思考中...
+                    <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+                  </span>
+                  <span v-else class="chat-thinking-status">思考过程</span>
+                  <!-- F2：运行中工具状态徽章 -->
+                  <span v-for="(rt, ri) in getRunningTools(msg).slice(0, 3)" :key="ri" class="chat-tool-badge" :title="rt.detail">
+                    <span class="chat-tool-badge-icon">{{ rt.icon }}</span>
+                    <span class="chat-tool-badge-label">{{ rt.label }}</span>
+                    <span v-if="rt.detail" class="chat-tool-badge-detail">{{ rt.detail }}</span>
+                    <span class="chat-tool-badge-pulse"></span>
+                  </span>
+                </div>
               </div>
               <div class="chat-thinking-body">
                 <div class="chat-timeline">
@@ -932,6 +950,64 @@ function formatThinkingDuration(sec) {
   sec = Math.round(sec)
   if (sec < 60) return `${sec}s`
   return `${Math.floor(sec / 60)}m${sec % 60}s`
+}
+
+// F2：获取当前运行中的工具列表（用于显示 Editing/Reading 等状态徽章）
+function getRunningTools(msg) {
+  if (!msg || !msg.timeline || !msg.timeline.length) return []
+  const running = []
+  for (const item of msg.timeline) {
+    if (item.type !== 'command' || item.status !== 'running') continue
+    const name = item.name || ''
+    const args = item.args || {}
+    let label = ''
+    let icon = '⏳'
+    let detail = ''
+    if (name === 'write_file') {
+      label = 'Editing'
+      icon = '✏️'
+      const p = args.path || ''
+      detail = p.split(/[/\\]/).pop() || p
+    } else if (name === 'read_file') {
+      label = 'Reading'
+      icon = '📖'
+      const p = args.path || ''
+      detail = p.split(/[/\\]/).pop() || p
+    } else if (name === 'grep_code') {
+      label = 'Searching'
+      icon = '🔍'
+      detail = args.pattern || ''
+    } else if (name === 'list_directory') {
+      label = 'Browsing'
+      icon = '📂'
+      const p = args.path || ''
+      detail = p.split(/[/\\]/).pop() || p || '根目录'
+    } else if (name === 'run_python_code' || name === 'run_command') {
+      label = 'Running'
+      icon = '⚙️'
+      detail = toolArgSummary(name, args)
+    } else if (name === 'web_search') {
+      label = 'Searching'
+      icon = '🌐'
+      detail = args.query || ''
+    } else if (name === 'web_extract') {
+      label = 'Reading'
+      icon = '📄'
+      const u = args.url || ''
+      detail = u.length > 30 ? u.slice(0, 30) + '…' : u
+    } else if (name === 'delegate_tasks') {
+      label = 'Working'
+      icon = '🤖'
+      detail = '子代理执行中'
+    } else {
+      label = '执行中'
+      icon = '⏳'
+      detail = toolDisplayName(name)
+    }
+    if (detail.length > 25) detail = detail.slice(0, 25) + '…'
+    running.push({ name, label, icon, detail })
+  }
+  return running
 }
 
 // 根据时间线索引项的 elapsed 计算任务总耗时（秒）
@@ -4143,6 +4219,13 @@ function onFilePick(node) {
   user-select: none;
   transition: background .15s;
 }
+.chat-thinking-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+}
 .chat-thinking-header:hover {
   background: rgba(139, 92, 246, 0.06);
 }
@@ -4154,7 +4237,6 @@ function onFilePick(node) {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
-  flex: 1;
 }
 .chat-thinking-status.active {
   color: #8b5cf6;
@@ -4170,6 +4252,63 @@ function onFilePick(node) {
 }
 .chat-thinking-body {
   border-top: 1px solid rgba(139, 92, 246, 0.1);
+}
+
+/* F2：运行中工具状态徽章（Editing / Reading / Searching 等） */
+.chat-tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  font-size: 11px;
+  font-weight: 500;
+  color: #a78bfa;
+  position: relative;
+  line-height: 1.5;
+  flex-shrink: 0;
+  cursor: help;
+}
+.chat-tool-badge-icon {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.chat-tool-badge-label {
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+.chat-tool-badge-detail {
+  color: var(--text-muted);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.chat-tool-badge-pulse {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8b5cf6;
+  animation: toolBadgePulse 1.5s ease-in-out infinite;
+}
+@keyframes toolBadgePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+/* Report 卡片头部的徽章适配 */
+.chat-report-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
 }
 .thinking-dots span {
   animation: thinkingBlink 1.4s infinite;
