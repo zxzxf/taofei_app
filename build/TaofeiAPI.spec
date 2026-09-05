@@ -87,9 +87,13 @@ a = Analysis(
         "session.manager",
         "session.session",
         "session.context_compressor",
-        # providers：OpenAI 兼容 SDK 直连层（main.py 内 from providers.openai_compat import）
+        # providers：多提供商 + 故障转移（阶段 6）
         "providers",
+        "providers.base",
         "providers.openai_compat",
+        "providers.anthropic",
+        "providers.fallback_chain",
+        "providers.registry",
         # agent/delegator：子代理并行执行器（agent_tools.py 内 from agent.delegator import）
         "agent",
         "agent.delegator",
