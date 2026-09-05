@@ -496,9 +496,9 @@
       </div>
     </div>
 
-    <div v-if="false" class="chat-resizer chat-resizer-right" :class="{ active: filesResizing }" @mousedown="startFilesResize"></div>
+    <div class="chat-resizer chat-resizer-right" :class="{ active: filesResizing }" @mousedown="startFilesResize"></div>
 
-    <div v-if="false" class="chat-files" :class="{ collapsed: filesCollapsed }" :style="filesCollapsed ? {} : { width: filesWidth + 'px', flexShrink: 0 }">
+    <div class="chat-files" :class="{ collapsed: filesCollapsed }" :style="filesCollapsed ? {} : { width: filesWidth + 'px', flexShrink: 0 }">
       <div class="chat-files-head">
         <div class="chat-files-title-row">
           <div class="chat-files-title">
